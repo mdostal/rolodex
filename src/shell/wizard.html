@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Rolodex Setup</title>
+  <style>
+    /* Same token palette as src/shell/index.html, for visual continuity
+       between the wizard and the app it hands off into. */
+    :root {
+      color-scheme: light dark;
+      --border: #d9d9df;
+      --muted: #6b6b76;
+      --bg: #fff;
+      --fg: #1b1b1f;
+      --accent: #2f5ed9;
+      --accent-bg: #eef2fd;
+      --danger: #b3261e;
+      --danger-bg: #fdecea;
+      --ok-bg: #e7f6ec;
+      --ok-fg: #1e7b34;
+      --card-bg: #fafafc;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      color: var(--fg);
+      background: var(--card-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    a { color: var(--accent); }
+
+    /* Design brief calls for a fixed ~720x560 non-resizable modal-style
+       window with a native title bar. This shell (saf-01) is a plain
+       browser tab, not a native window, so there's no title bar to make
+       non-resizable — this card approximates the same visual footprint and
+       framing instead. beforeunload below approximates the "Quit setup?"
+       prompt as best a browser tab can. */
+    .wizard-shell {
+      width: 720px;
+      min-height: 560px;
+      max-width: calc(100vw - 32px);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .wizard-topbar {
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    .stepper { padding: 14px 24px; border-bottom: 1px solid var(--border); }
+    .stepper ol { list-style: none; display: flex; gap: 0; margin: 0; padding: 0; }
+    .stepper li {
+      flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 4px;
+      font-size: 0.78rem; color: var(--muted); position: relative;
+    }
+    .stepper .step-icon {
+      width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center; font-size: 0.75rem;
+      background: var(--bg); color: var(--muted);
+    }
+    .stepper .step-current .step-icon { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+    .stepper .step-done .step-icon { background: var(--ok-bg); border-color: var(--ok-fg); color: var(--ok-fg); }
+    .stepper .step-current .step-label { color: var(--fg); font-weight: 600; }
+
+    main#wizard-content {
+      flex: 1 1 auto; padding: 28px 32px; overflow-y: auto; outline: none;
+    }
+    main h1 { font-size: 1.4rem; margin: 0 0 8px; }
+    main .subtext { color: var(--muted); margin: 0 0 20px; line-height: 1.45; }
+
+    .preview-list { margin: 0; padding-left: 20px; color: var(--fg); line-height: 1.6; }
+    .app-mark { font-size: 2.25rem; margin-bottom: 8px; }
+    .welcome { text-align: center; display: flex; flex-direction: column; align-items: center; }
+    .welcome .preview-list { text-align: left; max-width: 40ch; }
+
+    .path-display {
+      width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem;
+      padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg);
+      color: var(--fg);
+    }
+    .status-line { margin: 10px 0; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; min-height: 1.3em; }
+    .status-line.ok { color: var(--ok-fg); }
+    .status-line.error { color: var(--danger); }
+    .status-line.checking { color: var(--muted); }
+    .error-detail { color: var(--muted); font-size: 0.82rem; margin: -6px 0 10px; }
+    .db-actions { display: flex; gap: 16px; margin-bottom: 4px; }
+    .link-button {
+      background: none; border: none; color: var(--accent); font: inherit; cursor: pointer;
+      padding: 4px 2px; min-height: 24px; text-decoration: underline;
+    }
+    .change-panel { margin-top: 14px; padding: 14px; border: 1px dashed var(--border); border-radius: 8px; }
+    .change-panel label { display: block; font-size: 0.85rem; margin-bottom: 4px; }
+    .change-panel input {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: transparent; color: inherit; font: inherit; margin-bottom: 10px;
+    }
+
+    details#google-instructions { margin-bottom: 18px; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+    details#google-instructions summary { cursor: pointer; font-weight: 600; }
+    details#google-instructions ol { line-height: 1.7; padding-left: 20px; margin: 10px 0; }
+    .ext-link::after { content: " ↗"; }
+
+    .form-field { margin-bottom: 16px; }
+    .form-field label { display: block; font-size: 0.9rem; margin-bottom: 4px; }
+    .form-field input {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: transparent; color: inherit; font: inherit;
+    }
+    .secret-input-wrap { display: flex; gap: 8px; }
+    .secret-input-wrap input { flex: 1 1 auto; }
+    .secret-input-wrap button {
+      flex: 0 0 auto; background: transparent; color: var(--fg); border: 1px solid var(--border);
+      min-height: 24px; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+    }
+    .trust-microcopy { font-size: 0.85rem; color: var(--muted); margin: 4px 0 0; }
+    .field-error, .error-banner { color: var(--danger); background: var(--danger-bg); border-radius: 6px; padding: 8px 12px; font-size: 0.88rem; margin: 10px 0; }
+    .success-banner { color: var(--ok-fg); background: var(--ok-bg); border-radius: 6px; padding: 10px 12px; font-size: 0.92rem; margin: 10px 0; }
+
+    .spinner {
+      width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border);
+      border-top-color: var(--accent); animation: spin 0.8s linear infinite; flex: 0 0 auto;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .spinner { animation: none; border-top-color: var(--border); }
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .secrets-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    /* [hidden] and .secrets-actions{display:flex} are equal-specificity
+       selectors, so without this the class rule's `display: flex` wins the
+       cascade over the browser's default `[hidden]{display:none}` and the
+       Retry/Copy-error-details row stays visible even on a successful
+       check. Same risk applies to any other class below that sets its own
+       `display` and can also be toggled via the `hidden` attribute. */
+    .secrets-actions[hidden] { display: none; }
+    .secrets-actions button {
+      border: 1px solid var(--border); background: transparent; color: var(--fg); border-radius: 6px;
+      padding: 6px 12px; min-height: 24px; cursor: pointer; font: inherit; font-size: 0.85rem;
+    }
+    details#troubleshooting { margin-top: 12px; font-size: 0.88rem; }
+    details#troubleshooting summary { cursor: pointer; color: var(--accent); }
+    details#troubleshooting ul { padding-left: 20px; line-height: 1.6; }
+
+    .summary-list { list-style: none; margin: 0 0 8px; padding: 0; }
+    .summary-list li { padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .summary-list li:last-child { border-bottom: none; }
+    .summary-list .item-title { font-weight: 600; }
+    .summary-list .item-detail { color: var(--muted); font-size: 0.88rem; margin-top: 2px; }
+    .summary-list code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
+
+    footer.wizard-footer {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 24px; border-top: 1px solid var(--border); background: var(--bg);
+    }
+    button {
+      font: inherit; border-radius: 6px; border: 1px solid var(--border); background: var(--accent);
+      color: #fff; padding: 8px 16px; min-height: 32px; cursor: pointer;
+    }
+    button.secondary { background: transparent; color: var(--fg); }
+    button:disabled { background: #c9c9d1; border-color: #c9c9d1; cursor: not-allowed; color: #fff; }
+    button:focus-visible, input:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
+    #wizard-footer-right { display: flex; gap: 10px; }
+  </style>
+</head>
+<body>
+  <div class="wizard-shell">
+    <header class="wizard-topbar">Rolodex Setup</header>
+    <nav class="stepper" aria-label="Setup progress">
+      <ol id="stepper-list"></ol>
+    </nav>
+    <main id="wizard-content" tabindex="-1" aria-live="polite"></main>
+    <footer class="wizard-footer">
+      <button type="button" class="secondary" id="wizard-back">&larr; Back</button>
+      <div id="wizard-footer-right"></div>
+    </footer>
+  </div>
+
+  <script>
+    "use strict";
+
+    // ---- fetch helper ---------------------------------------------------
+    async function api(path, opts) {
+      const res = await fetch(path, opts);
+      let body = null;
+      try { body = await res.json(); } catch {}
+      if (!res.ok) {
+        const err = new Error((body && body.error) || ("request failed: " + res.status));
+        err.status = res.status;
+        err.body = body;
+        throw err;
+      }
+      return body;
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+
+    // ---- steps / router ---------------------------------------------------
+    const STEPS = [
+      { key: "welcome", label: "Welcome" },
+      { key: "database", label: "Database" },
+      { key: "google", label: "Google" },
+      { key: "secrets", label: "Secrets" },
+      { key: "finish", label: "Finish" },
+    ];
+
+    // How far the user has legitimately progressed this session. Strictly
+    // linear per the design brief ("Back is the only reverse path — no
+    // jumping via the stepper"); a hash edited past this point snaps back.
+    // Intentionally NOT persisted across reloads/relaunches — resuming a
+    // half-finished wizard is a documented brief recommendation, not a
+    // requirement of this story, and it would mean writing wizard-in-
+    // progress state (including whichever screen the pending, un-submitted
+    // Google Client Secret lives on) somewhere outside the SecretsAdapter
+    // call it already gets written through, which this story does not do.
+    let reachedIndex = 0;
+
+    const content = document.getElementById("wizard-content");
+    const backBtnEl = document.getElementById("wizard-back");
+    let primaryBtn = null;
+
+    function currentStepIndex() {
+      const hash = location.hash.replace(/^#\/?/, "");
+      const idx = STEPS.findIndex((s) => s.key === hash);
+      return idx === -1 ? 0 : idx;
+    }
+
+    function navigate(key) {
+      location.hash = "#/" + key;
+    }
+
+    function renderStepper(index) {
+      const list = document.getElementById("stepper-list");
+      list.innerHTML = STEPS.map((s, i) => {
+        const state = i < index ? "done" : i === index ? "current" : "upcoming";
+        const icon = state === "done" ? "&#10003;" : String(i + 1);
+        return (
+          '<li class="step step-' + state + '"' + (state === "current" ? ' aria-current="step"' : "") + ">" +
+          '<span class="step-icon" aria-hidden="true">' + icon + "</span>" +
+          '<span class="step-label">' + escapeHtml(s.label) + "</span>" +
+          "</li>"
+        );
+      }).join("");
+    }
+
+    /** Generic footer wiring shared by every screen — sets Back visibility/
+     * handler, an optional row of secondary buttons (e.g. "Skip for now"),
+     * and the single primary action. */
+    function setFooter({ backHidden, backOnClick, extraButtons, primaryLabel, primaryEnabled, primaryOnClick }) {
+      backBtnEl.hidden = !!backHidden;
+      backBtnEl.onclick = backOnClick || null;
+
+      const right = document.getElementById("wizard-footer-right");
+      right.innerHTML = "";
+      (extraButtons || []).forEach((btn) => {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.className = "secondary";
+        el.textContent = btn.label;
+        el.disabled = !!btn.disabled;
+        el.addEventListener("click", btn.onClick);
+        right.appendChild(el);
+      });
+
+      const primaryEl = document.createElement("button");
+      primaryEl.type = "button";
+      primaryEl.id = "wizard-primary";
+      primaryEl.textContent = primaryLabel;
+      primaryEl.disabled = !primaryEnabled;
+      primaryEl.addEventListener("click", primaryOnClick);
+      right.appendChild(primaryEl);
+      primaryBtn = primaryEl;
+    }
+
+    async function render() {
+      let idx = currentStepIndex();
+      if (idx > reachedIndex) {
+        location.replace("#/" + STEPS[reachedIndex].key);
+        return; // hashchange re-fires render() with the corrected hash
+      }
+      renderStepper(idx);
+      content.focus();
+      try {
+        const key = STEPS[idx].key;
+        if (key === "welcome") await renderWelcome();
+        else if (key === "database") await renderDatabase();
+        else if (key === "google") await renderGoogle();
+        else if (key === "secrets") await renderSecrets();
+        else if (key === "finish") await renderFinish();
+      } catch (err) {
+        content.innerHTML = '<p class="error-banner">' + escapeHtml(err.message || String(err)) + "</p>";
+        console.error(err);
+      }
+    }
+
+    // Closest a browser-tab shell (no native title bar, see saf-01) can get
+    // to the design brief's "Quit setup? You can resume where you left off"
+    // native-close prompt: the browser's own generic leave-site confirm.
+    window.addEventListener("beforeunload", (e) => {
+      if (currentStepIndex() < STEPS.length - 1) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const active = document.activeElement;
+        if (active && (active.tagName === "TEXTAREA" || active === primaryBtn)) return;
+        if (primaryBtn && !primaryBtn.disabled) {
+          e.preventDefault();
+          primaryBtn.click();
+        }
+      } else if (e.key === "Escape" || (e.altKey && e.key === "ArrowLeft")) {
+        if (!backBtnEl.hidden) {
+          e.preventDefault();
+          backBtnEl.click();
+        }
+      }
+    });
+
+    // ---- Screen 1: Welcome ---------------------------------------------
+    async function renderWelcome() {
+      content.innerHTML =
+        '<section class="welcome">' +
+        '<div class="app-mark" aria-hidden="true">&#128209;</div>' +
+        "<h1>Welcome to your rolodex.</h1>" +
+        '<p class="subtext">A few quick steps to confirm where your data lives and connect Google — then you\'re straight into your contact list.</p>' +
+        '<ul class="preview-list">' +
+        "<li>Confirm where your contacts are stored, on this machine.</li>" +
+        "<li>Optionally connect Google Contacts — or skip and do it later.</li>" +
+        "<li>Confirm your system keychain can securely store credentials.</li>" +
+        "</ul>" +
+        "</section>";
+
+      setFooter({
+        backHidden: true,
+        primaryLabel: "Get started",
+        primaryEnabled: true,
+        primaryOnClick: () => {
+          reachedIndex = Math.max(reachedIndex, 1);
+          navigate("database");
+        },
+      });
+    }
+
+    // ---- Screen 2: Database location ------------------------------------
+    async function renderDatabase() {
+      content.innerHTML =
+        "<h1>Where should your contacts live?</h1>" +
+        '<p class="subtext">Rolodex stores everything in a local SQLite file — nothing leaves this machine unless you connect Google.</p>' +
+        '<label for="db-path-display" class="sr-only">Database file location</label>' +
+        '<input id="db-path-display" class="path-display" type="text" readonly value="Checking…" />' +
+        '<div class="status-line checking" id="db-status" aria-live="polite"><span class="spinner" aria-hidden="true"></span> Checking write access…</div>' +
+        '<div class="db-actions">' +
+        '<button type="button" class="link-button" id="db-change-toggle">Change&hellip;</button>' +
+        '<button type="button" class="link-button" id="db-reset" hidden>Reset to default</button>' +
+        "</div>" +
+        '<div class="change-panel" id="db-change-panel" hidden>' +
+        '<label for="db-path-input">New location (full file path)</label>' +
+        '<input id="db-path-input" type="text" autocomplete="off" spellcheck="false" />' +
+        '<button type="button" id="db-path-apply">Check this location</button>' +
+        "</div>";
+
+      const display = document.getElementById("db-path-display");
+      const status = document.getElementById("db-status");
+      const resetBtn = document.getElementById("db-reset");
+      let lastWritable = false;
+
+      function paint(result) {
+        display.value = result.path;
+        resetBtn.hidden = result.isDefault;
+        if (result.writable) {
+          status.className = "status-line ok";
+          status.innerHTML = "&#10003; This location is writable.";
+          lastWritable = true;
+        } else {
+          status.className = "status-line error";
+          status.innerHTML =
+            "&#10007; Rolodex can't write to this location — choose a different folder or use the default." +
+            (result.error ? '<div class="error-detail">' + escapeHtml(result.error) + "</div>" : "");
+          lastWritable = false;
+        }
+        updatePrimary();
+      }
+
+      function updatePrimary() {
+        setFooter({
+          backOnClick: () => navigate("welcome"),
+          primaryLabel: "Next",
+          primaryEnabled: lastWritable,
+          primaryOnClick: () => {
+            reachedIndex = Math.max(reachedIndex, 2);
+            navigate("google");
+          },
+        });
+      }
+      updatePrimary();
+
+      document.getElementById("db-change-toggle").addEventListener("click", () => {
+        const panel = document.getElementById("db-change-panel");
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden) document.getElementById("db-path-input").focus();
+      });
+
+      document.getElementById("db-reset").addEventListener("click", async () => {
+        status.className = "status-line checking";
+        status.innerHTML = '<span class="spinner" aria-hidden="true"></span> Checking write access…';
+        const result = await api("/api/wizard/database/reset", { method: "POST" });
+        document.getElementById("db-path-input").value = "";
+        paint(result);
+      });
+
+      document.getElementById("db-path-apply").addEventListener("click", async () => {
+        const candidate = document.getElementById("db-path-input").value.trim();
+        if (!candidate) return;
+        status.className = "status-line checking";
+        status.innerHTML = '<span class="spinner" aria-hidden="true"></span> Checking write access…';
+        const result = await api("/api/wizard/database", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: candidate }),
+        });
+        paint(result);
+      });
+
+      const initial = await api("/api/wizard/database");
+      paint(initial);
+    }
+
+    // ---- Screen 3: Google connect ----------------------------------------
+    async function renderGoogle() {
+      content.innerHTML =
+        "<h1>Connect Google Contacts</h1>" +
+        '<p class="subtext">Optional — this saves your app\'s OAuth client so Rolodex can sync your Google contacts later. Skip and connect anytime from Settings.</p>' +
+        '<details id="google-instructions">' +
+        "<summary>Don't have credentials yet?</summary>" +
+        "<ol>" +
+        '<li>Open the <a class="ext-link" href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" aria-label="Google Cloud Console (opens in a new tab)">Google Cloud Console</a> and create (or pick) a project.</li>' +
+        "<li>Enable the <strong>People API</strong> for that project.</li>" +
+        "<li>Create an OAuth client of type <strong>Desktop app</strong>.</li>" +
+        "<li>Copy the generated Client ID and Client Secret into the fields below.</li>" +
+        "</ol>" +
+        '<p><a class="ext-link" href="https://github.com/search?q=repo%3Arolodex+ARCHITECTURE.md" target="_blank" rel="noopener noreferrer" aria-label="Written setup guide (opens in a new tab)">Written setup guide</a></p>' +
+        "</details>" +
+        '<div id="google-form-area">' +
+        '<div class="form-field">' +
+        '<label for="g-client-id">Client ID</label>' +
+        '<input id="g-client-id" type="text" autocomplete="off" spellcheck="false" />' +
+        "</div>" +
+        '<div class="form-field">' +
+        '<label for="g-client-secret">Client Secret</label>' +
+        '<div class="secret-input-wrap">' +
+        '<input id="g-client-secret" type="password" autocomplete="off" spellcheck="false" />' +
+        '<button type="button" id="g-secret-toggle" aria-label="Show client secret">Show</button>' +
+        "</div>" +
+        "</div>" +
+        '<p class="trust-microcopy">&#128274; Stored only in your system keychain. Never written to a file, an environment variable, or a log.</p>' +
+        '<div id="google-status" aria-live="polite"></div>' +
+        "</div>";
+
+      document.getElementById("g-secret-toggle").addEventListener("click", () => {
+        const input = document.getElementById("g-client-secret");
+        const btn = document.getElementById("g-secret-toggle");
+        const showing = input.type === "text";
+        input.type = showing ? "password" : "text";
+        btn.textContent = showing ? "Show" : "Hide";
+        btn.setAttribute("aria-label", (showing ? "Show" : "Hide") + " client secret");
+      });
+
+      function showStatus(kind, html) {
+        const el = document.getElementById("google-status");
+        el.className = kind === "error" ? "field-error" : kind === "success" ? "success-banner" : "";
+        el.innerHTML = html;
+      }
+
+      async function onSkip() {
+        try {
+          await api("/api/wizard/google/skip", { method: "POST" });
+        } catch (err) {
+          // Skip must never get stuck behind a network error — there's
+          // nothing server-side that has to happen for a skip to be valid.
+          console.warn("wizard: /api/wizard/google/skip failed, skipping locally anyway", err);
+        }
+        reachedIndex = Math.max(reachedIndex, 3);
+        navigate("secrets");
+      }
+
+      async function onConnect() {
+        const clientIdEl = document.getElementById("g-client-id");
+        const clientSecretEl = document.getElementById("g-client-secret");
+        const clientId = clientIdEl.value.trim();
+        const clientSecret = clientSecretEl.value;
+        if (!clientId || !clientSecret) {
+          showStatus("error", "Enter both a Client ID and Client Secret, or use Skip for now.");
+          return;
+        }
+        setFooter({
+          backOnClick: () => navigate("database"),
+          extraButtons: [{ label: "Skip for now", disabled: true, onClick: onSkip }],
+          primaryLabel: "Connecting…",
+          primaryEnabled: false,
+          primaryOnClick: () => {},
+        });
+        showStatus("checking", '<span class="spinner" aria-hidden="true"></span> Saving your credentials…');
+        try {
+          // NOTE(future work): this call only validates the two fields are
+          // non-empty and writes them through SecretsAdapter — see the
+          // matching comment at the server route (src/shell/server.ts,
+          // POST /api/wizard/google) for exactly where the real OAuth
+          // consent flow (system-browser redirect + token exchange) plugs
+          // in later. It does not happen here, so there is no "Connected as
+          // <email>" to show yet, per this story's explicit scope boundary.
+          await api("/api/wizard/google", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ clientId, clientSecret }),
+          });
+          clientIdEl.disabled = true;
+          clientSecretEl.disabled = true;
+          document.getElementById("g-secret-toggle").disabled = true;
+          showStatus(
+            "success",
+            "&#10003; Credentials saved to your keychain. Google sign-in happens the first time you sync — coming soon.",
+          );
+          reachedIndex = Math.max(reachedIndex, 3);
+          setTimeout(() => navigate("secrets"), 700);
+        } catch (err) {
+          showStatus("error", escapeHtml(err.message || "Something went wrong saving your credentials."));
+          wireFooter();
+        }
+      }
+
+      function wireFooter() {
+        setFooter({
+          backOnClick: () => navigate("database"),
+          extraButtons: [{ label: "Skip for now", onClick: onSkip }],
+          primaryLabel: "Connect & Continue",
+          primaryEnabled: true,
+          primaryOnClick: onConnect,
+        });
+      }
+      wireFooter();
+    }
+
+    // ---- Screen 4: Secrets check ------------------------------------------
+    async function renderSecrets() {
+      content.innerHTML =
+        "<h1>Checking secure storage</h1>" +
+        '<p class="subtext">Rolodex stores credentials in your OS keychain, never in a plain file. This confirms it actually works before you finish.</p>' +
+        '<div class="status-line checking" id="secrets-status" aria-live="polite"><span class="spinner" aria-hidden="true"></span> Checking keychain access…</div>' +
+        '<div id="secrets-detail"></div>' +
+        '<div class="secrets-actions" id="secrets-actions" hidden>' +
+        '<button type="button" id="secrets-retry">Retry</button>' +
+        '<button type="button" id="secrets-copy">Copy error details</button>' +
+        "</div>" +
+        '<details id="troubleshooting" hidden>' +
+        "<summary>Troubleshooting guide</summary>" +
+        "<ul>" +
+        "<li><strong>Keychain locked:</strong> unlock your login keychain (Keychain Access app, or just log in again) and retry.</li>" +
+        "<li><strong>Permission denied:</strong> check macOS System Settings &rarr; Privacy &amp; Security for anything blocking Rolodex from keychain access.</li>" +
+        "<li><strong>No keychain available:</strong> this session (e.g. headless/SSH) has no secure keychain daemon — there is no env-var fallback for credentials, by design.</li>" +
+        "</ul>" +
+        "</details>";
+
+      let lastResult = null;
+
+      function paint(result) {
+        lastResult = result;
+        const status = document.getElementById("secrets-status");
+        const actions = document.getElementById("secrets-actions");
+        const trouble = document.getElementById("troubleshooting");
+        if (result.ok) {
+          status.className = "status-line ok";
+          status.innerHTML = "&#10003; Keychain access confirmed — Using: " + escapeHtml(result.backend);
+          actions.hidden = true;
+          trouble.hidden = true;
+        } else {
+          status.className = "status-line error";
+          status.innerHTML = "&#10007; Couldn't write to your system keychain";
+          document.getElementById("secrets-detail").innerHTML =
+            '<p class="field-error">' + escapeHtml(result.error || "Unknown error.") + "</p>";
+          actions.hidden = false;
+          trouble.hidden = false;
+        }
+        updatePrimary();
+      }
+
+      function updatePrimary() {
+        setFooter({
+          backOnClick: () => navigate("google"),
+          primaryLabel: "Next",
+          primaryEnabled: !!(lastResult && lastResult.ok),
+          primaryOnClick: () => {
+            reachedIndex = Math.max(reachedIndex, 4);
+            navigate("finish");
+          },
+        });
+      }
+      updatePrimary();
+
+      async function runCheck() {
+        document.getElementById("secrets-detail").innerHTML = "";
+        const status = document.getElementById("secrets-status");
+        status.className = "status-line checking";
+        status.innerHTML = '<span class="spinner" aria-hidden="true"></span> Checking keychain access…';
+        document.getElementById("secrets-actions").hidden = true;
+        document.getElementById("troubleshooting").hidden = true;
+        try {
+          const result = await api("/api/wizard/secrets-check", { method: "POST" });
+          paint(result);
+        } catch (err) {
+          paint(err.body || { ok: false, backend: "unknown", error: err.message });
+        }
+      }
+
+      document.getElementById("secrets-retry").addEventListener("click", runCheck);
+      document.getElementById("secrets-copy").addEventListener("click", async () => {
+        const text = lastResult ? JSON.stringify(lastResult, null, 2) : "";
+        try {
+          await navigator.clipboard.writeText(text);
+          const btn = document.getElementById("secrets-copy");
+          const original = btn.textContent;
+          btn.textContent = "Copied!";
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        } catch {
+          // Clipboard API can be unavailable (permissions/non-secure
+          // context); the error details are already visible on-screen as
+          // plain text, so this is a nice-to-have, not the only way to see them.
+        }
+      });
+
+      await runCheck();
+    }
+
+    // ---- Screen 5: Finish ---------------------------------------------
+    async function renderFinish() {
+      content.innerHTML =
+        "<h1>You're all set.</h1>" +
+        '<p class="subtext">Here\'s what got configured. You can change any of this later from Settings.</p>' +
+        '<ul class="summary-list" id="summary-list"></ul>' +
+        '<div id="finish-error"></div>';
+
+      const list = document.getElementById("summary-list");
+      const summary = await api("/api/wizard/summary");
+
+      const googleItem = summary.googleConfigured
+        ? {
+            title: "&#10003; Google credentials saved",
+            detail: "Sign-in happens the first time you sync — connect anytime from Settings.",
+          }
+        : {
+            title: "Google Contacts — not connected",
+            detail: "You can connect anytime from Settings.",
+          };
+
+      const secretsItem = summary.secrets.ok
+        ? { title: "&#10003; Secure storage verified", detail: "Using: " + escapeHtml(summary.secrets.backend) }
+        : { title: "&#10007; Secure storage not verified", detail: escapeHtml(summary.secrets.error || "") };
+
+      list.innerHTML =
+        '<li><div class="item-title">&#10003; Database ready</div><div class="item-detail"><code>' +
+        escapeHtml(summary.dbPath) +
+        "</code></div></li>" +
+        '<li><div class="item-title">' + googleItem.title + '</div><div class="item-detail">' + googleItem.detail + "</div></li>" +
+        '<li><div class="item-title">' + secretsItem.title + '</div><div class="item-detail">' + secretsItem.detail + "</div></li>";
+
+      async function onOpenClick() {
+        const errorEl = document.getElementById("finish-error");
+        errorEl.innerHTML = "";
+        setFooter({
+          backOnClick: () => navigate("secrets"),
+          primaryLabel: "Opening…",
+          primaryEnabled: false,
+          primaryOnClick: () => {},
+        });
+        try {
+          await api("/api/wizard/complete", { method: "POST" });
+          // Full navigation (not a hash change): the main app lives in a
+          // different document (index.html) served at the same "/" now
+          // that setup is complete. No login/auth gate in between — this
+          // is the direct hand-off the design brief requires.
+          location.href = "/";
+        } catch (err) {
+          errorEl.innerHTML = '<p class="error-banner">' + escapeHtml(err.message || String(err)) + "</p>";
+          wireFinishFooter();
+        }
+      }
+
+      function wireFinishFooter() {
+        setFooter({
+          backOnClick: () => navigate("secrets"),
+          primaryLabel: "Open Rolodex →",
+          primaryEnabled: true,
+          primaryOnClick: onOpenClick,
+        });
+      }
+      wireFinishFooter();
+    }
+
+    // ---- boot ----------------------------------------------------------
+    window.addEventListener("hashchange", render);
+    render();
+  </script>
+</body>
+</html>

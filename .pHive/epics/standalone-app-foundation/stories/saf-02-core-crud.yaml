@@ -1,0 +1,117 @@
+id: saf-02-core-crud
+epic: standalone-app-foundation
+title: Add and view a contact end-to-end
+status: in_progress
+complexity: high
+methodology: classic
+depends_on: [saf-01-shell-store-bridge]
+
+description: |
+  Prove the core CRUD loop: a user opens the app, fills out an add-contact
+  form, sees it appear in the list, clicks into it, and sees the detail
+  screen — and it's still there after restarting the app. Implements
+  Store.upsert/get/setVerdict/setNextStep for real (currently stubs per
+  store.ts:36-54). setVerdict/setNextStep were flagged during H/V review
+  (ui-designer) as named in the horizontal scan but originally unassigned to
+  any slice — included here explicitly.
+
+acceptance_criteria:
+  - "Given the add-contact form, when a user submits a name, then the contact appears in the list and persists across an app restart"
+  - "Given an existing contact (matched by googleResourceName, falling back to email), when upsert is called again, then createdAt is preserved and updatedAt is refreshed"
+  - "Given a contact detail screen, when the user sets a verdict or next step, then it persists via setVerdict/setNextStep and survives a restart"
+  - "Given Store.get() with an unknown id, then it returns undefined, not a throw"
+
+steps:
+  - id: research
+    description: Confirm saf-01's shell/Store bridge shape before wiring new UI against it
+    agent: researcher
+  - id: ui-design
+    description: Delegate to /design for wireframes (atomic external call; see skills/design/SKILL.md). Covers add/edit form, list (populated), and detail screens including the verdict picker and next-step editor.
+    agent: ui-designer
+    delegates_to: design
+    depends_on: [research]
+  - id: implement
+    description: Implement Store.upsert/get/setVerdict/setNextStep and the add/edit form, detail screen, and populated list screen
+    agent: developer
+    depends_on: [ui-design]
+    inputs:
+      - source: step_output
+        step: ui-design
+        key: wireframe_brief
+  - id: test
+    description: Write and pass unit tests for dedup/preserve-createdAt/refresh-updatedAt/FTS-reindex/get-undefined-case, plus manual add-and-restart verification
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review implementation and tests for correctness and convention compliance
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/lib/store.ts
+      purpose: "upsert/get/setVerdict/setNextStep stubs to implement (lines 36-54); TODO comment at line 37-38 documents the exact upsert contract"
+    - path: src/lib/types.ts
+      purpose: "Contact/Verdict types the form and detail screen bind to"
+
+files_to_modify:
+  - file: src/lib/store.ts
+    change: "implement upsert(), get(), setVerdict(), setNextStep()"
+
+code_examples:
+  - title: Store's documented upsert contract (TODO comment to satisfy)
+    file: src/lib/store.ts
+    snippet: |
+      upsert(c: Contact): Contact {
+        // TODO(build): dedup against googleResourceName + email before insert.
+        // Preserve createdAt on update; refresh updatedAt; reindex FTS row.
+        throw new Error("not implemented — upsert contact + FTS reindex");
+      }
+
+design_decisions:
+  - decision: "setVerdict/setNextStep implemented in this story, not deferred"
+    rationale: "ui-designer flagged at the H/V gate that these were named in the horizontal layer scan but unassigned to any vertical slice — folded into this story's scope during that revision."
+
+risks:
+  - severity: medium
+    description: Dedup logic (googleResourceName/email) edge cases
+    mitigation: "Get this right here — saf-05 (Google sync) depends on this dedup behavior being correct"
+
+cross_cutting:
+  - concern: documentation
+    action: "New Store method bodies land here; saf-07 covers the doc rewrite that reflects them"
+  - concern: metrics
+    action: "See metric: block below"
+
+metric:
+  applies: true
+  name: contacts_addable_via_ui
+  direction: up
+  baseline: 0
+  target: "at least 1 contact addable, viewable, and editable (verdict + next step) through the UI, surviving an app restart"
+  window: story-integrate
+  source:
+    kind: sql
+    ref: "SELECT COUNT(*) FROM contacts — queried against ROLODEX_DB after the manual add-and-restart check"
+  verify_at: integrate
+  owner: developer
+
+references:
+  - path: .pHive/epics/standalone-app-foundation/docs/structured-outline.md
+    relevant_excerpt: |
+      Phase 2: Add and view a contact end-to-end — this is the first slice
+      that delivers the app's actual job.
+
+wireframes:
+  approved: .pHive/design/contact-list-and-detail/wireframe.txt
+  brief: .pHive/design/contact-list-and-detail/brief.md
+  topic: contact-list-and-detail
+  note: "Frame0 CLI unavailable — text-based/ASCII fallback per wireframe-protocol.md. This story implements the populated List, Detail (verdict picker + next-step editor), and Add/Edit Form screens."
+  renditions:
+    - .pHive/design/contact-list-and-detail/wireframe.txt
+  selected: 1

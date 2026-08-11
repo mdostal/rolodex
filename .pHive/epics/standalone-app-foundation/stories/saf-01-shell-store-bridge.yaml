@@ -1,0 +1,126 @@
+id: saf-01-shell-store-bridge
+epic: standalone-app-foundation
+title: Desktop shell boots and reads the real (empty) store
+status: in_progress
+complexity: high
+methodology: classic
+depends_on: []
+
+description: |
+  Settle the desktop-shell choice (open question #1 in design-discussion.md)
+  by building the thinnest real proof: an app window that boots and renders a
+  real (empty) contact count read from actual SQLite via a new Store.list()
+  method — not a mock or fixture. This is the riskiest unknown in the epic
+  (structured-outline.md Part 5, Risk 1) and is deliberately the first and
+  thinnest slice so a bad shell choice is caught on day one, not after other
+  work is built on top of it.
+
+  Also settles, alongside the shell choice: the `node:sqlite` runtime flag
+  requirement (`--experimental-sqlite`, verified missing from this repo by
+  running `node -e "require('node:sqlite')"` against Node 22.12 — throws
+  ERR_UNKNOWN_BUILTIN_MODULE without it) for whichever process runs Store,
+  and the UI component/state-management architecture (not just the
+  process/IPC model) — both flagged during structured-outline review as
+  decisions that belong in this same story, not left implicit.
+
+acceptance_criteria:
+  - "Given a fresh install, when the app launches, then it shows '0 contacts' read from a real SQLite database (verifiable by inserting a row via the sqlite3 CLI against ROLODEX_DB and confirming it appears without a code change)"
+  - "Given the chosen shell's Node process, when it starts, then node:sqlite is available (--experimental-sqlite set via NODE_OPTIONS or launch flag) with no ERR_UNKNOWN_BUILTIN_MODULE"
+  - "Given the chosen shell is Electron, when the renderer loads, then contextIsolation is true and nodeIntegration is false"
+
+steps:
+  - id: research
+    description: Confirm current Store/tsconfig/package.json state and finalize the shell choice against the three candidates in structured-outline.md Part 2 Phase 1 (Electron, local-server+browser, Tauri)
+    agent: researcher
+  - id: ui-design
+    description: Delegate to /design for wireframes (atomic external call; see skills/design/SKILL.md). Covers the empty-state list screen this story renders.
+    agent: ui-designer
+    delegates_to: design
+    depends_on: [research]
+  - id: implement
+    description: Implement app bootstrap, window creation, single-instance lock, Store bridge, node:sqlite flag wiring, and Store.list()
+    agent: developer
+    depends_on: [ui-design]
+    inputs:
+      - source: step_output
+        step: ui-design
+        key: wireframe_brief
+  - id: test
+    description: Write and pass Store.list() unit test (vitest) and manual launch verification
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review implementation and tests for correctness and convention compliance
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  tech_stack:
+    language: typescript
+    runtime: "node:sqlite (requires --experimental-sqlite)"
+  key_files:
+    - path: src/lib/store.ts
+      purpose: "Add list() here; Store constructor/migrate() already real (lines 10-33)"
+    - path: package.json
+      purpose: "Add shell/UI dependencies, node:sqlite launch flag, new dev/build scripts"
+    - path: tsconfig.json
+      purpose: "Add DOM to lib — no UI candidate works with the current Node-only lib config"
+
+files_to_modify:
+  - file: src/lib/store.ts
+    change: "add list(): Contact[] — minimal SELECT * FROM contacts"
+  - file: package.json
+    change: "add shell/UI framework deps, --experimental-sqlite flag wiring, new scripts"
+  - file: tsconfig.json
+    change: "add DOM to compilerOptions.lib"
+
+code_examples:
+  - title: Existing Store constructor/migrate pattern to extend
+    file: src/lib/store.ts
+    snippet: |
+      constructor(path = process.env.ROLODEX_DB ?? defaultDbPath()) {
+        this.db = new DatabaseSync(path);
+        this.db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 4000;");
+        this.migrate();
+      }
+
+design_decisions:
+  - decision: "Desktop shell candidate chosen in this story (Electron / local-server+browser / Tauri)"
+    rationale: "Architect review ranked local-server+browser and Electron as sound fits given the hard node:sqlite requirement; Tauri is the technically weakest fit (needs a Node sidecar). See structured-outline.md Part 2 Phase 1 Interfaces."
+
+risks:
+  - severity: high
+    description: Chosen shell can't cleanly host node:sqlite
+    mitigation: This story IS the proof point — caught here, not after other phases build on it
+  - severity: medium
+    description: node:sqlite experimental flag omitted from launch scripts
+    mitigation: Explicit acceptance criterion above; verified by the story's own test step
+
+cross_cutting:
+  - concern: documentation
+    action: "Flags README.md/docs/ARCHITECTURE.md rewrite need; actual rewrite is saf-07's job — this story just notes the new shell entry point/directory for that story to document"
+
+metric:
+  applies: false
+  justification: "Foundational plumbing (shell bootstrap + Store.list()); success is binary (boots and reads the real store) not a moving number — verified by the pass/fail checks in this story's test step, not a metric."
+
+references:
+  - path: .pHive/epics/standalone-app-foundation/docs/structured-outline.md
+    relevant_excerpt: |
+      Phase 1: Desktop shell boots, reads the real store — settles open
+      question #1, the node:sqlite runtime flag, and the UI architecture
+      together in one story.
+
+wireframes:
+  approved: .pHive/design/contact-list-and-detail/wireframe.txt
+  brief: .pHive/design/contact-list-and-detail/brief.md
+  topic: contact-list-and-detail
+  note: "Frame0 CLI unavailable — text-based/ASCII fallback per wireframe-protocol.md. This story only implements the empty-state List screen from this brief; the populated List/Detail/Form screens are saf-02's scope."
+  renditions:
+    - .pHive/design/contact-list-and-detail/wireframe.txt
+  selected: 1

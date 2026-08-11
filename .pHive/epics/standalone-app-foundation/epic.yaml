@@ -1,0 +1,53 @@
+name: standalone-app-foundation
+title: Standalone App Foundation
+target_codebase: /Users/mdostal/Documents/work/rolodex
+methodology: classic
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [architecture, ui, security]
+  roster: [researcher, technical-writer, tpm, architect, ui-designer, security-reviewer]
+  per_tag_reasoning:
+    architecture: "Significant structural change — new UI app layer, setup wizard, secrets/adapter restructuring, MCP repositioned as secondary surface."
+    ui: "New screens (wizard, contact list/detail/add), frontend flows, layout — has_ui: true in project profile."
+    security: "New OAuth credential storage/handling surface (SecretsAdapter, OS keychain); login/auth was evaluated and later descoped by the owner at the H/V gate."
+  confidence: matched
+  gate_decisions:
+    architecture: included
+    ui: included
+    security: included
+
+stories:
+  - id: saf-01-shell-store-bridge
+    title: Desktop shell boots and reads the real (empty) store
+    complexity: high
+    depends_on: []
+  - id: saf-02-core-crud
+    title: Add and view a contact end-to-end
+    complexity: high
+    depends_on: [saf-01-shell-store-bridge]
+  - id: saf-03-secrets-adapter
+    title: "Secrets Adapter — interface, OS keychain implementation, CI fake"
+    complexity: medium
+    depends_on: [saf-01-shell-store-bridge]
+  - id: saf-04-setup-wizard
+    title: First-run setup wizard
+    complexity: high
+    depends_on: [saf-02-core-crud, saf-03-secrets-adapter]
+  - id: saf-05-google-sync
+    title: Google Contacts sync (one-shot pull)
+    complexity: medium
+    depends_on: [saf-04-setup-wizard]
+  - id: saf-06-search-logging
+    title: Search and interaction logging
+    complexity: medium
+    depends_on: [saf-02-core-crud]
+  - id: saf-07-docs-ci
+    title: Documentation rewrite and CI
+    complexity: low
+    depends_on: [saf-01-shell-store-bridge, saf-02-core-crud, saf-03-secrets-adapter, saf-04-setup-wizard, saf-05-google-sync, saf-06-search-logging]

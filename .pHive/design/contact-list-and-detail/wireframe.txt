@@ -1,0 +1,105 @@
+rolodex — Contact List / Detail / Add-Edit Form
+Text-based ASCII mockups (Frame0 CLI unavailable — documented fallback)
+
+=== Screen 1a: Contact List — empty state ===
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ● rolodex                                                     [ + Add contact]│
+├──────────────────────────────────────────────────────────────────────────────┤
+│  Contacts                                              🔍 [ Search contacts ]│
+│  0 contacts                                                                   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                                │
+│                                                                                │
+│                                     ◎                                        │
+│                              (empty-state icon)                              │
+│                                                                                │
+│                            No contacts yet                                   │
+│              Add the first person you want to keep track of.                 │
+│                                                                                │
+│                     [  + Add your first contact  ]                           │
+│                                                                                │
+│                                                                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+=== Screen 1b: Contact List — populated ===
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ● rolodex                                                     [ + Add contact]│
+├──────────────────────────────────────────────────────────────────────────────┤
+│  Contacts                                              🔍 [ Search contacts ]│
+│  4 contacts                                                                   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  NAME                ORG                    VERDICT           NEXT STEP      │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  Maya Chen           Redwood Ventures       ● Strong          Intro call w/  │
+│                                                                their partner  │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│  Dave Okafor         Northstar Labs         ○ Watch           Follow up      │
+│                                                                after launch   │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│  Priya Nandan        —                      ◐ Referral-only   Ask intro to   │
+│                                                                their CFO      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│  Tom Bergstrom       Anchor Point Co.       ✕ Pass             —             │
+│                                                                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+=== Screen 2: Contact Detail ===
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ← Back to contacts                                               [ Edit ]    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  Maya Chen                                                                   │
+│  Partner · Redwood Ventures                                                  │
+├───────────────────────────────────────────────┬──────────────────────────────┤
+│  CONTACT INFO                                  │  VERDICT                    │
+│  Email    maya.chen@redwood.vc                 │  [Strong●][Watch][Referral-only][Pass][None] │
+│  Phone    (415) 555-0142                       │  autosaves on selection      │
+│  Met      Intro'd by Sam at SaaStr 2025        │                              │
+│                                                 │  NEXT STEP                  │
+│  ABOUT                                         │  [ Intro call w/ their     ] │
+│  What     Runs seed-stage fintech investments  │  [ partner|                ] │
+│           at Redwood                           │  saves on Enter / on blur   │
+│  Angle    Could open doors to 3 portfolio      │                              │
+│           companies in our space                │  INTERACTIONS (reserved)    │
+│                                                 │  No interactions logged yet │
+│  TAGS                                          │  [ + Log interaction ]      │
+│  [ investor ]  [ fintech ]  [ warm-intro ]      │  (disabled — later topic)   │
+└───────────────────────────────────────────────┴──────────────────────────────┘
+
+=== Screen 3: Add/Edit Contact Form ===
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ← Cancel                                    Add contact            [ Save ]  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  IDENTITY                                                                    │
+│  Name *      [ Maya Chen                                              ]     │
+│  Org         [ Redwood Ventures                                       ]     │
+│  Role        [ Partner                                                ]     │
+│                                                                                │
+│  CONTACT INFO                                                                │
+│  Email       [ maya.chen@redwood.vc                                   ]     │
+│  Phone       [ (415) 555-0142                                         ]     │
+│                                                                                │
+│  CONTEXT                                                                     │
+│  Met         [ How/when did you meet? e.g. "SaaStr 2025, via Sam"     ]     │
+│  What        [ What do they do / their capability                      ]     │
+│  Angle       [ Why they matter — the partnership rationale             ]     │
+│                                                                                │
+│  CLASSIFICATION                                                              │
+│  Verdict     ( )Strong ( )Watch ( )Referral-only ( )Pass (●)None            │
+│  Tags        [ investor ✕ ] [ fintech ✕ ] [ + add tag            ]         │
+│                                                                                │
+│  NEXT STEP                                                                   │
+│              [ Intro call w/ their partner                            ]     │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                    [ Cancel ]  [ Save contact ]│
+└──────────────────────────────────────────────────────────────────────────────┘
+
+=== Navigation flow ===
+
+  Contact List ──(row click)──> Contact Detail ──(Edit)──> Add/Edit Form
+       ^                              |                          |
+       |___________(Cancel)___________|_____(Save -> Detail)_____|
+       |___________(+ Add contact, Save -> new Detail)___________|

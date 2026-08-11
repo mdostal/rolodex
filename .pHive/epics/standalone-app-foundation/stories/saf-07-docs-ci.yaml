@@ -1,0 +1,87 @@
+id: saf-07-docs-ci
+epic: standalone-app-foundation
+title: Documentation rewrite and CI
+status: in_progress
+complexity: low
+methodology: classic
+depends_on: [saf-01-shell-store-bridge, saf-02-core-crud, saf-03-secrets-adapter, saf-04-setup-wizard, saf-05-google-sync, saf-06-search-logging]
+
+description: |
+  README.md and docs/ARCHITECTURE.md accurately describe the standalone-app
+  architecture, with an explicit statement that this epic supersedes the
+  prior build-out roadmap's UI-last ordering (grill finding C1), the
+  SecretsAdapter pattern documented alongside the existing GoogleSync
+  pattern, and an explicit single-user/no-in-app-gating statement (the
+  login/logout descope from the H/V review gate — with login descoped, there
+  is no in-app access control over the SQLite file at all; this must be
+  stated plainly, not left implicit). A minimal CI workflow (typecheck +
+  lint) runs on every PR.
+
+  This is the epic's closing story — it depends on all others because it
+  documents what was actually built, not what was planned.
+
+acceptance_criteria:
+  - "Given the epic is otherwise complete, when docs/ARCHITECTURE.md is read, then it states the standalone-app-first architecture, the roadmap-supersession statement, the SecretsAdapter pattern, and the single-user/no-in-app-gating accepted-risk statement"
+  - "Given README.md is read, then it gives install/run instructions for the actual standalone app, with the MCP server described as the secondary integration surface"
+  - "Given a PR is opened, when CI runs, then typecheck and lint both execute and must pass"
+
+steps:
+  - id: research
+    description: Inventory every behavior/decision from saf-01 through saf-06 that needs documenting, plus every stale reference in current README.md/docs/ARCHITECTURE.md
+    agent: researcher
+  - id: implement
+    description: Rewrite docs/ARCHITECTURE.md and README.md; add .github/workflows/ci.yml (typecheck + lint)
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Confirm CI passes on the introducing PR; manual doc review for stale "UI optional/last" references
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review docs for completeness against acceptance criteria and CI config correctness
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: docs/ARCHITECTURE.md
+      purpose: "Currently states the pre-pivot MCP-first framing and ranks UI as optional/last in the build-out roadmap — the exact thing this story supersedes"
+    - path: README.md
+      purpose: "Currently only documents the MCP server install snippet"
+
+files_to_modify:
+  - file: docs/ARCHITECTURE.md
+    change: "standalone-app-first rewrite, roadmap supersession statement, SecretsAdapter pattern, single-user/no-gating statement"
+  - file: README.md
+    change: "standalone app install/run instructions; MCP described as secondary"
+  - file: .github/workflows/ci.yml
+    change: "new file — typecheck + lint workflow"
+
+design_decisions:
+  - decision: "This epic explicitly supersedes docs/ARCHITECTURE.md's prior build-out roadmap ordering, stated outright rather than a silent reorder"
+    rationale: "grill finding C1 — the prior roadmap ranked a UI as optional/last; leaving that unstated risks the repo reading as self-contradictory to future contributors"
+  - decision: "Minimal CI (typecheck + lint) is in scope for this epic, not deferred"
+    rationale: "grill finding U1 — shipping a second surface (UI) with zero automated guardrails was judged a compounding gap"
+
+risks:
+  - severity: low
+    description: This slice slips or is deprioritized as a "nice to have at the end"
+    mitigation: "Tracked as a first-class story with its own dependencies on every other story, not a footnote"
+
+cross_cutting: []
+
+metric:
+  applies: false
+  justification: "Process/substrate story (documentation rewrite + CI workflow); success is binary (docs updated, CI passes) not a moving number — verified via this story's own CI-passing and manual doc review checks."
+
+references:
+  - path: .pHive/epics/standalone-app-foundation/docs/grill-record.md
+    relevant_excerpt: |
+      C1 — docs/ARCHITECTURE.md's existing build-out roadmap explicitly ranks
+      a UI as "Optional... last" on the list. The draft's sequencing inverts
+      that ordering but never states explicit supersession.

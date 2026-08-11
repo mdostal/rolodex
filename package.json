@@ -1,25 +1,29 @@
 {
   "name": "rolodex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "license": "MIT",
-  "description": "Open-source relationship rolodex as an MCP tool: own your contacts (SQLite), sync with Google Contacts, and give your AI agents a rolodex they can read, search, and update. Configured per-install; add it as a tool and it's yours.",
+  "description": "Open-source relationship rolodex you run locally as a standalone app: own your contacts (SQLite), sync with Google Contacts, and search/log through a real UI. MCP is a secondary integration surface, letting your AI agents read, search, and update the same rolodex.",
   "type": "module",
   "bin": { "rolodex-mcp": "dist/mcp/server.js" },
+  "engines": { "node": ">=22.0.0" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx src/mcp/server.ts",
+    "dev": "NODE_OPTIONS=--experimental-sqlite tsx src/mcp/server.ts",
+    "shell": "NODE_OPTIONS=--experimental-sqlite tsx src/shell/server.ts",
+    "shell:build": "tsc -p tsconfig.json && cp src/shell/index.html dist/shell/index.html && cp src/shell/wizard.html dist/shell/wizard.html",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "NODE_OPTIONS=--experimental-sqlite vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "googleapis": "^174.0.1",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
     "tsx": "^4.19.0",
-    "vitest": "^2.1.0"
+    "vitest": "^3.2.4"
   }
 }

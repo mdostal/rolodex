@@ -1,0 +1,99 @@
+id: saf-05-google-sync
+epic: standalone-app-foundation
+title: Google Contacts sync (one-shot pull)
+status: in_progress
+complexity: medium
+methodology: classic
+depends_on: [saf-04-setup-wizard]
+
+parallel_allowed: true
+parallel_rationale: bounded-slice
+files_to_modify:
+  - file: src/lib/google-sync.ts
+    change: "implement pull() — people.connections.list, pagination, field mapping"
+  - file: package.json
+    change: "add googleapis (or equivalent) dependency"
+
+description: |
+  The user's real Google Contacts get pulled in and appear in the rolodex
+  contact list, deduped against anything already added manually. One-shot
+  pull only — push() stays a stub, full two-way sync and conflict/merge
+  resolution beyond simple dedup are explicitly out of scope for this epic.
+
+  Independent of saf-06 (search/logging) — both depend only on saf-02's
+  Store/Contact-UI foundation and touch disjoint files, so they can run in
+  parallel (vertical-plan.md §6 Moldability Notes).
+
+acceptance_criteria:
+  - "Given valid Google OAuth credentials (from saf-04), when the user triggers sync, then their Google Contacts are pulled and appear in the rolodex, deduped against manually-added contacts by googleResourceName/email"
+  - "Given a manually-added contact with a verdict/angle/nextStep set, when a Google pull runs, then those local-only fields are unchanged afterward (local-fields-survive-sync invariant, docs/ARCHITECTURE.md)"
+
+steps:
+  - id: research
+    description: Confirm the People API pagination/field-mapping contract already documented in google-sync.ts:19-21
+    agent: researcher
+  - id: implement
+    description: Implement pull() (people.connections.list, pagination, field mapping) and the Contact UI "sync now" action
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Write and pass integration test against fixture data if feasible; perform manual verification with a real account including the local-fields-survive-sync check
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review implementation and tests for correctness and convention compliance
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/lib/google-sync.ts
+      purpose: "pull() stub to implement (lines 19-21 document the intended API surface); push() stays stubbed"
+    - path: src/lib/store.ts
+      purpose: "upsert() (implemented in saf-02) is what pulled contacts route through for dedup"
+
+code_examples:
+  - title: Documented pull() API surface
+    file: src/lib/google-sync.ts
+    snippet: |
+      /**
+       * API surface used:
+       *  - people.connections.list  -> pull contacts (paginate via pageToken)
+       *  - people.createContact / people.updateContact -> push
+       * Map People `resourceName` <-> Contact.googleResourceName for idempotent sync.
+       */
+
+risks:
+  - severity: medium
+    description: First live external API integration — Google API quota/auth edge cases
+    mitigation: "Manual verification with the owner's real account is the accepted verification plan, not a gap to close"
+
+cross_cutting:
+  - concern: documentation
+    action: "saf-07 documents the sync behavior and its one-shot-pull-only scope"
+  - concern: metrics
+    action: "See metric: block below"
+
+metric:
+  applies: true
+  name: google_contacts_pulled_on_first_sync
+  direction: up
+  baseline: 0
+  target: "greater than 0 contacts pulled and deduped correctly against manually-added contacts on the owner's real account; local fields (verdict/angle/nextStep) unchanged after sync"
+  window: epic-close
+  source:
+    kind: sql
+    ref: "SELECT COUNT(*) FROM contacts WHERE googleResourceName IS NOT NULL — queried against ROLODEX_DB after a real-account sync"
+  verify_at: integrate
+  owner: developer
+
+references:
+  - path: docs/ARCHITECTURE.md
+    relevant_excerpt: |
+      Verdict/angle/next-step are local-only (Google has no field for them) —
+      never lost on sync.

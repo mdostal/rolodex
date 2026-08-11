@@ -1,0 +1,32 @@
+updated_at: "2026-08-11T18:45:33Z"
+briefs:
+  - topic: "contact-list-and-detail"
+    surface_kind: "screen"
+    brief_path: ".pHive/design/contact-list-and-detail/brief.md"
+    wireframe_path: ".pHive/design/contact-list-and-detail/wireframe.txt"
+    export_paths: []
+    rendered_review: "https://claude.ai/code/artifact/6728a4bc-5ed5-4914-916b-6f6087a276cf"
+    selected_rendition: 1
+    source: "plan-delegated"
+    created_at: "2026-08-11T18:45:33Z"
+    linked_story: ["saf-01-shell-store-bridge", "saf-02-core-crud"]
+  - topic: "setup-wizard"
+    surface_kind: "flow"
+    brief_path: ".pHive/design/setup-wizard/brief.md"
+    wireframe_path: ".pHive/design/setup-wizard/wireframe.txt"
+    export_paths: []
+    rendered_review: "https://claude.ai/code/artifact/6728a4bc-5ed5-4914-916b-6f6087a276cf"
+    selected_rendition: 1
+    source: "plan-delegated"
+    created_at: "2026-08-11T18:45:33Z"
+    linked_story: ["saf-04-setup-wizard"]
+  - topic: "search-and-logging"
+    surface_kind: "component"
+    brief_path: ".pHive/design/search-and-logging/brief.md"
+    wireframe_path: ".pHive/design/search-and-logging/wireframe.txt"
+    export_paths: []
+    rendered_review: "https://claude.ai/code/artifact/6728a4bc-5ed5-4914-916b-6f6087a276cf"
+    selected_rendition: 1
+    source: "plan-delegated"
+    created_at: "2026-08-11T18:45:33Z"
+    linked_story: ["saf-06-search-logging"]

@@ -1,0 +1,124 @@
+id: saf-04-setup-wizard
+epic: standalone-app-foundation
+title: First-run setup wizard
+status: in_progress
+complexity: high
+methodology: classic
+depends_on: [saf-02-core-crud, saf-03-secrets-adapter]
+
+description: |
+  A first-run user goes from a fresh install to a fully configured app:
+  confirms DB location, is walked through Google OAuth credential setup, and
+  lands directly in the working contact UI from saf-02 — no login gate
+  (login/logout was descoped entirely at the H/V review gate; this app is
+  single-user-per-instance).
+
+  Security constraints from the security-reviewer's H/V-gate review, carried
+  into this story: OAuth credentials go through SecretsAdapter.set() only —
+  NO environment-variable fallback for the OAuth client secret/token (an env
+  var fallback would undermine the whole keychain migration: visible in
+  process listings, shell history, crash dumps). ROLODEX_DB stays
+  env-var-configurable since it's a path, not a secret. The paste-existing-
+  credentials form field (if that OAuth scope is chosen) must not be logged
+  or transiently persisted to disk/app state beyond the in-memory wizard
+  step.
+
+  Part of the pre-exec security escalation logged in
+  .pHive/cycle-state/standalone-app-foundation.yaml — a security-focused
+  review of the credential-handling design should happen before this story
+  is marked done.
+
+acceptance_criteria:
+  - "Given a fresh install, when the wizard completes, then ROLODEX_DB is resolved/created, Google OAuth credentials are stored via SecretsAdapter, and the user lands in the contact list from saf-02 — no login screen"
+  - "Given the OAuth client secret/token, then it is never written to an env var, a log line, or a tracked file"
+  - "Given the Secrets check screen, when SecretsAdapter cannot write, then the wizard fails fast with a clear message, not silently"
+
+steps:
+  - id: research
+    description: Resolve open question #3 (guided GCP project creation vs. paste-existing-credentials) before finalizing the Google-connect screen's flow
+    agent: researcher
+  - id: ui-design
+    description: Delegate to /design for wireframes (atomic external call; see skills/design/SKILL.md). Covers all 5 wizard screens — welcome, DB location, Google connect, secrets check, finish.
+    agent: ui-designer
+    delegates_to: design
+    depends_on: [research]
+  - id: implement
+    description: Implement the 5 wizard screens, first-run detection, and the SecretsAdapter write path for OAuth credentials
+    agent: developer
+    depends_on: [ui-design]
+    inputs:
+      - source: step_output
+        step: ui-design
+        key: wireframe_brief
+  - id: test
+    description: Write and pass the E2E wizard-flow test; perform the manual OAuth consent screen check
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review implementation and tests for correctness, convention compliance, and the no-env-var-fallback / no-logging-of-pasted-secrets constraints
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/lib/store.ts
+      purpose: "defaultDbPath() (lines 57-60) — the wizard's DB-location screen confirms/overrides this"
+    - path: src/lib/secrets-adapter.ts
+      purpose: "Write path this story exercises for real (from saf-03)"
+
+files_to_modify:
+  - file: src/lib/store.ts
+    change: "ROLODEX_DB path resolution/creation on first run (may already be sufficient via existing defaultDbPath — confirm during research step)"
+
+design_decisions:
+  - decision: "No login gate at the end of the wizard — hands off directly to the contact list"
+    rationale: "Owner decision at the H/V gate: single-user-per-instance, access gating handled by an outer system, not this app."
+  - decision: "No env-var fallback for OAuth credentials"
+    rationale: "security-reviewer review: an env-var fallback would undermine the keychain migration (visible in process listings/shell history/crash dumps)."
+
+risks:
+  - severity: medium
+    description: OAuth-per-installer onboarding UX — every OSS installer needs their own GCP OAuth client
+    mitigation: "Wizard links to clear external setup steps rather than attempting to automate GCP project creation; user-test with a fresh installer if possible"
+  - severity: medium
+    description: "Critical-path compounding: this story sits between saf-03 and saf-05 (structured-outline.md Risk 3) — a slip here delays saf-05"
+    mitigation: "Do not start saf-05 story work until this story is demonstrably complete, not just mostly done"
+
+cross_cutting:
+  - concern: documentation
+    action: "saf-07 documents the wizard flow in the README install instructions"
+  - concern: metrics
+    action: "See metric: block below"
+
+metric:
+  applies: true
+  name: wizard_zero_to_working_without_cli
+  direction: up
+  baseline: null
+  target: "first-run wizard reaches a populated-or-empty working contact list without any manual config file edit or CLI command, verified across at least 1 real fresh install"
+  window: epic-close
+  source:
+    kind: manual
+    ref: "manual first-run walkthrough per structured-outline.md Part 3 Phase 4 verification"
+  verify_at: integrate
+  owner: developer
+
+references:
+  - path: .pHive/epics/standalone-app-foundation/docs/structured-outline.md
+    relevant_excerpt: |
+      Phase 4: Setup wizard — most cross-layer fan-out of any single slice
+      (touches Wizard UI, Secrets Adapter, Store).
+
+wireframes:
+  approved: .pHive/design/setup-wizard/wireframe.txt
+  brief: .pHive/design/setup-wizard/brief.md
+  topic: setup-wizard
+  note: "Frame0 CLI unavailable — text-based/ASCII fallback per wireframe-protocol.md. Covers all 5 wizard screens (welcome, database, google-connect, secrets-check, finish) plus the error/retry catalog."
+  renditions:
+    - .pHive/design/setup-wizard/wireframe.txt
+  selected: 1
