@@ -8,3 +8,12 @@ escalations:
     reason: "architect: epic introduces new OAuth credential persistence (via a pluggable SecretsAdapter/OS keychain) and a new external API surface (Google People API); in-app login was descoped post-H/V-review, but the credential-storage design (SecretsAdapter interface + OS keychain implementation, decided in open question 6) should still get security review before file-level design locks in."
     raised_by: architect
     raised_at: "2026-08-11T17:06:09Z"
+    resolved_at: "2026-08-11T20:10:00Z"
+    resolution: >
+      Security-focused reviews ran against both saf-03 (secrets-adapter.ts —
+      caught and fixed a real hex-encoding data-corruption bug in get()) and
+      saf-04 (setup wizard — caught and fixed a critical plaintext-secret-leak
+      via console.warn on keychain write failure, and a critical
+      all-interfaces HTTP bind exposing OAuth secrets + contact data to the
+      local network). Both fixes independently re-verified by a second review
+      pass before integrate. See commits 6de73ec (saf-03) and baec3ef (saf-04).
