@@ -1,7 +1,7 @@
 id: saf-05-google-sync
 epic: standalone-app-foundation
 title: Google Contacts sync (one-shot pull)
-status: pending
+status: in_progress
 complexity: medium
 methodology: classic
 depends_on: [saf-04-setup-wizard]
