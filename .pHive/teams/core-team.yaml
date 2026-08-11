@@ -1,0 +1,51 @@
+name: core-team
+description: >
+  Core team for rolodex. Today's scope is the MCP/store/sync backend; once the
+  standalone-app UI work starts (north star in project-profile.yaml), add a
+  frontend-developer member scoped to the app's UI directory when it exists.
+lead: team-lead
+methodology: classic # from hive.config.yaml -> execution.default_methodology
+
+members:
+  - agent: backend-developer
+    role: SQLite/FTS5 store, Google People sync adapter, MCP tool implementation
+    domain:
+      - path: src/lib/**
+        read: true
+        write: true
+        delete: false
+      - path: src/mcp/**
+        read: true
+        write: true
+        delete: false
+
+  - agent: tester
+    role: Test authoring and execution (vitest configured, no tests written yet)
+    domain:
+      - path: "**/*.test.ts"
+        read: true
+        write: true
+        delete: false
+
+  - agent: reviewer
+    role: Code review
+    tool_access: [codex] # codex CLI detected during kickoff
+
+context:
+  tech_stack:
+    language: typescript
+    runtime: node (node:sqlite)
+    mcp_sdk: "@modelcontextprotocol/sdk"
+    validation: zod
+  lint_commands: [] # no linter/formatter configured yet
+  commit_granularity: feature-scoped
+  pr_style: single-commit
+  review_depth: standard
+  notes: |
+    Generated from project discovery (kickoff, 2026-08-11). Early scaffold —
+    Store/google-sync/MCP tool method bodies are not yet implemented.
+    North star calls for a standalone desktop app with its own UI, setup
+    wizard, and login, single-user-per-install; MCP/Pantheon integration is
+    secondary. Revisit this team config once UI work begins.
+
+team_memory_path: .pHive/team-memories/core-team/

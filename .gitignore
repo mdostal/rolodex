@@ -11,3 +11,8 @@ dist/
 data/
 credentials.json
 token.json
+
+# Hive: transient session/telemetry state, not planning artifacts
+.pHive/interrupts/
+.pHive/metrics/
+.pHive/session-effort.txt

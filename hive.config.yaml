@@ -1,0 +1,24 @@
+# Hive workflow configuration for rolodex.
+# This is Hive-specific config — build/test/lint commands and code conventions
+# live in CLAUDE.md (not yet created for this project), not here.
+
+metrics:
+  enabled: true
+
+execution:
+  default_methodology: classic # no test-first signals yet (test_absence: true) — revisit once tests exist
+
+developer:
+  pr_style: single-commit # fresh repo, single scaffold commit, no merge history to infer from
+  commit_granularity: feature-scoped
+  review_depth: standard
+  notes: null
+
+planning:
+  collaborative_review: true
+
+meta_team:
+  github_forwarding: false
+
+task_tracking:
+  adapter: null # no tracker configured yet

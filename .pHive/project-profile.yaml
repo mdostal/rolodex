@@ -1,0 +1,161 @@
+project_name: "rolodex"
+type: brownfield
+discovered: "2026-08-11T16:50:29Z"
+source: "README.md + docs/ARCHITECTURE.md + codebase scan (no CLAUDE.md present yet)"
+
+project_type: consumer-app
+has_ui: true
+
+ship_target:
+  kind: github-release
+
+claude_md_summary: |
+  No CLAUDE.md exists yet for this project. Build/test/lint conventions below
+  were inferred from package.json and tsconfig.json, not from an authoritative
+  doc. Consider scaffolding a CLAUDE.md once conventions stabilize.
+
+tech_stack:
+  languages:
+    - typescript
+  frameworks:
+    - "@modelcontextprotocol/sdk"
+    - zod
+  build_tools:
+    - tsc
+    - tsx
+  package_managers:
+    - npm
+  versions:
+    node_types: "^22.0.0"
+    typescript: "^5.6.0"
+    mcp_sdk: "^1.0.0"
+    zod: "^3.23.0"
+    vitest: "^2.1.0"
+
+structure:
+  modules:
+    - name: mcp
+      purpose: Stdio MCP server exposing rolodex_* tools
+      source: src/mcp/server.ts
+    - name: lib
+      purpose: Core types, SQLite/FTS5 store, Google People sync adapter
+      source: src/lib/
+  entry_points:
+    - src/mcp/server.ts
+
+architecture:
+  pattern: "Generic core + user layer separation — core (src/) knows nothing about any specific user; DB path and Google creds live outside the repo (env + .local/, gitignored)"
+  di_framework: manual
+  state_management: "SQLite (node:sqlite, WAL) as source of truth, accessed only through the Store class"
+  navigation: "N/A today — stdio MCP server only, no UI implemented yet. North star (below) calls for a standalone desktop app with its own UI and setup wizard; this is a planned architectural expansion, not yet built."
+  data_layer: "SQLite with an FTS5 virtual table over name/org/what/angle/tags for real search; Google People API two-way sync adapter (verdict/angle/next-step stay local-only)"
+
+conventions:
+  naming: "camelCase fields on Contact/Interaction types (src/lib/types.ts)"
+  file_organization: "src/mcp (server + tool registrations), src/lib (types, store, google-sync)"
+  branching: "single main branch so far (1 commit) — no branching convention established yet"
+  commit_messages: "descriptive scaffold-style single commit; no established convention yet"
+
+test_infrastructure:
+  unit:
+    framework: vitest
+    location: not yet created
+    count: "0 files, 0 test functions"
+    coverage_tool: none
+  integration:
+    framework: none
+    location: none
+  e2e:
+    framework: none
+    location: none
+  mocking: none
+  test_commands:
+    - "npm test"
+
+ci_cd:
+  platform: none detected
+  workflows: []
+  gating: none
+
+documentation_found:
+  - path: README.md
+    content_summary: "Project pitch, install snippet, relationship model, status (v0.1.0 scaffold)"
+  - path: docs/ARCHITECTURE.md
+    content_summary: "Layers, data model, store, Google sync, MCP surface, build-out roadmap, owner note"
+
+existing_knowledge:
+  mcp_servers: []
+  existing_skills: []
+  existing_hooks: []
+
+integrations:
+  cli_tools:
+    linearis: missing
+    frame0: missing
+    codex: detected
+    maestro: missing
+  mcp_servers:
+    firecrawl: missing
+    context7: missing
+    posthog: detected
+    firebase: missing
+    mobile-mcp: missing
+  vaults:
+    obsidian: missing
+
+code_quality:
+  linters: []
+  formatters: []
+  pre_commit:
+    framework: null
+    hooks: []
+  code_snippets:
+    - path: src/lib/store.ts
+      pattern: sqlite-fts-store
+      annotation: "Single Store class wraps node:sqlite (WAL) with an FTS5 virtual table; all DB access is funneled through this class. Method bodies are scaffolded, not yet implemented."
+      lines: "1-60"
+    - path: src/mcp/server.ts
+      pattern: mcp-stdio-server
+      annotation: "Stdio MCP server registering rolodex_upsert / rolodex_search / rolodex_followups / rolodex_log_interaction / rolodex_sync_google against the Store."
+      lines: "1-70"
+  test_first_signals:
+    co_located_tests: false
+    test_before_source: inconclusive
+    test_runner_in_precommit: false
+    bdd_keywords: false
+    test_absence: true
+
+project_maturity: "early scaffold — types/contracts and MCP tool surface are defined and wired; method bodies are marked not-implemented (per README Status)"
+
+north_star:
+  goal: >
+    Ship a standalone desktop app — own UI, own install/setup wizard, own login —
+    for running a personal rolodex: full contact management, Google Contacts as
+    the initial login/sync method, with room to add other systems later. The
+    MCP/Pantheon tool surface is a secondary integration layer that plugs in
+    after the standalone app exists, not the primary architecture.
+  audience: >
+    A single user per install/deploy. Each person pulls down and runs their own
+    separate installation against their own data, gated behind login. It could
+    run online as part of a larger deploy, but remains single-user-per-instance
+    even then.
+  expected_scale: >
+    Single user per rolodex instance — not multi-tenant. No concurrent-user
+    scaling concern; the scale axis that matters is contact/interaction volume
+    for one person, not simultaneous users.
+  pain_points: >
+    Poor personal follow-up discipline — losing track of who to reach back out
+    to and when. Difficulty knowing which niche/specialty a contact belongs to
+    unless working with them day-to-day (today that context mostly lives in
+    company Slack, not anywhere durable).
+  success: >
+    A tool that runs the full rolodex of clients/contacts, integrates with
+    Google Contacts as the current login/interaction method with room to expand
+    to other systems, and walks through setup via an install wizard (including
+    logins). Per contact: store info, log how calls went, track contact
+    timeframes, surface when to reach back out, and capture who to partner
+    with / their niche.
+  avoid: >
+    Building this as a pure CLI-first tool, or letting the Pantheon/MCP plugin
+    integration become the primary architectural focus before the standalone
+    UI app is built out. The plugin surface comes after, not instead of.
