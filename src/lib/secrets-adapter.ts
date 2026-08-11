@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { classifyKeychainError } from "./secrets-check.js";
 
 /**
  * Storage for this app's Google OAuth credentials (client secret, refresh
@@ -48,6 +49,38 @@ const SEC_ITEM_NOT_FOUND = 44;
 
 function hasCode(err: unknown): err is { code: number } {
   return typeof err === "object" && err !== null && "code" in err && typeof (err as { code: unknown }).code === "number";
+}
+
+/**
+ * Strips argv from an execFile error thrown by `set()`.
+ *
+ * Node's execFile/promisify, on a nonzero exit, builds an error whose
+ * `.message` embeds `Command failed: <full argv>` and whose `.cmd` holds
+ * that same argv string. `set()`'s argv is `security add-generic-password
+ * ... -w <value> -U` — i.e. it contains the plaintext secret being stored.
+ * If that error were ever allowed to reach a log sink as-is (directly, or
+ * via a helper that echoes `.message`/`.cmd` back out — see
+ * classifyKeychainError()'s own generic-fallback branch in
+ * secrets-check.ts, which deliberately includes the raw error text), the
+ * secret would print in plaintext. This rebuilds a clean error carrying
+ * only the genuine diagnostic fields (`.code`, `.stderr`, `.stdout`) that
+ * `security` itself produced and which do not echo `-w`'s value back —
+ * deliberately dropping `.cmd` and the argv-laden `.message`. Anything
+ * downstream of `set()` (console.warn in withInMemoryFallback below,
+ * classifyKeychainError(), etc.) only ever sees this sanitized error.
+ */
+function sanitizeSetError(err: unknown): unknown {
+  if (!(err instanceof Error)) return err;
+  const withStd = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string; cmd?: string };
+  if (withStd.cmd === undefined) return err; // no argv was embedded (e.g. spawn ENOENT) — already safe
+  const detail = [withStd.stderr, withStd.stdout].map((s) => s?.trim()).filter(Boolean).join(" | ");
+  const sanitized = new Error(
+    `security add-generic-password failed${detail ? `: ${detail}` : " (no diagnostic output)"}`,
+  ) as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+  sanitized.code = withStd.code;
+  sanitized.stderr = withStd.stderr;
+  sanitized.stdout = withStd.stdout;
+  return sanitized;
 }
 
 /**
@@ -136,18 +169,25 @@ function createKeychainSecretsAdapter(): SecretsAdapter {
       }
     },
     async set(key, value) {
-      // -U: update the existing item in place instead of erroring if it's
-      // already there, so set() is a plain upsert either way.
-      await execFileAsync("security", [
-        "add-generic-password",
-        "-a",
-        key,
-        "-s",
-        SERVICE,
-        "-w",
-        value,
-        "-U",
-      ]);
+      try {
+        // -U: update the existing item in place instead of erroring if it's
+        // already there, so set() is a plain upsert either way.
+        await execFileAsync("security", [
+          "add-generic-password",
+          "-a",
+          key,
+          "-s",
+          SERVICE,
+          "-w",
+          value,
+          "-U",
+        ]);
+      } catch (err) {
+        // See sanitizeSetError()'s docstring: this argv contains `value`
+        // (the secret) itself, so any error thrown here must never leave
+        // this function with that argv still attached.
+        throw sanitizeSetError(err);
+      }
     },
     async delete(key) {
       try {
@@ -177,13 +217,28 @@ export function createInMemorySecretsAdapter(): SecretsAdapter {
   };
 }
 
+export interface CreateSecretsAdapterOptions {
+  /**
+   * Called at most once, if the real backend throws on its very first call
+   * and this adapter permanently swaps over to an in-memory store for the
+   * rest of the process. Exists so a caller that cares about the
+   * distinction (the setup wizard's Secrets-check probe, specifically) can
+   * tell "genuinely wrote to the keychain" apart from "silently degraded to
+   * a non-persistent store" — the normal `SecretsAdapter` interface can't
+   * expose that on its own since get/set/delete still resolve successfully
+   * either way.
+   */
+  onFallback?: (err: unknown) => void;
+}
+
 /**
  * Wraps a real adapter so that if its first call ever throws (no `security`
  * binary, not macOS, sandboxed with no keychain access, etc.), the whole
  * adapter permanently swaps over to an in-memory fake for the rest of the
- * process instead of crashing the app. Warns once, on the switch.
+ * process instead of crashing the app. Warns once, on the switch, and
+ * invokes `onFallback` (if given) with the triggering error.
  */
-function withInMemoryFallback(real: SecretsAdapter): SecretsAdapter {
+function withInMemoryFallback(real: SecretsAdapter, onFallback?: (err: unknown) => void): SecretsAdapter {
   let active: SecretsAdapter = real;
   let fellBack = false;
 
@@ -192,14 +247,20 @@ function withInMemoryFallback(real: SecretsAdapter): SecretsAdapter {
     try {
       return await run(active);
     } catch (err) {
+      // Deliberately NOT `err.message`/`err instanceof Error ? err.message :
+      // ...` here: a raw execFile error's `.message` (and `.cmd`) can embed
+      // full argv, which for set() includes the plaintext secret value
+      // itself (see sanitizeSetError() above). classifyKeychainError()
+      // returns a pattern-classified, human-safe summary instead — never
+      // the raw error text — so this can't leak a secret to the console/log
+      // on a keychain write failure.
       console.warn(
         `[secrets-adapter] real (keychain) backend failed on first use — falling back to an ` +
-          `in-memory store for this process. Secrets will NOT persist across restarts. Cause: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
+          `in-memory store for this process. Secrets will NOT persist across restarts. Cause: ${classifyKeychainError(err)}`,
       );
       active = createInMemorySecretsAdapter();
       fellBack = true;
+      onFallback?.(err);
       return run(active);
     }
   }
@@ -217,7 +278,7 @@ function withInMemoryFallback(real: SecretsAdapter): SecretsAdapter {
  * Non-macOS platforms skip straight to the fake since the real backend here
  * is Darwin-only.
  */
-export function createSecretsAdapter(): SecretsAdapter {
+export function createSecretsAdapter(opts?: CreateSecretsAdapterOptions): SecretsAdapter {
   if (process.platform !== "darwin") {
     console.warn(
       "[secrets-adapter] no keychain backend for this platform " +
@@ -225,5 +286,5 @@ export function createSecretsAdapter(): SecretsAdapter {
     );
     return createInMemorySecretsAdapter();
   }
-  return withInMemoryFallback(createKeychainSecretsAdapter());
+  return withInMemoryFallback(createKeychainSecretsAdapter(), opts?.onFallback);
 }

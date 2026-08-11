@@ -151,7 +151,10 @@ export class Store {
   logInteraction(_i: Interaction): void { throw new Error("not implemented"); }
 }
 
-function defaultDbPath(): string {
+/** Exported so the shell (src/shell/db-location.ts) can resolve/display this
+ * same default without duplicating the path logic — Store itself still only
+ * ever consults ROLODEX_DB / its constructor arg, never wizard-local config. */
+export function defaultDbPath(): string {
   const home = process.env.HOME ?? ".";
   return `${home}/.local/share/rolodex/rolodex.db`;
 }
