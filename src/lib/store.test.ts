@@ -67,3 +67,88 @@ describe("Store.list()", () => {
     });
   });
 });
+
+function baseContact(overrides: Partial<Parameters<Store["upsert"]>[0]> = {}) {
+  return {
+    id: "",
+    name: "Grace Hopper",
+    verdict: "none" as const,
+    createdAt: "",
+    updatedAt: "",
+    ...overrides,
+  };
+}
+
+describe("Store.upsert()", () => {
+  it("dedups by the first identifier (googleResourceName) — a second upsert with the same googleResourceName updates, not inserts", () => {
+    const store = new Store(dbPath);
+    const first = store.upsert(baseContact({ googleResourceName: "people/c123", name: "Grace Hopper" }));
+    const second = store.upsert(
+      baseContact({ googleResourceName: "people/c123", name: "Grace Murray Hopper" }),
+    );
+
+    expect(second.id).toBe(first.id);
+    const all = store.list();
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ name: "Grace Murray Hopper", googleResourceName: "people/c123" });
+  });
+
+  it("falls back to the second identifier (email) when googleResourceName is absent", () => {
+    const store = new Store(dbPath);
+    const first = store.upsert(baseContact({ email: "grace@example.com", name: "Grace Hopper" }));
+    const second = store.upsert(baseContact({ email: "grace@example.com", name: "G. Hopper" }));
+
+    expect(second.id).toBe(first.id);
+    const all = store.list();
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ name: "G. Hopper", email: "grace@example.com" });
+  });
+
+  it("preserves the original createdAt across an update", async () => {
+    const store = new Store(dbPath);
+    const first = store.upsert(baseContact({ email: "grace@example.com" }));
+    await new Promise((r) => setTimeout(r, 5));
+    const second = store.upsert(baseContact({ email: "grace@example.com", name: "Updated Name" }));
+
+    expect(second.createdAt).toBe(first.createdAt);
+  });
+
+  it("refreshes updatedAt across an update", async () => {
+    const store = new Store(dbPath);
+    const first = store.upsert(baseContact({ email: "grace@example.com" }));
+    await new Promise((r) => setTimeout(r, 5));
+    const second = store.upsert(baseContact({ email: "grace@example.com", name: "Updated Name" }));
+
+    expect(second.updatedAt).not.toBe(first.updatedAt);
+    expect(new Date(second.updatedAt).getTime()).toBeGreaterThan(new Date(first.updatedAt).getTime());
+  });
+});
+
+describe("Store.get()", () => {
+  it("returns undefined (not a throw) for an unknown id", () => {
+    const store = new Store(dbPath);
+    expect(store.get("does-not-exist")).toBeUndefined();
+  });
+
+  it("returns the contact for a known id", () => {
+    const store = new Store(dbPath);
+    const saved = store.upsert(baseContact({ name: "Ada Lovelace" }));
+    expect(store.get(saved.id)).toMatchObject({ name: "Ada Lovelace" });
+  });
+});
+
+describe("Store.setVerdict() / Store.setNextStep()", () => {
+  it("setVerdict persists the new verdict", () => {
+    const store = new Store(dbPath);
+    const saved = store.upsert(baseContact({ verdict: "none" }));
+    store.setVerdict(saved.id, "strong");
+    expect(store.get(saved.id)).toMatchObject({ verdict: "strong" });
+  });
+
+  it("setNextStep persists the new next step", () => {
+    const store = new Store(dbPath);
+    const saved = store.upsert(baseContact());
+    store.setNextStep(saved.id, "Send intro email");
+    expect(store.get(saved.id)).toMatchObject({ nextStep: "Send intro email" });
+  });
+});

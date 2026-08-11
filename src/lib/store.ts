@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import type { Contact, Interaction, SearchResult, Verdict } from "./types.js";
 
 /**
@@ -56,12 +57,77 @@ export class Store {
   }
 
   upsert(c: Contact): Contact {
-    // TODO(build): dedup against googleResourceName + email before insert.
-    // Preserve createdAt on update; refresh updatedAt; reindex FTS row.
-    throw new Error("not implemented — upsert contact + FTS reindex");
+    // Dedup: googleResourceName first, then email — first match wins.
+    let existing: ContactRow | undefined;
+    if (c.googleResourceName) {
+      existing = this.db
+        .prepare("SELECT * FROM contacts WHERE googleResourceName = ?")
+        .get(c.googleResourceName) as ContactRow | undefined;
+    }
+    if (!existing && c.email) {
+      existing = this.db.prepare("SELECT * FROM contacts WHERE email = ?").get(c.email) as
+        | ContactRow
+        | undefined;
+    }
+
+    // `|| ` (not `??`) on purpose: Contact's `id`/`createdAt` are typed as
+    // required strings, so a caller that doesn't have one yet (a brand-new
+    // contact) reaches for "" as the sentinel rather than omitting the key —
+    // treat that the same as undefined/missing.
+    const id = existing?.id || c.id || randomUUID();
+    const now = new Date().toISOString();
+    const createdAt = existing?.createdAt || c.createdAt || now;
+    const tags = c.tags ? JSON.stringify(c.tags) : null;
+
+    // INSERT .. ON CONFLICT(id) covers both the dedup-matched row above and a
+    // direct edit (client round-trips the same id) — either way the primary
+    // key collision drives the UPDATE branch, not a duplicate row.
+    this.db
+      .prepare(
+        `INSERT INTO contacts (id, name, org, role, email, phone, met, what, angle, verdict, nextStep, tags, googleResourceName, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name, org = excluded.org, role = excluded.role, email = excluded.email,
+           phone = excluded.phone, met = excluded.met, what = excluded.what, angle = excluded.angle,
+           verdict = excluded.verdict, nextStep = excluded.nextStep, tags = excluded.tags,
+           googleResourceName = excluded.googleResourceName, createdAt = excluded.createdAt, updatedAt = excluded.updatedAt`,
+      )
+      .run(
+        id,
+        c.name,
+        c.org ?? null,
+        c.role ?? null,
+        c.email ?? null,
+        c.phone ?? null,
+        c.met ?? null,
+        c.what ?? null,
+        c.angle ?? null,
+        c.verdict ?? "none",
+        c.nextStep ?? null,
+        tags,
+        c.googleResourceName ?? null,
+        createdAt,
+        now,
+      );
+
+    // Best-effort FTS reindex, same try/catch posture as migrate(): fts5 may
+    // not exist on this Node build at all. A full rebuild (rather than a
+    // delete+insert of just this row) sidesteps external-content fts5's
+    // requirement that a 'delete' command supply the exact old indexed
+    // values — simplest correct option at rolodex's personal-scale row counts.
+    try {
+      this.db.exec("INSERT INTO contacts_fts(contacts_fts) VALUES('rebuild')");
+    } catch (err) {
+      console.warn("rolodex: FTS reindex skipped (fts5 unavailable)", err);
+    }
+
+    return this.get(id)!;
   }
 
-  get(id: string): Contact | undefined { throw new Error("not implemented"); }
+  get(id: string): Contact | undefined {
+    const row = this.db.prepare("SELECT * FROM contacts WHERE id = ?").get(id);
+    return row ? rowToContact(row) : undefined;
+  }
 
   /** Full-text across name/org/what/angle/tags. */
   search(_query: string, _opts?: { verdict?: Verdict; limit?: number }): SearchResult[] {
@@ -71,8 +137,17 @@ export class Store {
   /** Contacts with a nextStep set and no recent interaction — "don't let them go cold". */
   needsFollowUp(_withinDays = 30): Contact[] { throw new Error("not implemented"); }
 
-  setVerdict(_id: string, _v: Verdict): void { throw new Error("not implemented"); }
-  setNextStep(_id: string, _next: string): void { throw new Error("not implemented"); }
+  setVerdict(id: string, v: Verdict): void {
+    this.db
+      .prepare("UPDATE contacts SET verdict = ?, updatedAt = ? WHERE id = ?")
+      .run(v, new Date().toISOString(), id);
+  }
+
+  setNextStep(id: string, next: string): void {
+    this.db
+      .prepare("UPDATE contacts SET nextStep = ?, updatedAt = ? WHERE id = ?")
+      .run(next, new Date().toISOString(), id);
+  }
   logInteraction(_i: Interaction): void { throw new Error("not implemented"); }
 }
 

@@ -12,6 +12,12 @@
       --bg: #fff;
       --fg: #1b1b1f;
       --accent: #2f5ed9;
+      --accent-bg: #eef2fd;
+      --danger: #b3261e;
+      --ok-bg: #e7f6ec;
+      --ok-fg: #1e7b34;
+      --row-hover: #f4f5f8;
+      --chip-bg: #eef0f4;
     }
     * { box-sizing: border-box; }
     body {
@@ -21,6 +27,8 @@
       background: var(--bg);
       min-width: 960px;
     }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    a { color: var(--accent); }
     .topbar {
       height: 56px;
       display: flex;
@@ -30,6 +38,12 @@
       border-bottom: 1px solid var(--border);
     }
     .topbar .brand { font-weight: 600; font-size: 1rem; }
+    .topbar-left { display: flex; align-items: center; gap: 12px; }
+    .back-link, .cancel-link {
+      background: none; border: none; color: var(--accent); font: inherit; cursor: pointer;
+      padding: 6px 4px; border-radius: 6px;
+    }
+    .back-link:focus-visible, .cancel-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     button {
       font: inherit;
       border-radius: 6px;
@@ -38,9 +52,14 @@
       color: #fff;
       padding: 8px 14px;
       min-height: 32px;
+      cursor: pointer;
     }
+    button.secondary { background: transparent; color: var(--fg); }
     button:disabled { background: #c9c9d1; border-color: #c9c9d1; cursor: not-allowed; }
-    main { max-width: 1200px; margin: 0 auto; padding: 24px 32px; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
+    main { max-width: 1200px; margin: 0 auto; padding: 24px 32px 80px; }
     .page-header {
       display: flex;
       align-items: baseline;
@@ -50,7 +69,6 @@
     }
     .page-header h1 { font-size: 1.5rem; margin: 0 0 4px; }
     #count { color: var(--muted); font-size: 0.95rem; }
-    .search label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
     .search input {
       min-width: 240px;
       padding: 8px 10px;
@@ -72,54 +90,645 @@
     .empty-state .icon { font-size: 2.5rem; }
     .empty-state h2 { margin: 0; color: var(--fg); font-size: 1.1rem; }
     .empty-state p { margin: 0 0 8px; max-width: 32ch; }
+
+    /* Contact table */
+    table.contacts { width: 100%; border-collapse: collapse; }
+    table.contacts th {
+      text-align: left; font-size: 0.85rem; color: var(--muted); font-weight: 600;
+      padding: 8px 12px; border-bottom: 1px solid var(--border);
+    }
+    table.contacts tbody tr {
+      cursor: pointer; min-height: 40px;
+    }
+    table.contacts tbody tr:hover, table.contacts tbody tr:focus-visible { background: var(--row-hover); }
+    table.contacts tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    table.contacts td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    table.contacts td.next-step { color: var(--muted); }
+
+    .verdict-badge { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .verdict-strong { color: #1e7b34; }
+    .verdict-watch { color: #a3720b; }
+    .verdict-referral-only { color: #2f5ed9; }
+    .verdict-pass { color: var(--muted); }
+    .verdict-none { color: var(--muted); }
+
+    /* Detail screen */
+    .detail-header h1 { margin: 0 0 2px; font-size: 1.75rem; }
+    .detail-header .subordinate { color: var(--muted); margin: 0 0 24px; }
+    .detail-columns { display: flex; gap: 40px; align-items: flex-start; }
+    .detail-columns .col { flex: 1 1 0; min-width: 0; }
+    .detail-columns h2 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin: 24px 0 8px; }
+    .detail-columns h2:first-of-type { margin-top: 0; }
+    .field-row { margin: 0 0 10px; }
+    .field-row .label { color: var(--muted); font-size: 0.85rem; margin-right: 6px; }
+    .field-row .value { font-size: 1rem; }
+    .tag-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag-list li {
+      background: var(--chip-bg); border-radius: 999px; padding: 3px 10px; font-size: 0.85rem;
+    }
+    @media (max-width: 800px) {
+      .detail-columns { flex-direction: column; }
+    }
+
+    /* Verdict segmented control */
+    .verdict-picker { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+    .verdict-picker [role="radio"] {
+      border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; font-size: 0.9rem;
+      background: transparent; color: var(--fg); cursor: pointer;
+    }
+    .verdict-picker [role="radio"][aria-checked="true"] {
+      background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600;
+    }
+    .autosave-status {
+      font-size: 0.85rem; color: var(--ok-fg); min-height: 1.2em; margin: 0 0 20px;
+    }
+    .next-step-field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+    .next-step-field input {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: transparent; color: inherit; font: inherit;
+    }
+    .interactions-panel {
+      margin-top: 32px; padding: 16px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted);
+    }
+    .interactions-panel h2 { margin-top: 0; }
+    .not-found-banner {
+      background: #fdecea; color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
+    }
+
+    /* Form */
+    form.contact-form fieldset {
+      border: none; padding: 0; margin: 0 0 28px;
+    }
+    form.contact-form legend {
+      font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted);
+      padding: 0; margin-bottom: 12px; width: 100%; border-bottom: 1px solid var(--border); padding-bottom: 6px;
+    }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .form-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+    .form-field.full { grid-column: 1 / -1; }
+    .form-field label { font-size: 0.9rem; }
+    .form-field .required { color: var(--danger); }
+    .form-field input, .form-field textarea {
+      padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: transparent; color: inherit; font: inherit;
+    }
+    .form-field textarea { min-height: 72px; resize: vertical; }
+    .form-field.invalid input { border-color: var(--danger); }
+    .field-error { color: var(--danger); font-size: 0.85rem; }
+    .radio-group { display: flex; flex-wrap: wrap; gap: 12px; }
+    .radio-group label { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; font-weight: normal; }
+    .chip-input-wrap {
+      display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; border: 1px solid var(--border); border-radius: 6px;
+    }
+    .chip-input-wrap input {
+      border: none; flex: 1 1 120px; min-width: 120px; padding: 4px; background: transparent; color: inherit; font: inherit;
+    }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px; background: var(--chip-bg); border-radius: 999px;
+      padding: 3px 6px 3px 10px; font-size: 0.85rem;
+    }
+    .chip button {
+      all: unset; cursor: pointer; padding: 0 4px; color: var(--muted); font-size: 0.85rem; min-height: auto;
+    }
+    .chip button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .form-error-banner {
+      background: #fdecea; color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
+    }
+    .form-footer {
+      position: sticky; bottom: 0; background: var(--bg); border-top: 1px solid var(--border);
+      padding: 14px 0; margin-top: 12px; display: flex; justify-content: flex-end; gap: 10px;
+    }
   </style>
 </head>
 <body>
   <header class="topbar">
-    <span class="brand">rolodex</span>
-    <button id="add-top" disabled title="Coming in saf-02">+ Add contact</button>
+    <div class="topbar-left" id="topbar-left">
+      <span class="brand">rolodex</span>
+    </div>
+    <div class="topbar-right" id="topbar-right">
+      <button id="add-top">+ Add contact</button>
+    </div>
   </header>
 
-  <main>
-    <div class="page-header">
-      <div>
-        <h1>Contacts</h1>
-        <div id="count" aria-live="polite">Loading…</div>
-      </div>
-      <div class="search">
-        <label for="search-input">Search contacts</label>
-        <input id="search-input" type="search" placeholder="Search (coming soon)" disabled />
-      </div>
-    </div>
-
-    <div id="content">
-      <section class="empty-state" id="empty-state" hidden>
-        <span class="icon" aria-hidden="true">&#128101;</span>
-        <h2>No contacts yet</h2>
-        <p>Add the first person to your rolodex to see them here.</p>
-        <button id="add-empty" disabled title="Coming in saf-02">+ Add contact</button>
-      </section>
-    </div>
+  <main id="main">
+    <div id="content"></div>
   </main>
 
   <script>
-    async function loadContacts() {
-      const countEl = document.getElementById("count");
-      const emptyState = document.getElementById("empty-state");
+    "use strict";
+
+    // ---- tiny fetch helpers -------------------------------------------------
+    async function api(path, opts) {
+      const res = await fetch(path, opts);
+      if (!res.ok) {
+        let msg = "request failed: " + res.status;
+        try {
+          const body = await res.json();
+          if (body && body.error) msg = body.error;
+        } catch {}
+        throw new Error(msg);
+      }
+      if (res.status === 204) return null;
+      return res.json();
+    }
+    const getContacts = () => api("/api/contacts");
+    const getContact = (id) => api("/api/contacts/" + encodeURIComponent(id));
+    const saveContact = (payload) =>
+      api("/api/contacts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    const patchVerdict = (id, verdict) =>
+      api("/api/contacts/" + encodeURIComponent(id) + "/verdict", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ verdict }),
+      });
+    const patchNextStep = (id, nextStep) =>
+      api("/api/contacts/" + encodeURIComponent(id) + "/next-step", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nextStep }),
+      });
+
+    // ---- shared data ----------------------------------------------------------
+    const VERDICTS = [
+      { value: "strong", icon: "●", label: "Strong" },
+      { value: "watch", icon: "◐", label: "Watch" },
+      { value: "referral-only", icon: "◇", label: "Referral only" },
+      { value: "pass", icon: "✕", label: "Pass" },
+      { value: "none", icon: "○", label: "None" },
+    ];
+    const verdictMeta = (v) => VERDICTS.find((x) => x.value === v) || VERDICTS[4];
+
+    function escapeHtml(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+
+    // ---- router -----------------------------------------------------------
+    function parseRoute() {
+      const hash = location.hash.replace(/^#/, "") || "/";
+      const segs = hash.split("/").filter(Boolean);
+      if (segs.length === 0) return { view: "list" };
+      if (segs[0] === "new") return { view: "form", mode: "add" };
+      if (segs[0] === "contact" && segs[1] && segs[2] === "edit") return { view: "form", mode: "edit", id: decodeURIComponent(segs[1]) };
+      if (segs[0] === "contact" && segs[1]) return { view: "detail", id: decodeURIComponent(segs[1]) };
+      return { view: "list" };
+    }
+
+    function setTopbar({ left, right }) {
+      document.getElementById("topbar-left").innerHTML = left;
+      document.getElementById("topbar-right").innerHTML = right;
+    }
+
+    function navigate(hash) {
+      location.hash = hash;
+    }
+
+    const content = document.getElementById("content");
+
+    async function render() {
+      const route = parseRoute();
       try {
-        const res = await fetch("/api/contacts");
-        if (!res.ok) throw new Error("request failed: " + res.status);
-        const contacts = await res.json();
+        if (route.view === "list") await renderList();
+        else if (route.view === "detail") await renderDetail(route.id);
+        else if (route.view === "form") await renderForm(route.mode, route.id);
+      } catch (err) {
+        content.innerHTML = '<p class="not-found-banner">' + escapeHtml(err.message || String(err)) + "</p>";
+        console.error(err);
+      }
+    }
+
+    // ---- List view ----------------------------------------------------------
+    async function renderList() {
+      setTopbar({
+        left: '<span class="brand">rolodex</span>',
+        right: '<button id="add-top">+ Add contact</button>',
+      });
+      content.innerHTML =
+        '<div class="page-header">' +
+        "<div><h1>Contacts</h1><div id=\"count\" aria-live=\"polite\">Loading…</div></div>" +
+        '<div class="search">' +
+        '<label for="search-input" class="sr-only">Search contacts</label>' +
+        '<input id="search-input" type="search" placeholder="Search (coming soon)" disabled />' +
+        "</div>" +
+        "</div>" +
+        '<div id="list-body"></div>';
+
+      document.getElementById("add-top").addEventListener("click", () => navigate("#/new"));
+
+      const countEl = document.getElementById("count");
+      const listBody = document.getElementById("list-body");
+      try {
+        const contacts = await getContacts();
         countEl.textContent = contacts.length + " contact" + (contacts.length === 1 ? "" : "s");
-        emptyState.hidden = contacts.length !== 0;
-        // Populated rows are saf-02's scope; this story only proves the live
-        // count and the empty state render from the real store.
+        if (contacts.length === 0) {
+          listBody.innerHTML =
+            '<section class="empty-state" id="empty-state">' +
+            '<span class="icon" aria-hidden="true">&#128101;</span>' +
+            "<h2>No contacts yet</h2>" +
+            "<p>Add the first person to your rolodex to see them here.</p>" +
+            '<button id="add-empty">+ Add contact</button>' +
+            "</section>";
+          document.getElementById("add-empty").addEventListener("click", () => navigate("#/new"));
+          return;
+        }
+        listBody.innerHTML =
+          '<table class="contacts" role="table">' +
+          '<thead><tr>' +
+          '<th scope="col">Name</th><th scope="col">Organization</th><th scope="col">Verdict</th><th scope="col">Next step</th>' +
+          "</tr></thead>" +
+          "<tbody>" +
+          contacts.map(rowHtml).join("") +
+          "</tbody></table>";
+
+        for (const tr of listBody.querySelectorAll("tbody tr")) {
+          const id = tr.getAttribute("data-id");
+          const go = () => navigate("#/contact/" + encodeURIComponent(id));
+          tr.addEventListener("click", go);
+          tr.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              go();
+            }
+          });
+        }
       } catch (err) {
         countEl.textContent = "Failed to load contacts";
         console.error(err);
       }
     }
-    loadContacts();
+
+    function rowHtml(c) {
+      const meta = verdictMeta(c.verdict);
+      const next = c.nextStep || "";
+      const truncated = next.length > 40 ? next.slice(0, 40) + "…" : next;
+      return (
+        '<tr tabindex="0" data-id="' + escapeHtml(c.id) + '">' +
+        "<td>" + escapeHtml(c.name) + "</td>" +
+        "<td>" + escapeHtml(c.org || "") + "</td>" +
+        '<td><span class="verdict-badge verdict-' + escapeHtml(c.verdict) + '">' +
+        meta.icon + " " + meta.label +
+        "</span></td>" +
+        '<td class="next-step" title="' + escapeHtml(next) + '">' + escapeHtml(truncated) + "</td>" +
+        "</tr>"
+      );
+    }
+
+    // ---- Detail view ----------------------------------------------------------
+    async function renderDetail(id) {
+      setTopbar({
+        left: '<button class="back-link" id="back-link">&larr; Back to contacts</button>',
+        right: '<button id="edit-top">Edit</button>',
+      });
+      document.getElementById("back-link").addEventListener("click", () => navigate("#/"));
+
+      let contact;
+      try {
+        contact = await getContact(id);
+      } catch (err) {
+        content.innerHTML =
+          '<p class="not-found-banner">Contact not found — it may have been removed.</p>';
+        navigate("#/");
+        return;
+      }
+
+      document.getElementById("edit-top").addEventListener("click", () =>
+        navigate("#/contact/" + encodeURIComponent(id) + "/edit"),
+      );
+
+      const tags = contact.tags || [];
+      content.innerHTML =
+        '<div class="detail-header">' +
+        "<h1>" + escapeHtml(contact.name) + "</h1>" +
+        '<p class="subordinate">' + escapeHtml([contact.role, contact.org].filter(Boolean).join(" · ")) + "</p>" +
+        "</div>" +
+        '<div class="detail-columns">' +
+        '<div class="col">' +
+        "<h2>Contact info</h2>" +
+        fieldRow("Email", contact.email) +
+        fieldRow("Phone", contact.phone) +
+        fieldRow("Met", contact.met) +
+        "<h2>About</h2>" +
+        fieldRow("What", contact.what) +
+        fieldRow("Angle", contact.angle) +
+        "<h2>Tags</h2>" +
+        (tags.length
+          ? '<ul class="tag-list" aria-label="Tags: ' + escapeHtml(tags.join(", ")) + '">' +
+            tags.map((t) => "<li>" + escapeHtml(t) + "</li>").join("") +
+            "</ul>"
+          : '<p class="value" style="color:var(--muted)">No tags</p>') +
+        "</div>" +
+        '<div class="col">' +
+        '<h2 id="verdict-heading">Verdict</h2>' +
+        '<div class="verdict-picker" role="radiogroup" aria-labelledby="verdict-heading" id="verdict-picker"></div>' +
+        '<div class="autosave-status" id="verdict-status" aria-live="polite"></div>' +
+        '<div class="next-step-field">' +
+        '<label for="next-step-input">Next step</label>' +
+        '<input id="next-step-input" type="text" value="' + escapeHtml(contact.nextStep || "") + '" />' +
+        '<div class="autosave-status" id="next-step-status" aria-live="polite"></div>' +
+        "</div>" +
+        '<div class="interactions-panel">' +
+        "<h2>Interactions</h2>" +
+        "<p>Interaction logging is coming soon.</p>" +
+        '<button type="button" disabled>Log interaction</button>' +
+        "</div>" +
+        "</div>" +
+        "</div>";
+
+      wireVerdictPicker(contact);
+      wireNextStepField(contact);
+    }
+
+    function fieldRow(label, value) {
+      if (!value) return "";
+      return (
+        '<p class="field-row"><span class="label">' + escapeHtml(label) + ":</span> " +
+        '<span class="value">' + escapeHtml(value) + "</span></p>"
+      );
+    }
+
+    function wireVerdictPicker(contact) {
+      const picker = document.getElementById("verdict-picker");
+      const status = document.getElementById("verdict-status");
+      let current = contact.verdict;
+
+      function draw() {
+        picker.innerHTML = VERDICTS.map(
+          (v) =>
+            '<span role="radio" tabindex="' + (v.value === current ? "0" : "-1") + '" ' +
+            'aria-checked="' + (v.value === current ? "true" : "false") + '" ' +
+            'data-value="' + v.value + '">' + v.icon + " " + v.label + "</span>",
+        ).join("");
+      }
+      draw();
+
+      async function choose(value) {
+        if (value === current) return;
+        const previous = current;
+        current = value;
+        draw();
+        picker.querySelector('[data-value="' + value + '"]').focus();
+        status.textContent = "Saving…";
+        try {
+          await patchVerdict(contact.id, value);
+          status.textContent = "Saved";
+          setTimeout(() => { if (status.textContent === "Saved") status.textContent = ""; }, 2000);
+        } catch (err) {
+          current = previous;
+          draw();
+          status.textContent = "Failed to save: " + err.message;
+        }
+      }
+
+      picker.addEventListener("click", (e) => {
+        const el = e.target.closest('[role="radio"]');
+        if (el) choose(el.getAttribute("data-value"));
+      });
+      picker.addEventListener("keydown", (e) => {
+        const idx = VERDICTS.findIndex((v) => v.value === current);
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+          e.preventDefault();
+          choose(VERDICTS[(idx + 1) % VERDICTS.length].value);
+        } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+          e.preventDefault();
+          choose(VERDICTS[(idx - 1 + VERDICTS.length) % VERDICTS.length].value);
+        }
+      });
+    }
+
+    function wireNextStepField(contact) {
+      const input = document.getElementById("next-step-input");
+      const status = document.getElementById("next-step-status");
+      let lastSaved = contact.nextStep || "";
+
+      async function commit() {
+        const value = input.value;
+        if (value === lastSaved) return;
+        status.textContent = "Saving…";
+        try {
+          await patchNextStep(contact.id, value);
+          lastSaved = value;
+          status.textContent = "Saved";
+          setTimeout(() => { if (status.textContent === "Saved") status.textContent = ""; }, 2000);
+        } catch (err) {
+          status.textContent = "Failed to save: " + err.message;
+        }
+      }
+
+      input.addEventListener("blur", commit);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          input.blur();
+        } else if (e.key === "Escape") {
+          input.value = lastSaved;
+          input.blur();
+        }
+      });
+    }
+
+    // ---- Add/Edit form ----------------------------------------------------------
+    async function renderForm(mode, id) {
+      let existing = null;
+      if (mode === "edit") {
+        try {
+          existing = await getContact(id);
+        } catch (err) {
+          content.innerHTML = '<p class="not-found-banner">Contact not found — it may have been removed.</p>';
+          navigate("#/");
+          return;
+        }
+      }
+      const title = mode === "edit" ? "Edit contact" : "Add contact";
+      const cancelTarget = mode === "edit" ? "#/contact/" + encodeURIComponent(id) : "#/";
+
+      setTopbar({
+        left: '<button class="cancel-link" id="cancel-top">Cancel</button><span class="brand">' + title + "</span>",
+        right: '<button id="save-top" form="contact-form">Save</button>',
+      });
+
+      const v = existing || {};
+      const tags = v.tags || [];
+
+      content.innerHTML =
+        '<form class="contact-form" id="contact-form" novalidate>' +
+        '<div class="form-error-banner" id="form-error" hidden></div>' +
+
+        "<fieldset>" +
+        "<legend>Identity</legend>" +
+        '<div class="form-field" id="name-field">' +
+        '<label for="f-name">Name <span class="required" aria-hidden="true">*</span></label>' +
+        '<input id="f-name" name="name" type="text" aria-required="true" value="' + escapeHtml(v.name || "") + '" />' +
+        '<span class="field-error" id="name-error" hidden>Name is required.</span>' +
+        "</div>" +
+        '<div class="form-grid">' +
+        '<div class="form-field"><label for="f-org">Organization</label><input id="f-org" type="text" value="' + escapeHtml(v.org || "") + '" /></div>' +
+        '<div class="form-field"><label for="f-role">Role</label><input id="f-role" type="text" value="' + escapeHtml(v.role || "") + '" /></div>' +
+        "</div>" +
+        "</fieldset>" +
+
+        "<fieldset>" +
+        "<legend>Contact info</legend>" +
+        '<div class="form-grid">' +
+        '<div class="form-field"><label for="f-email">Email</label><input id="f-email" type="email" value="' + escapeHtml(v.email || "") + '" /></div>' +
+        '<div class="form-field"><label for="f-phone">Phone</label><input id="f-phone" type="tel" value="' + escapeHtml(v.phone || "") + '" /></div>' +
+        "</div>" +
+        "</fieldset>" +
+
+        "<fieldset>" +
+        "<legend>Context</legend>" +
+        '<div class="form-field"><label for="f-met">Met</label><input id="f-met" type="text" value="' + escapeHtml(v.met || "") + '" /></div>' +
+        '<div class="form-field"><label for="f-what">What</label><textarea id="f-what">' + escapeHtml(v.what || "") + "</textarea></div>" +
+        '<div class="form-field"><label for="f-angle">Angle</label><textarea id="f-angle">' + escapeHtml(v.angle || "") + "</textarea></div>" +
+        "</fieldset>" +
+
+        "<fieldset>" +
+        '<legend>Classification</legend>' +
+        '<div class="form-field">' +
+        '<span id="verdict-legend">Verdict</span>' +
+        '<div class="radio-group" role="radiogroup" aria-labelledby="verdict-legend">' +
+        VERDICTS.map(
+          (opt) =>
+            '<label><input type="radio" name="verdict" value="' + opt.value + '"' +
+            ((v.verdict || "none") === opt.value ? " checked" : "") +
+            " /> " + opt.icon + " " + opt.label + "</label>",
+        ).join("") +
+        "</div>" +
+        "</div>" +
+        '<div class="form-field">' +
+        '<label for="f-tag-input">Tags</label>' +
+        '<div class="chip-input-wrap" id="chip-wrap">' +
+        tags.map(chipHtml).join("") +
+        '<input id="f-tag-input" type="text" placeholder="Add a tag…" />' +
+        "</div>" +
+        "</div>" +
+        "</fieldset>" +
+
+        "<fieldset>" +
+        "<legend>Next step</legend>" +
+        '<div class="form-field"><label for="f-next-step">Next step</label><input id="f-next-step" type="text" value="' + escapeHtml(v.nextStep || "") + '" /></div>' +
+        "</fieldset>" +
+
+        '<div class="form-footer">' +
+        '<button type="button" class="secondary" id="cancel-bottom">Cancel</button>' +
+        '<button type="submit">Save</button>' +
+        "</div>" +
+        "</form>";
+
+      let dirty = false;
+      content.querySelectorAll("input, textarea").forEach((el) => {
+        el.addEventListener("input", () => { dirty = true; });
+      });
+
+      function goCancel() {
+        if (dirty && !confirm("Discard changes?")) return;
+        navigate(cancelTarget);
+      }
+      document.getElementById("cancel-top").addEventListener("click", goCancel);
+      document.getElementById("cancel-bottom").addEventListener("click", goCancel);
+
+      // Tags chip input
+      let tagValues = tags.slice();
+      const chipWrap = document.getElementById("chip-wrap");
+      const tagInput = document.getElementById("f-tag-input");
+      function redrawChips() {
+        chipWrap.querySelectorAll(".chip").forEach((c) => c.remove());
+        tagValues.forEach((t) => {
+          tagInput.insertAdjacentHTML("beforebegin", chipHtml(t));
+        });
+        chipWrap.querySelectorAll(".chip button").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const tag = btn.getAttribute("data-tag");
+            tagValues = tagValues.filter((t) => t !== tag);
+            dirty = true;
+            redrawChips();
+          });
+        });
+      }
+      redrawChips();
+      tagInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === ",") {
+          e.preventDefault();
+          const val = tagInput.value.trim();
+          if (val && !tagValues.includes(val)) {
+            tagValues.push(val);
+            dirty = true;
+            redrawChips();
+          }
+          tagInput.value = "";
+        } else if (e.key === "Backspace" && tagInput.value === "" && tagValues.length) {
+          tagValues.pop();
+          dirty = true;
+          redrawChips();
+        }
+      });
+
+      const form = document.getElementById("contact-form");
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const nameEl = document.getElementById("f-name");
+        const nameField = document.getElementById("name-field");
+        const nameError = document.getElementById("name-error");
+        const name = nameEl.value.trim();
+        if (!name) {
+          nameField.classList.add("invalid");
+          nameError.hidden = false;
+          nameEl.focus();
+          return;
+        }
+        nameField.classList.remove("invalid");
+        nameError.hidden = true;
+
+        const verdictEl = form.querySelector('input[name="verdict"]:checked');
+        const payload = {
+          name,
+          org: document.getElementById("f-org").value.trim() || undefined,
+          role: document.getElementById("f-role").value.trim() || undefined,
+          email: document.getElementById("f-email").value.trim() || undefined,
+          phone: document.getElementById("f-phone").value.trim() || undefined,
+          met: document.getElementById("f-met").value.trim() || undefined,
+          what: document.getElementById("f-what").value.trim() || undefined,
+          angle: document.getElementById("f-angle").value.trim() || undefined,
+          verdict: verdictEl ? verdictEl.value : "none",
+          nextStep: document.getElementById("f-next-step").value.trim() || undefined,
+          tags: tagValues.length ? tagValues : undefined,
+        };
+        if (existing) {
+          payload.id = existing.id;
+          payload.createdAt = existing.createdAt;
+          payload.googleResourceName = existing.googleResourceName;
+        }
+
+        const errorBanner = document.getElementById("form-error");
+        try {
+          const saved = await saveContact(payload);
+          dirty = false;
+          navigate("#/contact/" + encodeURIComponent(saved.id));
+        } catch (err) {
+          errorBanner.hidden = false;
+          errorBanner.textContent = "Couldn't save: " + err.message;
+        }
+      });
+    }
+
+    function chipHtml(tag) {
+      return (
+        '<span class="chip">' + escapeHtml(tag) +
+        '<button type="button" data-tag="' + escapeHtml(tag) + '" aria-label="Remove tag: ' + escapeHtml(tag) + '">✕</button>' +
+        "</span>"
+      );
+    }
+
+    // ---- boot ----------------------------------------------------------
+    // render() (via renderList/renderDetail/renderForm) always replaces the
+    // topbar's contents and wires its own listeners, so nothing needs to be
+    // bound to the static markup's button here.
+    window.addEventListener("hashchange", render);
+    render();
   </script>
 </body>
 </html>
