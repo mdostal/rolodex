@@ -54,6 +54,15 @@ const WIZARD_COMPLETED_KEY = "wizard.completed";
  * "google.oauth.token" alongside it once the real OAuth exchange exists. */
 const GOOGLE_OAUTH_CLIENT_KEY = "google.oauth.client";
 
+/** The real `Verdict` enum values (src/lib/types.ts), duplicated here as a
+ * runtime list — `body.verdict as Contact["verdict"]` was a compile-time-only
+ * cast that let any string through to Store.setVerdict() unvalidated. */
+const VALID_VERDICTS: ReadonlyArray<Contact["verdict"]> = ["strong", "watch", "referral-only", "pass", "none"];
+
+function isValidVerdict(value: string): value is Contact["verdict"] {
+  return (VALID_VERDICTS as readonly string[]).includes(value);
+}
+
 export interface RolodexServerOptions {
   /** Pre-built Store to use instead of resolving/constructing one lazily —
    * mainly for tests that want a Store pointed at a throwaway temp file. */
@@ -76,7 +85,21 @@ export interface RolodexServerOptions {
   wizardHtmlPath?: string;
 }
 
-/** Reads and JSON-parses a request body. Rejects on malformed JSON. */
+/** Thrown by readJsonBody() when the request body isn't valid JSON — a
+ * distinct type so the top-level request handler can tell "client sent a
+ * bad request" (400) apart from a genuine server-side failure (500), rather
+ * than letting JSON.parse's SyntaxError fall through to the generic
+ * catch-all below. */
+class MalformedJsonError extends Error {
+  constructor(cause: unknown) {
+    super(`request body is not valid JSON: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "MalformedJsonError";
+  }
+}
+
+/** Reads and JSON-parses a request body. Throws MalformedJsonError on
+ * malformed JSON, which every route parses bodies through, so that error is
+ * handled consistently (as a 400) in exactly one place. */
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -84,7 +107,11 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
   const raw = Buffer.concat(chunks).toString("utf8");
   if (!raw) return {};
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new MalformedJsonError(err);
+  }
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -415,7 +442,13 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
                 sendJson(res, 400, { error: "verdict is required" });
                 return;
               }
-              s.setVerdict(id, body.verdict as Contact["verdict"]);
+              if (!isValidVerdict(body.verdict)) {
+                sendJson(res, 400, {
+                  error: `verdict must be one of: ${VALID_VERDICTS.join(", ")}`,
+                });
+                return;
+              }
+              s.setVerdict(id, body.verdict);
             } else {
               if (typeof body.nextStep !== "string") {
                 sendJson(res, 400, { error: "nextStep is required" });
@@ -440,6 +473,10 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("not found");
     } catch (err) {
+      if (err instanceof MalformedJsonError) {
+        sendJson(res, 400, { error: err.message });
+        return;
+      }
       res.writeHead(500, { "content-type": "text/plain" });
       res.end(String(err));
     }

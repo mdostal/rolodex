@@ -74,6 +74,66 @@ describe("checkSecretsCapability()", () => {
       vi.restoreAllMocks();
     }
   });
+
+  it("on timeout, actually aborts the in-flight call's signal — not just abandoning the promise", async () => {
+    // Regression test for withTimeout()'s interaction with a hung backend
+    // call: a naive "race a timer against the promise" implementation would
+    // let the timer settle checkSecretsCapability()'s returned Promise
+    // without ever telling the still-running call to stop. This simulates a
+    // hung `set()` (standing in for a real hung `security` child process/
+    // auth-dialog wait) that only ever resolves in response to its signal's
+    // "abort" event, then asserts both that the signal is actually flipped
+    // to aborted AND that the hung call observably reacts to it — not
+    // merely that the overall promise eventually rejects with the timeout
+    // error (a separate, already-easy property to get right even without
+    // wiring the signal through at all).
+    vi.useFakeTimers();
+    try {
+      let capturedSignal: AbortSignal | undefined;
+      let sawAbortEvent = false;
+      const hungOnFirstCall: SecretsAdapter = {
+        async get() {
+          return undefined;
+        },
+        set(_key, _value, opts) {
+          capturedSignal = opts?.signal;
+          return new Promise<void>((_resolve, reject) => {
+            opts?.signal?.addEventListener("abort", () => {
+              sawAbortEvent = true;
+              reject(new Error("aborted"));
+            });
+          });
+        },
+        async delete() {},
+      };
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+
+      const resultPromise = checkSecretsCapability(() => hungOnFirstCall);
+
+      // Let the microtask queue drain so set() actually runs and captures
+      // its signal before the timeout fires.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(capturedSignal).toBeInstanceOf(AbortSignal);
+      expect(capturedSignal?.aborted).toBe(false);
+      expect(sawAbortEvent).toBe(false);
+
+      // Advance past PROBE_STEP_TIMEOUT_MS (5000ms, not exported — this
+      // deliberately clears it with margin rather than importing the
+      // constant, so the test doesn't just echo the implementation).
+      await vi.advanceTimersByTimeAsync(6000);
+
+      expect(capturedSignal?.aborted).toBe(true);
+      expect(sawAbortEvent).toBe(true);
+
+      const result = await resultPromise;
+      expect(result.ok).toBe(false);
+      expect(result.backend).toBe("macOS Keychain");
+      expect(result.error).toContain("unlock it and retry");
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
 });
 
 describe("classifyKeychainError()", () => {

@@ -61,23 +61,42 @@ function errorText(err: unknown): string {
  * `security` CLI during this story's own manual verification. Without this,
  * the wizard's "Checking keychain access…" spinner would never resolve and
  * Retry would never even become reachable, which defeats the whole point of
- * this being the wizard's one hard, retryable gate. Note this bounds the
- * PROMISE this module waits on; it does not (and, using plain execFile,
- * cannot) kill the underlying `security` child process/dialog, which is a
- * pre-existing characteristic of secrets-adapter.ts's execFile-based
- * backend, not something introduced here.
+ * this being the wizard's one hard, retryable gate. This bounds both the
+ * PROMISE this module waits on AND the underlying `security` child process
+ * itself: withTimeout() below aborts an AbortSignal on timeout, which
+ * secrets-adapter.ts's execFile-based backend threads straight through to
+ * execFile's own `signal` option, so a timed-out call actually terminates
+ * the `security` child process rather than merely abandoning it to run in
+ * the background indefinitely. Whether that also dismisses any macOS
+ * authorization *dialog* is a separate, unverified question: if the prompt
+ * is owned by a system daemon (e.g. SecurityAgent) rather than being a
+ * direct child of `security` itself, killing `security` unblocks this
+ * Promise but the dialog could still be left on screen. Confirmed here is
+ * only that the child process is torn down.
  */
 const PROBE_STEP_TIMEOUT_MS = 5000;
 
 class SecretsCheckTimeoutError extends Error {}
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+/** Runs `run(signal)`, racing it against a `ms`-millisecond timer. On
+ * timeout, aborts `signal` — which a SecretsAdapter backed by execFile (see
+ * secrets-adapter.ts) uses to terminate the underlying `security` child
+ * process, not just abandon the Promise waiting on it — before rejecting
+ * with SecretsCheckTimeoutError. (That's confirmed for the child process
+ * itself; whether it also dismisses any macOS auth dialog the process
+ * spawned is not independently verified — see PROBE_STEP_TIMEOUT_MS's
+ * docstring.) The abort's own eventual rejection is still awaited
+ * internally (via the .then below) so it can't become an unhandled
+ * rejection; it's simply superseded since the timeout has already settled
+ * this Promise. */
+function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+  const controller = new AbortController();
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new SecretsCheckTimeoutError(`keychain call did not respond within ${ms}ms`)),
-      ms,
-    );
-    promise.then(
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new SecretsCheckTimeoutError(`keychain call did not respond within ${ms}ms`));
+    }, ms);
+    run(controller.signal).then(
       (v) => { clearTimeout(timer); resolve(v); },
       (err) => { clearTimeout(timer); reject(err); },
     );
@@ -122,11 +141,11 @@ export async function checkSecretsCapability(
   const key = `wizard.secrets-check.${randomUUID()}`;
   const value = randomUUID();
   try {
-    await withTimeout(adapter.set(key, value), PROBE_STEP_TIMEOUT_MS);
-    const readBack = await withTimeout(adapter.get(key), PROBE_STEP_TIMEOUT_MS);
+    await withTimeout((signal) => adapter.set(key, value, { signal }), PROBE_STEP_TIMEOUT_MS);
+    const readBack = await withTimeout((signal) => adapter.get(key, { signal }), PROBE_STEP_TIMEOUT_MS);
     // Best-effort cleanup: if delete() itself hangs/fails, that shouldn't
     // flip an otherwise-successful set+get round trip to a failure.
-    await withTimeout(adapter.delete(key), PROBE_STEP_TIMEOUT_MS).catch(() => {});
+    await withTimeout((signal) => adapter.delete(key, { signal }), PROBE_STEP_TIMEOUT_MS).catch(() => {});
 
     if (fellBack) {
       return { ok: false, backend: "in-memory (fallback)", error: classifyKeychainError(fallbackCause) };
