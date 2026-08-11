@@ -1,7 +1,7 @@
 id: saf-01-shell-store-bridge
 epic: standalone-app-foundation
 title: Desktop shell boots and reads the real (empty) store
-status: pending
+status: in_progress
 complexity: high
 methodology: classic
 depends_on: []
