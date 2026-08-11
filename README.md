@@ -8,7 +8,7 @@ Built to be a Pantheon plugin / MCP tool in the same spirit as the rest of the s
 A static contacts file is a goldfish — nothing maintains it. This makes the rolodex a **tool your agents operate**: they log who you met, set the verdict + next step, search it, and surface who's gone cold — so nobody good slips. And because it syncs to Google Contacts on *your* credentials, it's also how an agent reaches your Gmail contacts without anyone else holding your token.
 
 ## The shape
-- **You own the data** — SQLite (FTS5 full-text search), path outside the repo (`ROLODEX_DB`). Export any time; no lock-in.
+- **You own the data** — SQLite (FTS5 full-text search), path outside the repo (`ROLODEX_DB`). Export any time; no lock-in. *(FTS5 search needs Node 23+; on Node 22.x `node:sqlite` ships without the fts5 module, so search degrades gracefully — contacts and interactions still work.)*
 - **Google People API sync** — two-way with your Google Contacts (verdict/angle/next-step stay local; name/email/phone sync). Runs on *your* OAuth, sourced from env/local token (gitignored).
 - **MCP tools** — `rolodex_upsert`, `rolodex_search`, `rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`. Add the server to any agent host and it just works.
 - **Config per-install** — nothing about any one user lives in the core; your DB path + Google creds are your layer.
