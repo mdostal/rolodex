@@ -258,3 +258,119 @@ describe("POST /api/wizard/complete", () => {
     expect(await secrets.get("wizard.completed")).toBeUndefined();
   });
 });
+
+/** Boots a server with setup already complete and returns its baseUrl —
+ * shared setup for the search/interactions route suites below, which all
+ * need working /api/contacts routes. */
+async function startReady(): Promise<{ baseUrl: string }> {
+  const { baseUrl } = await start();
+  await postJson(baseUrl + "/api/wizard/complete");
+  return { baseUrl };
+}
+
+describe("GET /api/contacts/search", () => {
+  it("returns matches for a query hitting name/org/what/angle/tags", async () => {
+    const { baseUrl } = await startReady();
+    await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace", org: "Analytical Engines" });
+    await postJson(baseUrl + "/api/contacts", { name: "Grace Hopper", org: "US Navy" });
+
+    const { status, body } = await getJson(baseUrl + "/api/contacts/search?q=Analytical");
+    expect(status).toBe(200);
+    const results = body as Array<{ contact: { name: string } }>;
+    expect(results.map((r) => r.contact.name)).toEqual(["Ada Lovelace"]);
+  });
+
+  it("respects the verdict filter and limit query params", async () => {
+    const { baseUrl } = await startReady();
+    await postJson(baseUrl + "/api/contacts", { name: "Strong One", org: "SharedTerm", verdict: "strong" });
+    await postJson(baseUrl + "/api/contacts", { name: "Watch One", org: "SharedTerm", verdict: "watch" });
+
+    const filtered = await getJson(baseUrl + "/api/contacts/search?q=SharedTerm&verdict=strong");
+    const filteredResults = filtered.body as Array<{ contact: { name: string } }>;
+    expect(filteredResults.map((r) => r.contact.name)).toEqual(["Strong One"]);
+
+    const limited = await getJson(baseUrl + "/api/contacts/search?q=SharedTerm&limit=1");
+    expect((limited.body as unknown[]).length).toBe(1);
+  });
+
+  it("returns 409 before the wizard is complete, same gate as the other /api/contacts routes", async () => {
+    const { baseUrl } = await start();
+    const { status } = await getJson(baseUrl + "/api/contacts/search?q=anything");
+    expect(status).toBe(409);
+  });
+
+  it("returns an empty array for a query matching nothing", async () => {
+    const { baseUrl } = await startReady();
+    await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const { status, body } = await getJson(baseUrl + "/api/contacts/search?q=zzznomatchzzz");
+    expect(status).toBe(200);
+    expect(body).toEqual([]);
+  });
+});
+
+describe("POST/GET /api/contacts/:id/interactions", () => {
+  it("logs an interaction and returns the created record", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+
+    const { status, body } = await postJson(baseUrl + `/api/contacts/${id}/interactions`, {
+      note: "Great call about follow-up.",
+      channel: "call",
+      at: "2026-08-01T00:00:00.000Z",
+    });
+    expect(status).toBe(200);
+    expect(body).toMatchObject({
+      contactId: id,
+      note: "Great call about follow-up.",
+      channel: "call",
+      at: "2026-08-01T00:00:00.000Z",
+    });
+    expect((body as { id?: string }).id).toBeTruthy();
+  });
+
+  it("a subsequent GET .../interactions returns what was logged, most recent first", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+
+    await postJson(baseUrl + `/api/contacts/${id}/interactions`, { note: "First", at: "2026-01-01" });
+    await postJson(baseUrl + `/api/contacts/${id}/interactions`, { note: "Second", at: "2026-06-01" });
+
+    const { status, body } = await getJson(baseUrl + `/api/contacts/${id}/interactions`);
+    expect(status).toBe(200);
+    const notes = (body as Array<{ note: string }>).map((i) => i.note);
+    expect(notes).toEqual(["Second", "First"]);
+  });
+
+  it("rejects an empty note with 400 and does not persist anything", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+
+    const { status, body } = await postJson(baseUrl + `/api/contacts/${id}/interactions`, { note: "   " });
+    expect(status).toBe(400);
+    expect(body).toEqual({ error: "note is required" });
+
+    const history = await getJson(baseUrl + `/api/contacts/${id}/interactions`);
+    expect(history.body).toEqual([]);
+  });
+
+  it("defaults `at` to today when omitted", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+
+    const { body } = await postJson(baseUrl + `/api/contacts/${id}/interactions`, { note: "No date given" });
+    const at = (body as { at: string }).at;
+    expect(new Date(at).toISOString().slice(0, 10)).toBe(new Date().toISOString().slice(0, 10));
+  });
+
+  it("returns 404 for an unknown contact id on both GET and POST", async () => {
+    const { baseUrl } = await startReady();
+    const getRes = await getJson(baseUrl + "/api/contacts/does-not-exist/interactions");
+    expect(getRes.status).toBe(404);
+    const postRes = await postJson(baseUrl + "/api/contacts/does-not-exist/interactions", { note: "x" });
+    expect(postRes.status).toBe(404);
+  });
+});

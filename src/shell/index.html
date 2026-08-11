@@ -69,14 +69,25 @@
     }
     .page-header h1 { font-size: 1.5rem; margin: 0 0 4px; }
     #count { color: var(--muted); font-size: 0.95rem; }
+    .search { position: relative; display: flex; align-items: center; }
     .search input {
       min-width: 240px;
-      padding: 8px 10px;
+      padding: 8px 32px 8px 28px;
       border-radius: 6px;
       border: 1px solid var(--border);
       background: transparent;
       color: inherit;
     }
+    .search-icon { position: absolute; left: 8px; opacity: 0.6; font-size: 0.85rem; pointer-events: none; }
+    .search-clear {
+      position: absolute; right: 2px; min-width: 32px; min-height: 32px; padding: 0;
+      background: none; border: none; color: var(--muted); font-size: 1rem; border-radius: 6px; cursor: pointer;
+    }
+    .search-clear:hover { background: var(--row-hover); }
+    #result-summary { color: var(--muted); font-size: 0.9rem; margin: -8px 0 16px; }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .sync-status { font-size: 0.9rem; color: var(--ok-fg); min-height: 1.2em; margin: 0 0 16px; }
+    .sync-status.sync-error { color: var(--danger); }
     .empty-state {
       min-height: 360px;
       display: flex;
@@ -148,9 +159,54 @@
       background: transparent; color: inherit; font: inherit;
     }
     .interactions-panel {
-      margin-top: 32px; padding: 16px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted);
+      margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
     }
-    .interactions-panel h2 { margin-top: 0; }
+    .interactions-panel .interactions-header {
+      display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px;
+    }
+    .interactions-panel h2 { margin: 0; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
+
+    /* Log-interaction disclosure form */
+    .log-interaction-form {
+      border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 16px;
+    }
+    .log-interaction-form fieldset { border: none; padding: 0; margin: 0 0 12px; }
+    .log-interaction-form legend { font-size: 0.85rem; color: var(--muted); padding: 0; margin-bottom: 6px; }
+    .channel-picker { display: flex; flex-wrap: wrap; gap: 10px; }
+    .channel-picker label {
+      display: flex; align-items: center; gap: 6px; font-size: 0.9rem; font-weight: normal;
+      border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; cursor: pointer;
+    }
+    .channel-picker input[type="radio"]:checked + span,
+    .channel-picker label:has(input:checked) { border-color: var(--accent); color: var(--accent); }
+    .log-interaction-form .form-field { margin-bottom: 12px; }
+    .log-interaction-form .form-field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+    .log-interaction-form input[type="date"], .log-interaction-form textarea {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: transparent; color: inherit; font: inherit;
+    }
+    .log-interaction-form textarea { min-height: 64px; resize: vertical; }
+    .log-interaction-form .form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+    /* Interaction history */
+    .interaction-history { list-style: none; margin: 0; padding: 0; }
+    .interaction-row {
+      display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border);
+    }
+    .interaction-row:last-child { border-bottom: none; }
+    .channel-badge {
+      display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 0.85rem;
+      color: var(--muted); flex: 0 0 auto; min-width: 90px;
+    }
+    .interaction-row .interaction-body { flex: 1 1 auto; min-width: 0; }
+    .interaction-row .interaction-date { font-size: 0.8rem; color: var(--muted); margin-bottom: 2px; }
+    .interaction-row .interaction-note { white-space: pre-wrap; word-break: break-word; }
+    .show-more-link {
+      background: none; border: none; color: var(--accent); font: inherit; cursor: pointer; padding: 8px 0 0;
+    }
+    .empty-history {
+      color: var(--muted); font-size: 0.9rem; padding: 8px 0;
+    }
     .not-found-banner {
       background: #fdecea; color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
     }
@@ -251,6 +307,21 @@
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ nextStep }),
       });
+    const syncGoogle = () => api("/api/sync/google", { method: "POST" });
+    const searchContacts = (q) => api("/api/contacts/search?q=" + encodeURIComponent(q));
+    const getInteractions = (id) => api("/api/contacts/" + encodeURIComponent(id) + "/interactions");
+    const postInteraction = (id, payload) =>
+      api("/api/contacts/" + encodeURIComponent(id) + "/interactions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+    // Set by the "Sync now" handler, displayed once by the very next
+    // renderList() (the sync handler re-renders the list to pick up any
+    // newly-pulled contacts, which would otherwise wipe out an inline status
+    // message written into the markup it just replaced).
+    let lastSyncMessage = null;
 
     // ---- shared data ----------------------------------------------------------
     const VERDICTS = [
@@ -261,6 +332,39 @@
       { value: "none", icon: "○", label: "None" },
     ];
     const verdictMeta = (v) => VERDICTS.find((x) => x.value === v) || VERDICTS[4];
+
+    const CHANNELS = [
+      { value: "call", icon: "☎", label: "Call" },
+      { value: "email", icon: "✉", label: "Email" },
+      { value: "dm", icon: "◆", label: "DM" },
+      { value: "meeting", icon: "▦", label: "Meeting" },
+      { value: "other", icon: "○", label: "Other" },
+    ];
+    const channelMeta = (v) => CHANNELS.find((c) => c.value === v) || CHANNELS[4];
+
+    function todayIso() {
+      const d = new Date();
+      const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+      return local.toISOString().slice(0, 10);
+    }
+
+    function formatInteractionDate(at) {
+      // `at` may be a bare date (YYYY-MM-DD, the DateField's native format)
+      // or a full ISO timestamp. A bare date passed straight to `new Date()`
+      // is parsed as UTC midnight, which toLocaleDateString() then renders
+      // in the browser's local zone — one day early for any zone behind
+      // UTC. Build a local-midnight Date from the parts instead so a
+      // DateField value of "2026-08-11" always displays as Aug 11, not the
+      // 10th, regardless of timezone. Full timestamps (with a time/zone
+      // component) really do denote an absolute instant, so those still go
+      // through Date() as-is.
+      const bareDate = /^\d{4}-\d{2}-\d{2}$/.exec(at);
+      const d = bareDate
+        ? new Date(Number(bareDate[0].slice(0, 4)), Number(bareDate[0].slice(5, 7)) - 1, Number(bareDate[0].slice(8, 10)))
+        : new Date(at);
+      if (isNaN(d.getTime())) return at;
+      return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    }
 
     function escapeHtml(s) {
       return String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -311,40 +415,52 @@
       content.innerHTML =
         '<div class="page-header">' +
         "<div><h1>Contacts</h1><div id=\"count\" aria-live=\"polite\">Loading…</div></div>" +
+        '<div class="header-actions">' +
         '<div class="search">' +
         '<label for="search-input" class="sr-only">Search contacts</label>' +
-        '<input id="search-input" type="search" placeholder="Search (coming soon)" disabled />' +
+        '<span class="search-icon" aria-hidden="true">&#128269;</span>' +
+        '<input id="search-input" type="search" placeholder="Search name, org, notes, tags…" />' +
+        '<button type="button" id="search-clear" class="search-clear" aria-label="Clear search" hidden>&times;</button>' +
+        "</div>" +
+        '<button type="button" class="secondary" id="sync-now">Sync now</button>' +
         "</div>" +
         "</div>" +
+        '<div id="result-summary" aria-live="polite"></div>' +
+        '<div class="sync-status" id="sync-status" aria-live="polite"></div>' +
         '<div id="list-body"></div>';
 
       document.getElementById("add-top").addEventListener("click", () => navigate("#/new"));
 
+      const syncStatusEl = document.getElementById("sync-status");
+      if (lastSyncMessage) {
+        syncStatusEl.textContent = lastSyncMessage;
+        lastSyncMessage = null;
+      }
+      document.getElementById("sync-now").addEventListener("click", async () => {
+        const btn = document.getElementById("sync-now");
+        btn.disabled = true;
+        syncStatusEl.className = "sync-status";
+        syncStatusEl.textContent = "Syncing with Google Contacts…";
+        try {
+          const result = await syncGoogle();
+          lastSyncMessage =
+            "Synced " + result.pulled + " contact" + (result.pulled === 1 ? "" : "s") +
+            " from Google (" + result.created + " new, " + result.updated + " updated).";
+          await renderList();
+        } catch (err) {
+          syncStatusEl.className = "sync-status sync-error";
+          syncStatusEl.textContent = "Sync failed: " + err.message;
+          btn.disabled = false;
+        }
+      });
+
       const countEl = document.getElementById("count");
       const listBody = document.getElementById("list-body");
-      try {
-        const contacts = await getContacts();
-        countEl.textContent = contacts.length + " contact" + (contacts.length === 1 ? "" : "s");
-        if (contacts.length === 0) {
-          listBody.innerHTML =
-            '<section class="empty-state" id="empty-state">' +
-            '<span class="icon" aria-hidden="true">&#128101;</span>' +
-            "<h2>No contacts yet</h2>" +
-            "<p>Add the first person to your rolodex to see them here.</p>" +
-            '<button id="add-empty">+ Add contact</button>' +
-            "</section>";
-          document.getElementById("add-empty").addEventListener("click", () => navigate("#/new"));
-          return;
-        }
-        listBody.innerHTML =
-          '<table class="contacts" role="table">' +
-          '<thead><tr>' +
-          '<th scope="col">Name</th><th scope="col">Organization</th><th scope="col">Verdict</th><th scope="col">Next step</th>' +
-          "</tr></thead>" +
-          "<tbody>" +
-          contacts.map(rowHtml).join("") +
-          "</tbody></table>";
+      const resultSummary = document.getElementById("result-summary");
+      const searchInput = document.getElementById("search-input");
+      const searchClearBtn = document.getElementById("search-clear");
 
+      function attachRowHandlers() {
         for (const tr of listBody.querySelectorAll("tbody tr")) {
           const id = tr.getAttribute("data-id");
           const go = () => navigate("#/contact/" + encodeURIComponent(id));
@@ -356,6 +472,112 @@
             }
           });
         }
+      }
+
+      function renderEmptyDb() {
+        listBody.innerHTML =
+          '<section class="empty-state" id="empty-state">' +
+          '<span class="icon" aria-hidden="true">&#128101;</span>' +
+          "<h2>No contacts yet</h2>" +
+          "<p>Add the first person to your rolodex to see them here.</p>" +
+          '<button id="add-empty">+ Add contact</button>' +
+          "</section>";
+        document.getElementById("add-empty").addEventListener("click", () => navigate("#/new"));
+      }
+
+      function renderEmptyResults() {
+        listBody.innerHTML =
+          '<section class="empty-state" id="empty-results-state">' +
+          '<span class="icon" aria-hidden="true">&#128269;</span>' +
+          "<h2>No matches</h2>" +
+          "<p>Try a different name, organization, note, or tag.</p>" +
+          "</section>";
+      }
+
+      function renderRows(list) {
+        if (list.length === 0) {
+          renderEmptyResults();
+          return;
+        }
+        listBody.innerHTML =
+          '<table class="contacts" role="table">' +
+          '<thead><tr>' +
+          '<th scope="col">Name</th><th scope="col">Organization</th><th scope="col">Verdict</th><th scope="col">Next step</th>' +
+          "</tr></thead>" +
+          "<tbody>" +
+          list.map(rowHtml).join("") +
+          "</tbody></table>";
+        attachRowHandlers();
+      }
+
+      let allContacts = [];
+      let totalCount = 0;
+      let searchDebounce = null;
+
+      // Search-as-you-type (~250ms debounce), Enter for an immediate search,
+      // Escape to clear + refocus — per the search-and-logging design brief.
+      // Whitespace-only queries are treated as empty (don't hit the store);
+      // an empty DB's own empty state always wins over a search's, since
+      // there's nothing to search regardless of what's typed.
+      async function runSearch(rawQuery) {
+        const trimmed = rawQuery.trim();
+        searchClearBtn.hidden = trimmed === "";
+
+        if (totalCount === 0) {
+          resultSummary.textContent = "";
+          renderEmptyDb();
+          return;
+        }
+        if (!trimmed) {
+          resultSummary.textContent = "";
+          renderRows(allContacts);
+          return;
+        }
+        try {
+          const results = await searchContacts(trimmed);
+          const matched = results.map((r) => r.contact);
+          resultSummary.textContent =
+            "Showing " + matched.length + " of " + totalCount + ' contacts for "' + trimmed + '"';
+          renderRows(matched);
+        } catch (err) {
+          resultSummary.textContent = "Search failed: " + err.message;
+          console.error(err);
+        }
+      }
+
+      searchInput.addEventListener("input", () => {
+        clearTimeout(searchDebounce);
+        const value = searchInput.value;
+        searchDebounce = setTimeout(() => runSearch(value), 250);
+      });
+      searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          clearTimeout(searchDebounce);
+          runSearch(searchInput.value);
+        } else if (e.key === "Escape") {
+          searchInput.value = "";
+          clearTimeout(searchDebounce);
+          runSearch("");
+          searchInput.focus();
+        }
+      });
+      searchClearBtn.addEventListener("click", () => {
+        searchInput.value = "";
+        clearTimeout(searchDebounce);
+        runSearch("");
+        searchInput.focus();
+      });
+
+      try {
+        allContacts = await getContacts();
+        totalCount = allContacts.length;
+        countEl.textContent = totalCount + " contact" + (totalCount === 1 ? "" : "s");
+        if (totalCount === 0) {
+          renderEmptyDb();
+          return;
+        }
+        renderRows(allContacts);
       } catch (err) {
         countEl.textContent = "Failed to load contacts";
         console.error(err);
@@ -396,6 +618,13 @@
         return;
       }
 
+      let history = [];
+      try {
+        history = await getInteractions(id);
+      } catch (err) {
+        console.error(err);
+      }
+
       document.getElementById("edit-top").addEventListener("click", () =>
         navigate("#/contact/" + encodeURIComponent(id) + "/edit"),
       );
@@ -432,15 +661,19 @@
         '<div class="autosave-status" id="next-step-status" aria-live="polite"></div>' +
         "</div>" +
         '<div class="interactions-panel">' +
-        "<h2>Interactions</h2>" +
-        "<p>Interaction logging is coming soon.</p>" +
-        '<button type="button" disabled>Log interaction</button>' +
+        '<div class="interactions-header">' +
+        '<h2 id="interactions-heading">' + (history.length ? "Interactions (" + history.length + ")" : "Interactions") + "</h2>" +
+        '<button type="button" class="secondary" id="log-interaction-toggle" aria-expanded="false" aria-controls="log-interaction-form-wrap">+ Log interaction</button>' +
+        "</div>" +
+        '<div id="log-interaction-form-wrap"></div>' +
+        '<div id="interaction-history-wrap"></div>' +
         "</div>" +
         "</div>" +
         "</div>";
 
       wireVerdictPicker(contact);
       wireNextStepField(contact);
+      wireInteractionsPanel(contact, history);
     }
 
     function fieldRow(label, value) {
@@ -529,6 +762,183 @@
           input.blur();
         }
       });
+    }
+
+    // ---- Log-interaction disclosure + history --------------------------------
+    const HISTORY_PAGE_SIZE = 5;
+
+    function interactionRowHtml(i) {
+      const meta = channelMeta(i.channel);
+      return (
+        '<li class="interaction-row">' +
+        '<span class="channel-badge">' + meta.icon + " " + escapeHtml(meta.label) + "</span>" +
+        '<div class="interaction-body">' +
+        '<div class="interaction-date">' + escapeHtml(formatInteractionDate(i.at)) + "</div>" +
+        '<div class="interaction-note">' + escapeHtml(i.note) + "</div>" +
+        "</div>" +
+        "</li>"
+      );
+    }
+
+    function logInteractionFormHtml() {
+      return (
+        '<form class="log-interaction-form" id="log-interaction-form" aria-labelledby="interactions-heading" novalidate>' +
+        '<div class="form-error-banner" id="log-form-error" hidden></div>' +
+        "<fieldset>" +
+        '<legend id="log-channel-legend">Channel</legend>' +
+        '<div class="channel-picker" role="radiogroup" aria-labelledby="log-channel-legend">' +
+        CHANNELS.map(
+          (c) =>
+            '<label><input type="radio" name="log-channel" value="' + c.value + '"' +
+            (c.value === "other" ? " checked" : "") + " /> <span>" + c.icon + " " + escapeHtml(c.label) + "</span></label>",
+        ).join("") +
+        "</div>" +
+        "</fieldset>" +
+        '<div class="form-field">' +
+        '<label for="log-date">Date</label>' +
+        '<input type="date" id="log-date" value="' + todayIso() + '" />' +
+        "</div>" +
+        '<div class="form-field" id="log-note-field">' +
+        '<label for="log-note">Note <span class="required" aria-hidden="true">*</span></label>' +
+        '<textarea id="log-note" required aria-required="true" aria-describedby="log-note-error"></textarea>' +
+        '<span class="field-error" id="log-note-error" hidden>Note is required.</span>' +
+        "</div>" +
+        '<div class="form-actions">' +
+        '<button type="button" class="secondary" id="log-cancel">Cancel</button>' +
+        '<button type="submit" id="log-save">Save</button>' +
+        "</div>" +
+        "</form>"
+      );
+    }
+
+    function wireInteractionsPanel(contact, initialHistory) {
+      let history = initialHistory.slice();
+      let expanded = false;
+      let formOpen = false;
+
+      const heading = document.getElementById("interactions-heading");
+      const toggleBtn = document.getElementById("log-interaction-toggle");
+      const formWrap = document.getElementById("log-interaction-form-wrap");
+      const historyWrap = document.getElementById("interaction-history-wrap");
+
+      function updateHeading() {
+        heading.textContent = history.length ? "Interactions (" + history.length + ")" : "Interactions";
+      }
+
+      function renderHistory() {
+        if (history.length === 0) {
+          historyWrap.innerHTML =
+            '<p class="empty-history">No interactions logged yet. Record your first touchpoint above.</p>';
+          return;
+        }
+        const visible = expanded ? history : history.slice(0, HISTORY_PAGE_SIZE);
+        const remaining = history.length - visible.length;
+        historyWrap.innerHTML =
+          '<ul class="interaction-history">' + visible.map(interactionRowHtml).join("") + "</ul>" +
+          (remaining > 0
+            ? '<button type="button" class="show-more-link" id="show-more-interactions">Show ' + remaining + " more</button>"
+            : "");
+        const showMoreBtn = document.getElementById("show-more-interactions");
+        if (showMoreBtn) {
+          showMoreBtn.addEventListener("click", () => {
+            expanded = true;
+            renderHistory();
+          });
+        }
+      }
+
+      function wireForm() {
+        const form = document.getElementById("log-interaction-form");
+        const noteEl = document.getElementById("log-note");
+
+        document.getElementById("log-cancel").addEventListener("click", () => closeForm());
+
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const noteField = document.getElementById("log-note-field");
+          const noteError = document.getElementById("log-note-error");
+          const note = noteEl.value.trim();
+          if (!note) {
+            noteField.classList.add("invalid");
+            noteEl.setAttribute("aria-invalid", "true");
+            noteError.hidden = false;
+            noteEl.focus();
+            return;
+          }
+          noteField.classList.remove("invalid");
+          noteEl.removeAttribute("aria-invalid");
+          noteError.hidden = true;
+
+          const channelEl = form.querySelector('input[name="log-channel"]:checked');
+          const dateEl = document.getElementById("log-date");
+          const payload = {
+            note,
+            channel: channelEl ? channelEl.value : "other",
+            at: dateEl.value || todayIso(),
+          };
+
+          const errorBanner = document.getElementById("log-form-error");
+          const saveBtn = document.getElementById("log-save");
+          saveBtn.disabled = true;
+          try {
+            const created = await postInteraction(contact.id, payload);
+            errorBanner.hidden = true;
+            history = [created, ...history];
+            updateHeading();
+            renderHistory();
+            // Success: form clears and stays open (supports logging two
+            // things back-to-back) — per the design brief, NOT collapsed.
+            noteEl.value = "";
+            dateEl.value = todayIso();
+            const otherRadio = form.querySelector('input[name="log-channel"][value="other"]');
+            if (otherRadio) otherRadio.checked = true;
+            noteEl.focus();
+          } catch (err) {
+            // Save fails: inline error banner above the form, contents preserved.
+            errorBanner.hidden = false;
+            errorBanner.textContent = "Couldn't save: " + err.message;
+          } finally {
+            saveBtn.disabled = false;
+          }
+        });
+
+        // Enter inside the (single-line) channel/date controls must not
+        // submit prematurely — browsers already withhold implicit submit for
+        // radio/date inputs, so nothing extra is needed there. Enter inside
+        // the note textarea inserts a newline (native behavior); Cmd/Ctrl+Enter
+        // is the explicit submit shortcut.
+        noteEl.addEventListener("keydown", (e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            e.preventDefault();
+            form.requestSubmit();
+          }
+        });
+      }
+
+      function openForm() {
+        formOpen = true;
+        toggleBtn.setAttribute("aria-expanded", "true");
+        toggleBtn.textContent = "Cancel";
+        formWrap.innerHTML = logInteractionFormHtml();
+        wireForm();
+        const firstControl = formWrap.querySelector('input[type="radio"]');
+        if (firstControl) firstControl.focus();
+      }
+
+      function closeForm() {
+        formOpen = false;
+        formWrap.innerHTML = "";
+        toggleBtn.setAttribute("aria-expanded", "false");
+        toggleBtn.textContent = "+ Log interaction";
+        toggleBtn.focus();
+      }
+
+      toggleBtn.addEventListener("click", () => {
+        if (formOpen) closeForm();
+        else openForm();
+      });
+
+      renderHistory();
     }
 
     // ---- Add/Edit form ----------------------------------------------------------

@@ -152,3 +152,131 @@ describe("Store.setVerdict() / Store.setNextStep()", () => {
     expect(store.get(saved.id)).toMatchObject({ nextStep: "Send intro email" });
   });
 });
+
+describe("Store.search()", () => {
+  // This suite runs on Node 22.12 (the repo's pinned build, per store.ts's
+  // migrate() comment), which genuinely has no fts5 module compiled into
+  // node:sqlite — confirmed independently by the "no such module: fts5"
+  // warning migrate() logs when constructing any Store in this file. So
+  // every search() call below is, in this environment, actually exercising
+  // the manual LIKE-scan fallback branch (the try{} FTS5 path throws at
+  // `.prepare()` since contacts_fts was never created), not just a
+  // theoretical code path guarded by a mock.
+
+  it("has no fts5 module on this Node build (sanity check that the fallback below is real, not theoretical)", () => {
+    const raw = new DatabaseSync(dbPath);
+    expect(() => raw.exec("CREATE VIRTUAL TABLE t USING fts5(x)")).toThrow(/no such module: fts5/);
+    raw.close();
+  });
+
+  it("matches across name/org/what/angle/tags without crashing when fts5 is unavailable", () => {
+    const store = new Store(dbPath);
+    store.upsert(baseContact({ name: "Ada Lovelace", org: "Analytical Engines" }));
+    store.upsert(baseContact({ name: "Grace Hopper", what: "Compiler pioneer" }));
+    store.upsert(baseContact({ name: "Margaret Hamilton", angle: "Apollo guidance software" }));
+    store.upsert(baseContact({ name: "Katherine Johnson", tags: ["orbital-mechanics", "nasa"] }));
+    store.upsert(baseContact({ name: "Irrelevant Person", org: "Nothing Corp" }));
+
+    expect(store.search("Analytical").map((r) => r.contact.name)).toEqual(["Ada Lovelace"]);
+    expect(store.search("Compiler").map((r) => r.contact.name)).toEqual(["Grace Hopper"]);
+    expect(store.search("Apollo").map((r) => r.contact.name)).toEqual(["Margaret Hamilton"]);
+    expect(store.search("nasa").map((r) => r.contact.name)).toEqual(["Katherine Johnson"]);
+    expect(store.search("Hopper").map((r) => r.contact.name)).toEqual(["Grace Hopper"]);
+  });
+
+  it("respects the verdict filter", () => {
+    const store = new Store(dbPath);
+    store.upsert(baseContact({ name: "Strong Match", org: "Rolodex Inc", verdict: "strong" }));
+    store.upsert(baseContact({ name: "Watch Match", org: "Rolodex Inc", verdict: "watch" }));
+
+    const results = store.search("Rolodex", { verdict: "strong" });
+    expect(results.map((r) => r.contact.name)).toEqual(["Strong Match"]);
+  });
+
+  it("respects the limit option", () => {
+    const store = new Store(dbPath);
+    for (let i = 0; i < 5; i++) {
+      store.upsert(baseContact({ name: `Match ${i}`, org: "SharedOrgTerm" }));
+    }
+    const results = store.search("SharedOrgTerm", { limit: 2 });
+    expect(results).toHaveLength(2);
+  });
+
+  it("returns no results for a query that matches nothing", () => {
+    const store = new Store(dbPath);
+    store.upsert(baseContact({ name: "Ada Lovelace" }));
+    expect(store.search("zzznomatchzzz")).toEqual([]);
+  });
+
+  it("returns [] for an empty or whitespace-only query without touching the database", () => {
+    const store = new Store(dbPath);
+    store.upsert(baseContact({ name: "Ada Lovelace" }));
+    expect(store.search("")).toEqual([]);
+    expect(store.search("   ")).toEqual([]);
+  });
+});
+
+describe("Store.logInteraction() / Store.listInteractions()", () => {
+  it("persists an interaction and a subsequent listInteractions() call returns it", () => {
+    const store = new Store(dbPath);
+    const contact = store.upsert(baseContact({ name: "Ada Lovelace" }));
+
+    store.logInteraction({
+      id: "int-1",
+      contactId: contact.id,
+      at: "2026-08-01T00:00:00.000Z",
+      note: "Had a great call about the algorithm.",
+      channel: "call",
+    });
+
+    const history = store.listInteractions(contact.id);
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      id: "int-1",
+      contactId: contact.id,
+      at: "2026-08-01T00:00:00.000Z",
+      note: "Had a great call about the algorithm.",
+      channel: "call",
+    });
+  });
+
+  it("returns history most-recent-first", () => {
+    const store = new Store(dbPath);
+    const contact = store.upsert(baseContact({ name: "Ada Lovelace" }));
+
+    store.logInteraction({ id: "int-1", contactId: contact.id, at: "2026-01-01", note: "First touch" });
+    store.logInteraction({ id: "int-2", contactId: contact.id, at: "2026-06-01", note: "Second touch" });
+    store.logInteraction({ id: "int-3", contactId: contact.id, at: "2026-03-01", note: "Third touch" });
+
+    const history = store.listInteractions(contact.id);
+    expect(history.map((i) => i.id)).toEqual(["int-2", "int-3", "int-1"]);
+  });
+
+  it("scopes history to the given contact", () => {
+    const store = new Store(dbPath);
+    const a = store.upsert(baseContact({ name: "Ada Lovelace" }));
+    const b = store.upsert(baseContact({ name: "Grace Hopper" }));
+
+    store.logInteraction({ id: "int-a", contactId: a.id, at: "2026-01-01", note: "About Ada" });
+    store.logInteraction({ id: "int-b", contactId: b.id, at: "2026-01-01", note: "About Grace" });
+
+    expect(store.listInteractions(a.id).map((i) => i.note)).toEqual(["About Ada"]);
+    expect(store.listInteractions(b.id).map((i) => i.note)).toEqual(["About Grace"]);
+  });
+
+  it("rejects an empty note", () => {
+    const store = new Store(dbPath);
+    const contact = store.upsert(baseContact({ name: "Ada Lovelace" }));
+    expect(() =>
+      store.logInteraction({ id: "int-1", contactId: contact.id, at: "2026-01-01", note: "" }),
+    ).toThrow(/note is required/);
+  });
+
+  it("rejects a whitespace-only note", () => {
+    const store = new Store(dbPath);
+    const contact = store.upsert(baseContact({ name: "Ada Lovelace" }));
+    expect(() =>
+      store.logInteraction({ id: "int-1", contactId: contact.id, at: "2026-01-01", note: "   " }),
+    ).toThrow(/note is required/);
+  });
+});

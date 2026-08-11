@@ -4,10 +4,12 @@ import { mkdir, readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { Store } from "../lib/store.js";
-import type { Contact } from "../lib/types.js";
+import type { Contact, Interaction } from "../lib/types.js";
 import { createSecretsAdapter, type CreateSecretsAdapterOptions, type SecretsAdapter } from "../lib/secrets-adapter.js";
 import { checkSecretsCapability } from "../lib/secrets-check.js";
+import { applyPullToStore, createGoogleSync } from "../lib/google-sync.js";
 import {
   checkDbPathWritable,
   clearDbPathOverride,
@@ -99,6 +101,9 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
   const homeDir = opts.homeDir;
   const secrets = opts.secrets ?? createSecretsAdapter();
   const secretsCapabilityFactory = opts.secretsCapabilityFactory ?? createSecretsAdapter;
+  // Shares this server's `secrets` adapter so a one-shot sync reads the same
+  // OAuth client credentials the wizard's Google-connect step wrote.
+  const googleSync = createGoogleSync({ secrets });
 
   let store: Store | undefined = opts.store;
   // Once true, wizard completion can never revert within a process's
@@ -251,6 +256,27 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
         return;
       }
 
+      // POST /api/sync/google — one-shot Google Contacts pull. Reuses
+      // Store.upsert()'s own dedup (googleResourceName, then email); the
+      // only thing done here first is re-attaching each pulled contact's
+      // pre-existing local-only fields (verdict/nextStep/angle/...) so a
+      // resync can't clobber them — see google-sync.ts's applyPullToStore().
+      if (req.method === "POST" && parts.length === 3 && parts[0] === "api" && parts[1] === "sync" && parts[2] === "google") {
+        if (!(await isWizardCompleted())) {
+          sendJson(res, 409, { error: "setup not complete" });
+          return;
+        }
+        const s = await getStore();
+        try {
+          const pulled = await googleSync.pull();
+          const summary = applyPullToStore(pulled, s);
+          sendJson(res, 200, summary);
+        } catch (err) {
+          sendJson(res, 502, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
       if (parts[0] === "api" && parts[1] === "contacts") {
         // Main app routes are only meaningful once setup has resolved a real
         // DB location — refuse rather than silently constructing Store
@@ -294,6 +320,70 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
           } as Contact);
           sendJson(res, 200, saved);
           return;
+        }
+
+        // GET /api/contacts/search?q=...&verdict=...&limit=... — checked
+        // ahead of the generic /api/contacts/:id block below so a literal
+        // contact id of "search" (never produced by randomUUID(), but
+        // worth being explicit about) can't shadow this route.
+        if (req.method === "GET" && parts.length === 3 && parts[2] === "search") {
+          const q = url.searchParams.get("q") ?? "";
+          const verdictParam = url.searchParams.get("verdict");
+          const limitParam = url.searchParams.get("limit");
+          const searchOpts: { verdict?: Contact["verdict"]; limit?: number } = {};
+          if (verdictParam) searchOpts.verdict = verdictParam as Contact["verdict"];
+          if (limitParam !== null) {
+            const n = Number(limitParam);
+            if (Number.isFinite(n) && n > 0) searchOpts.limit = n;
+          }
+          sendJson(res, 200, s.search(q, searchOpts));
+          return;
+        }
+
+        // GET/POST /api/contacts/:id/interactions — logging + history, kept
+        // as its own standalone check (additive, alongside the existing
+        // parts.length === 4 verdict/next-step block below, not merged into
+        // it) so that block's PATCH logic stays untouched.
+        if (parts.length === 4 && parts[3] === "interactions") {
+          const id = decodeURIComponent(parts[2]!);
+          if (!s.get(id)) {
+            sendJson(res, 404, { error: "not found" });
+            return;
+          }
+
+          if (req.method === "GET") {
+            sendJson(res, 200, s.listInteractions(id));
+            return;
+          }
+
+          if (req.method === "POST") {
+            const body = (await readJsonBody(req)) as {
+              at?: unknown;
+              note?: unknown;
+              channel?: unknown;
+            };
+            const note = typeof body.note === "string" ? body.note.trim() : "";
+            if (!note) {
+              sendJson(res, 400, { error: "note is required" });
+              return;
+            }
+            const validChannels = ["call", "email", "dm", "meeting", "other"];
+            const channel =
+              typeof body.channel === "string" && validChannels.includes(body.channel)
+                ? (body.channel as Interaction["channel"])
+                : undefined;
+            const at = typeof body.at === "string" && body.at.trim() ? body.at : new Date().toISOString();
+            const interaction: Interaction = {
+              id: randomUUID(),
+              contactId: id,
+              at,
+              note,
+              channel,
+            };
+            s.logInteraction(interaction);
+            sendJson(res, 200, interaction);
+            return;
+          }
         }
 
         // /api/contacts/:id
