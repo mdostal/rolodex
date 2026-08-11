@@ -17,3 +17,6 @@ token.json
 .pHive/metrics/
 .pHive/session-effort.txt
 .pHive/agent-complete/
+
+# Playwright MCP debug artifacts (page snapshots, console logs)
+.playwright-mcp/
