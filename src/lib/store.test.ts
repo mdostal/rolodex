@@ -154,18 +154,33 @@ describe("Store.setVerdict() / Store.setNextStep()", () => {
 });
 
 describe("Store.search()", () => {
-  // This suite runs on Node 22.12 (the repo's pinned build, per store.ts's
-  // migrate() comment), which genuinely has no fts5 module compiled into
-  // node:sqlite — confirmed independently by the "no such module: fts5"
-  // warning migrate() logs when constructing any Store in this file. So
-  // every search() call below is, in this environment, actually exercising
-  // the manual LIKE-scan fallback branch (the try{} FTS5 path throws at
-  // `.prepare()` since contacts_fts was never created), not just a
-  // theoretical code path guarded by a mock.
+  // Whether node:sqlite's bundled SQLite has fts5 compiled in is a property
+  // of the exact Node build running these tests, not something this repo
+  // controls — store.ts's migrate() comment notes it was absent on the
+  // 22.12 build this suite was originally written against, but a later
+  // 22.x patch (e.g. what `actions/setup-node`'s "22.x" resolves to in CI)
+  // can differ, and has: CI on Linux was observed to have fts5 available
+  // where local macOS dev builds didn't. So don't hardcode which branch is
+  // "real" here — detect it live and assert only what that implies, so this
+  // test documents current reality on whatever build runs it instead of
+  // pinning one platform's outcome. Either way, Store.search() itself must
+  // produce correct results — that's what the tests below actually verify,
+  // and they hold regardless of which internal branch search() takes.
 
-  it("has no fts5 module on this Node build (sanity check that the fallback below is real, not theoretical)", () => {
+  it("documents whether this Node build has fts5 (informational — search() must work either way, see tests below)", () => {
     const raw = new DatabaseSync(dbPath);
-    expect(() => raw.exec("CREATE VIRTUAL TABLE t USING fts5(x)")).toThrow(/no such module: fts5/);
+    try {
+      raw.exec("CREATE VIRTUAL TABLE t USING fts5(x)");
+      // fts5 is available on this build — Store.search() will use the real
+      // MATCH/bm25 path rather than the LIKE-scan fallback. Nothing further
+      // to assert here; this branch just documents that fact.
+    } catch (err) {
+      // fts5 unavailable on this build — Store.search() falls back to the
+      // manual LIKE scan (see its try/catch). Confirm it fails the way we
+      // expect, so a change in the error text wouldn't silently mean
+      // something else broke.
+      expect(String(err)).toMatch(/no such module: fts5/);
+    }
     raw.close();
   });
 
