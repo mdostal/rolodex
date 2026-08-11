@@ -33,10 +33,19 @@ import { classifyKeychainError } from "./secrets-check.js";
  * If this ever needs to run on Windows/Linux, swap in a platform-specific
  * real backend behind the same interface — nothing above this layer cares.
  */
+/** Per-call options threaded through to the underlying `security` child
+ * process (real backend only — the in-memory fake ignores this). Lets a
+ * caller that imposes its own timeout (see secrets-check.ts's
+ * checkSecretsCapability()) actually terminate a hung child process instead
+ * of merely abandoning the Promise that's waiting on it. */
+export interface SecretsAdapterCallOptions {
+  signal?: AbortSignal;
+}
+
 export interface SecretsAdapter {
-  get(key: string): Promise<string | undefined>;
-  set(key: string, value: string): Promise<void>;
-  delete(key: string): Promise<void>;
+  get(key: string, opts?: SecretsAdapterCallOptions): Promise<string | undefined>;
+  set(key: string, value: string, opts?: SecretsAdapterCallOptions): Promise<void>;
+  delete(key: string, opts?: SecretsAdapterCallOptions): Promise<void>;
 }
 
 const execFileAsync = promisify(execFile);
@@ -135,7 +144,7 @@ function parseSecurityPasswordLine(line: string): string {
 /** Real backend: macOS Keychain via the `security` CLI. Darwin-only. */
 function createKeychainSecretsAdapter(): SecretsAdapter {
   return {
-    async get(key) {
+    async get(key, opts) {
       try {
         // Deliberately `-g`, not `-w`: `-w` prints only the raw password,
         // but macOS hex-encodes that raw output whenever the stored value
@@ -150,14 +159,11 @@ function createKeychainSecretsAdapter(): SecretsAdapter {
         // not stdout (the rest of `-g`'s item dump — keychain, attributes,
         // etc. — goes to stdout). That's undocumented and easy to miss, so
         // this checks both streams for it rather than assuming stderr.
-        const { stdout, stderr } = await execFileAsync("security", [
-          "find-generic-password",
-          "-a",
-          key,
-          "-s",
-          SERVICE,
-          "-g",
-        ]);
+        const { stdout, stderr } = await execFileAsync(
+          "security",
+          ["find-generic-password", "-a", key, "-s", SERVICE, "-g"],
+          { signal: opts?.signal },
+        );
         const line = `${stderr}${stdout}`.split("\n").find((l) => l.startsWith("password: "));
         if (line === undefined) {
           throw new Error('secrets-adapter: "security find-generic-password -g" produced no "password:" line');
@@ -168,20 +174,15 @@ function createKeychainSecretsAdapter(): SecretsAdapter {
         throw err;
       }
     },
-    async set(key, value) {
+    async set(key, value, opts) {
       try {
         // -U: update the existing item in place instead of erroring if it's
         // already there, so set() is a plain upsert either way.
-        await execFileAsync("security", [
-          "add-generic-password",
-          "-a",
-          key,
-          "-s",
-          SERVICE,
-          "-w",
-          value,
-          "-U",
-        ]);
+        await execFileAsync(
+          "security",
+          ["add-generic-password", "-a", key, "-s", SERVICE, "-w", value, "-U"],
+          { signal: opts?.signal },
+        );
       } catch (err) {
         // See sanitizeSetError()'s docstring: this argv contains `value`
         // (the secret) itself, so any error thrown here must never leave
@@ -189,9 +190,11 @@ function createKeychainSecretsAdapter(): SecretsAdapter {
         throw sanitizeSetError(err);
       }
     },
-    async delete(key) {
+    async delete(key, opts) {
       try {
-        await execFileAsync("security", ["delete-generic-password", "-a", key, "-s", SERVICE]);
+        await execFileAsync("security", ["delete-generic-password", "-a", key, "-s", SERVICE], {
+          signal: opts?.signal,
+        });
       } catch (err) {
         // Already absent — delete() is idempotent, so this isn't an error.
         if (hasCode(err) && err.code === SEC_ITEM_NOT_FOUND) return;
@@ -205,13 +208,15 @@ function createKeychainSecretsAdapter(): SecretsAdapter {
 export function createInMemorySecretsAdapter(): SecretsAdapter {
   const store = new Map<string, string>();
   return {
-    async get(key) {
+    // `opts`/`signal` accepted for interface compatibility only — a plain
+    // Map access is synchronous and has no child process to abort.
+    async get(key, _opts) {
       return store.get(key);
     },
-    async set(key, value) {
+    async set(key, value, _opts) {
       store.set(key, value);
     },
-    async delete(key) {
+    async delete(key, _opts) {
       store.delete(key);
     },
   };
@@ -266,9 +271,9 @@ function withInMemoryFallback(real: SecretsAdapter, onFallback?: (err: unknown) 
   }
 
   return {
-    get: (key) => guarded((a) => a.get(key)),
-    set: (key, value) => guarded((a) => a.set(key, value)),
-    delete: (key) => guarded((a) => a.delete(key)),
+    get: (key, opts) => guarded((a) => a.get(key, opts)),
+    set: (key, value, opts) => guarded((a) => a.set(key, value, opts)),
+    delete: (key, opts) => guarded((a) => a.delete(key, opts)),
   };
 }
 

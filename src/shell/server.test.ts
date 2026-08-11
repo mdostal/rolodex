@@ -58,6 +58,32 @@ async function postJson(url: string, payload?: unknown): Promise<{ status: numbe
   return { status: res.status, body };
 }
 
+async function patchJson(url: string, payload?: unknown): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: payload !== undefined ? { "content-type": "application/json" } : undefined,
+    body: payload !== undefined ? JSON.stringify(payload) : undefined,
+  });
+  const body = await res.json().catch(() => undefined);
+  return { status: res.status, body };
+}
+
+/** Sends a raw, deliberately-malformed JSON body (not run through
+ * JSON.stringify — postJson()/patchJson() can only ever send valid JSON). */
+async function postRawBody(
+  url: string,
+  method: string,
+  rawBody: string,
+): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(url, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: rawBody,
+  });
+  const body = await res.json().catch(() => undefined);
+  return { status: res.status, body };
+}
+
 describe("first-run detection", () => {
   it("serves the wizard at / when wizard.completed is unset", async () => {
     const { baseUrl } = await start();
@@ -401,5 +427,64 @@ describe("POST/GET /api/contacts/:id/interactions", () => {
     expect(getRes.status).toBe(404);
     const postRes = await postJson(baseUrl + "/api/contacts/does-not-exist/interactions", { note: "x" });
     expect(postRes.status).toBe(404);
+  });
+});
+
+describe("malformed JSON request bodies", () => {
+  it("POST /api/contacts with malformed JSON returns 400, not 500", async () => {
+    const { baseUrl } = await startReady();
+    const { status, body } = await postRawBody(baseUrl + "/api/contacts", "POST", "{not valid json");
+    expect(status).toBe(400);
+    expect((body as { error?: string }).error).toBeTruthy();
+  });
+
+  it("PATCH .../verdict with malformed JSON returns 400, not 500", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+    const { status } = await postRawBody(baseUrl + `/api/contacts/${id}/verdict`, "PATCH", "{not valid json");
+    expect(status).toBe(400);
+  });
+
+  it("POST .../interactions with malformed JSON returns 400, not 500", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+    const { status } = await postRawBody(baseUrl + `/api/contacts/${id}/interactions`, "POST", "{not valid json");
+    expect(status).toBe(400);
+  });
+
+  it("POST /api/wizard/google with malformed JSON returns 400, not 500", async () => {
+    const { baseUrl } = await start();
+    const { status, body } = await postRawBody(baseUrl + "/api/wizard/google", "POST", "{not valid json");
+    expect(status).toBe(400);
+    expect((body as { error?: string }).error).toBeTruthy();
+  });
+});
+
+describe("PATCH /api/contacts/:id/verdict validation", () => {
+  it("rejects a value that isn't a real Verdict with 400 and does not persist it", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+
+    const { status, body } = await patchJson(baseUrl + `/api/contacts/${id}/verdict`, { verdict: "maybe-later" });
+    expect(status).toBe(400);
+    expect((body as { error?: string }).error).toBeTruthy();
+
+    const after = await getJson(baseUrl + `/api/contacts/${id}`);
+    expect((after.body as { verdict?: string }).verdict).toBe("none");
+  });
+
+  it("accepts all 5 valid Verdict values", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+
+    for (const verdict of ["strong", "watch", "referral-only", "pass", "none"]) {
+      const { status, body } = await patchJson(baseUrl + `/api/contacts/${id}/verdict`, { verdict });
+      expect(status).toBe(200);
+      expect((body as { verdict?: string }).verdict).toBe(verdict);
+    }
   });
 });
