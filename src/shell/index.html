@@ -251,7 +251,24 @@
       background: #fdecea; color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
     }
     .form-footer {
-      position: sticky; bottom: 0; background: var(--bg); border-top: 1px solid var(--border);
+      /* Deliberately NOT position: sticky/fixed. The page itself is the only
+         scroll container (there's no independent scroll pane for #content),
+         so a sticky-to-viewport footer here reserves its own space at the
+         very end of the form flow *and* simultaneously pins itself over the
+         bottom `footerHeight` px of the viewport while "stuck". Those two
+         facts combine badly: whatever field happens to fall in that bottom
+         strip — which for this form is the Classification/Next-step section
+         on a typical viewport — renders directly underneath the footer's
+         hit-testable (and visually opaque) box, well before the user has
+         scrolled anywhere near the true bottom of the page. No amount of
+         extra padding/margin between the fields and the footer fixes this:
+         the sticky-stuck screen position is fixed by viewport height minus
+         footer height, not by document content, so the overlap band never
+         moves. A plain static footer (matching the non-sticky verdict picker
+         on the Contact Detail screen) can never overlap the fields above it,
+         at any scroll position or viewport size — it simply sits after them
+         in normal flow. */
+      background: var(--bg); border-top: 1px solid var(--border);
       padding: 14px 0; margin-top: 12px; display: flex; justify-content: flex-end; gap: 10px;
     }
   </style>
