@@ -1,7 +1,7 @@
 id: saf-04-setup-wizard
 epic: standalone-app-foundation
 title: First-run setup wizard
-status: pending
+status: in_progress
 complexity: high
 methodology: classic
 depends_on: [saf-02-core-crud, saf-03-secrets-adapter]
