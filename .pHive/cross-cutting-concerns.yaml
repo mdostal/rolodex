@@ -14,3 +14,33 @@ concerns:
       - "All docs referencing changed behavior identified"
       - "Affected sections updated to reflect new behavior"
       - "No stale references to old behavior remain"
+
+  - id: metrics
+    name: Metrics as a Planning Concern
+    description: >
+      Every story that claims to move a measurable outcome must declare what
+      number moves, by how much, in what window, and how the move is measured —
+      OR explicitly opt out with a one-line justification (e.g., process
+      substrate, schema-only docs, internal-only refactor with no observable
+      surface). This prevents un-falsifiable success claims from accumulating
+      across epics. The declared metric is the evidence contract for the
+      story's review and retro.
+    applies_when: >
+      Story claims to improve, reduce, accelerate, or otherwise change a
+      measurable outcome — including throughput, coverage, latency, error
+      rate, or any other quantitative property. NOT triggered by pure-substrate
+      stories (schema docs, planner-prompt edits, gitignored config seeding)
+      where the gate itself is what's shipping; those use applies:false with a
+      one-line justification.
+    planning_prompt: >
+      What number does this story move, by how much, in what window, and how
+      is the move measured? Specify: metric name, direction (up/down),
+      baseline (null = first-measurement), target, observation window
+      (e.g., "7d post-merge", "epic-close", "next-3-cycles"), and source
+      carrier (events|sql|envelope|manual). If the story is substrate or
+      otherwise un-falsifiable, set metric.applies:false and write a one-line
+      justification — a one-word answer is not acceptable.
+    implementation_checklist:
+      - "metric: block declared in story YAML (applies:true with name/direction/baseline/target/window/source) OR metric.applies:false with one-line justification"
+      - "verify_at set to a concrete point (story integrate step, epic close, or ISO-8601 timestamp) — not 'eventually'"
+      - "Review confirms metric is falsifiable: a future reader can decide pass/fail from the declared source without re-reading the story"

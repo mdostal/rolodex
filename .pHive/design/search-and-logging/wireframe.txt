@@ -1,0 +1,67 @@
+Rolodex — Search box + Log-interaction additions
+Text-based ASCII mockups (Frame0 CLI unavailable — documented fallback)
+
+=== A. Contact list screen — search box added ===
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  rolodex                                              [ + Add contact ]  │
+├──────────────────────────────────────────────────────────────────────────┤
+│   ⌕  Search name, org, notes, tags…                              [ × ]   │
+│  ┌────────────────────────────────────────────────────────────────────┐  │
+│  └────────────────────────────────────────────────────────────────────┘  │
+│  Showing 12 of 47 contacts for "partnerships"                            │
+│ ──────────────────────────────────────────────────────────────────────  │
+│  Priya Shah                                    Anthropic     [ strong ]  │
+│  Partnerships lead · met at NeurIPS afterparty                           │
+│  Next: intro to design team                                              │
+│ ──────────────────────────────────────────────────────────────────────  │
+│  Dan Okafor                                     Vercel       [ watch  ]  │
+│  DevRel · met via Sam's intro                                            │
+│  Next: send deck follow-up                                               │
+│  ...                                                                      │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  No-match state (query = "xyz123"):
+   ⌕  xyz123                                                      [ × ]
+              No contacts match "xyz123". Try a different name, org, or tag.
+
+=== B. Contact detail — log-interaction + history (collapsed) ===
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  ← Back                                                                   │
+├──────────────────────────────────────────────────────────────────────────┤
+│  Priya Shah                                              [ strong ▾ ]    │
+│  Anthropic · Partnerships Lead                                           │
+│  (contact fields as in contact-list-and-detail topic)                    │
+│  Next step   intro to design team                          [ Edit ]      │
+│ ──────────────────────────────────────────────────────────────────────  │
+│  Interactions                                    [ + Log interaction ]   │
+│  📞 Call         Aug 4, 2026                                             │
+│      Caught up post-conference, she's forwarding to their design lead.   │
+│  ──────────────────────────────────────────────────────────────────────  │
+│  ✉ Email        Jul 22, 2026                                            │
+│      Sent the one-pager she asked for.                                   │
+│  ──────────────────────────────────────────────────────────────────────  │
+│  👤 Meeting      Jun 30, 2026                                            │
+│      First real conversation, NeurIPS afterparty.                        │
+│                              [ Show 4 more ]                             │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  Empty-history state:
+   Interactions                                    [ + Log interaction ]
+          No interactions logged yet. Record your first touchpoint above.
+
+=== C. Log-interaction form (expanded) ===
+
+│  Log an interaction                                        [ Cancel ]   │
+│  Channel   ( ) Call  ( ) Email  (•) DM  ( ) Meeting  ( ) Other           │
+│  Date      [ 2026-08-11        ▾ ]                                       │
+│  Note      ┌────────────────────────────────────────────────────────┐   │
+│            │ Type what happened…                                    │   │
+│            └────────────────────────────────────────────────────────┘   │
+│                                                    [ Cancel ] [ Save ]    │
+│  Interactions (3)                                                        │
+  ...
+
+  Validation-error state (empty note):
+│            ⚠ Add a note before saving — even one line helps future-you.  │

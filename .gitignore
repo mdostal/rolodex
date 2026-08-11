@@ -16,3 +16,4 @@ token.json
 .pHive/interrupts/
 .pHive/metrics/
 .pHive/session-effort.txt
+.pHive/agent-complete/

@@ -1,0 +1,105 @@
+Rolodex Setup Wizard — 5 screens
+Text-based ASCII mockups (Frame0 CLI unavailable — documented fallback)
+
+=== Screen 1: Welcome ===
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Rolodex Setup                                                       ✕   │
+├──────────────────────────────────────────────────────────────────────────┤
+│   [1 WELCOME]    2 Database    3 Google    4 Secrets    5 Finish         │
+├──────────────────────────────────────────────────────────────────────────┤
+│                              ◆ ROLODEX                                   │
+│                      Welcome to your rolodex.                            │
+│         Your relationship data, on your own machine, in your own         │
+│         control. Setup takes about a minute — here's what's next:        │
+│              1. Confirm where your data will live                        │
+│              2. Connect Google Contacts (optional)                       │
+│              3. Verify secure credential storage                         │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                        [ Get Started → ] │
+└──────────────────────────────────────────────────────────────────────────┘
+
+=== Screen 2: Database location ===
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│   ✓ Welcome    [2 DATABASE]    3 Google    4 Secrets    5 Finish         │
+├──────────────────────────────────────────────────────────────────────────┤
+│  Database location                                                       │
+│  Rolodex stores everything locally in a single SQLite file. We picked    │
+│  a sensible default — most people never need to change this.            │
+│  ┌────────────────────────────────────────────────────────┐             │
+│  │ ~/.local/share/rolodex/rolodex.db                       │ [Change…]  │
+│  └────────────────────────────────────────────────────────┘             │
+│  ✓ Location is writable                          Reset to default       │
+├──────────────────────────────────────────────────────────────────────────┤
+│  [ ← Back ]                                                  [ Next → ] │
+└──────────────────────────────────────────────────────────────────────────┘
+
+=== Screen 3: Google connect ===
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│   ✓ Welcome    ✓ Database    [3 GOOGLE]    4 Secrets    5 Finish         │
+├──────────────────────────────────────────────────────────────────────────┤
+│  Connect Google Contacts                                                 │
+│  Rolodex can pull your Google Contacts in. This needs your own Google    │
+│  Cloud OAuth client — Rolodex never uses a shared one.                   │
+│  ▸ Don't have one yet? (expand for setup steps)                          │
+│    1. Open Google Cloud Console and create a project                     │
+│    2. Enable the People API                                              │
+│    3. Create an OAuth Client ID (Desktop app type)                       │
+│    4. Copy the Client ID and Client Secret below                         │
+│                                    [ Open Google Cloud Console ↗ ]        │
+│                                    [ Full written guide ↗ ]               │
+│  Client ID       [ 123456789-abc...apps.googleusercontent.com        ]  │
+│  Client Secret   [ ••••••••••••••••••••••••••••••         [ Show ]  ]  │
+│  🔒 Stored only in your system keychain. Never written to a file,        │
+│     an environment variable, or a log.                                   │
+├──────────────────────────────────────────────────────────────────────────┤
+│  [ ← Back ]                    [ Skip for now ]   [ Connect & Continue ] │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  Waiting state:  ⟳ Waiting for authorization in your browser… [Cancel]
+  Success state:  ✓ Connected as you@gmail.com  (auto-advances to Screen 4)
+
+=== Screen 4: Secrets check ===
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│   ✓ Welcome    ✓ Database    ✓ Google    [4 SECRETS]    5 Finish         │
+├──────────────────────────────────────────────────────────────────────────┤
+│  Secure storage check                                                    │
+│  Rolodex stores your Google credentials in your operating system's       │
+│  secure keychain — never in a plain file. Confirming write access…       │
+│                         ⟳  Checking keychain access…                     │
+├──────────────────────────────────────────────────────────────────────────┤
+│  [ ← Back ]                                          [ Next → ] (disabled)│
+└──────────────────────────────────────────────────────────────────────────┘
+
+  Success:  ✓ Keychain access confirmed — Using: macOS Keychain
+  Failure:  ✗ Couldn't write to your system keychain
+            • Your keychain is locked — unlock it and retry
+            • Rolodex doesn't have permission — check System Settings
+            • No keychain daemon available in this session (Linux/SSH)
+                              [ Retry ]  [ Copy error details ]
+                              [ Troubleshooting guide ↗ ]
+
+=== Screen 5: Finish ===
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│   ✓ Welcome    ✓ Database    ✓ Google    ✓ Secrets    [5 FINISH]         │
+├──────────────────────────────────────────────────────────────────────────┤
+│                              You're all set.                             │
+│              ✓  Database ready — ~/.local/share/rolodex/rolodex.db       │
+│              ✓  Google connected — Signed in as you@gmail.com            │
+│              ✓  Secure storage verified — macOS Keychain                 │
+│         (If Google was skipped: "Connect anytime from Settings           │
+│          → Google Contacts.")                                            │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                        [ Open Rolodex → ]│
+└──────────────────────────────────────────────────────────────────────────┘
+   -> hands off directly to the Contact List screen. No login screen.
+
+=== Flow ===
+
+Welcome -> Database -> Google connect -+-> Secrets check -> Finish -> Contact list
+                            |          |
+                      [Skip for now] --+

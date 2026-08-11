@@ -1,0 +1,111 @@
+id: saf-06-search-logging
+epic: standalone-app-foundation
+title: Search and interaction logging
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [saf-02-core-crud]
+
+parallel_allowed: true
+parallel_rationale: bounded-slice
+files_to_modify:
+  - file: src/lib/store.ts
+    change: "implement search() (FTS5 MATCH) and logInteraction()"
+
+description: |
+  The user can search their contacts (name/org/what/angle/tags) and log an
+  interaction (call/email/meeting/note) against a contact — the two remaining
+  pain-point-serving capabilities from the north star (poor follow-up
+  discipline, niche tracking). needsFollowUp() stays a stub, not wired to any
+  UI — deferred, see vertical-plan.md §4.
+
+  Independent of saf-05 (Google sync) — both depend only on saf-02's
+  Store/Contact-UI foundation and touch disjoint files, so they can run in
+  parallel (vertical-plan.md §6 Moldability Notes).
+
+acceptance_criteria:
+  - "Given contacts in the store, when a user searches by name/org/what/angle/tags, then FTS5 MATCH returns expected matches via the search box"
+  - "Given a contact detail screen, when a user logs an interaction (call/email/meeting/note), then it persists via logInteraction and appears in the interaction history"
+
+steps:
+  - id: research
+    description: Confirm the contacts_fts schema (store.ts:30-32) and the Interaction type (types.ts)
+    agent: researcher
+  - id: ui-design
+    description: Delegate to /design for wireframes (atomic external call; see skills/design/SKILL.md). Covers the search box and the log-interaction action/form on the detail screen.
+    agent: ui-designer
+    delegates_to: design
+    depends_on: [research]
+  - id: implement
+    description: Implement search() (FTS5 MATCH) and logInteraction(), plus the search box and log-interaction UI
+    agent: developer
+    depends_on: [ui-design]
+    inputs:
+      - source: step_output
+        step: ui-design
+        key: wireframe_brief
+  - id: test
+    description: Write and pass unit tests for FTS5 search matches and logInteraction persistence; manual spot check
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review implementation and tests for correctness and convention compliance
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/lib/store.ts
+      purpose: "search()/logInteraction() stubs to implement (lines 44-54); contacts_fts schema already defined (lines 30-32)"
+
+code_examples:
+  - title: Existing FTS5 schema search() must query against
+    file: src/lib/store.ts
+    snippet: |
+      CREATE VIRTUAL TABLE IF NOT EXISTS contacts_fts USING fts5(
+        id UNINDEXED, name, org, role, what, angle, tags, content='contacts', content_rowid='rowid'
+      );
+
+risks:
+  - severity: low
+    description: FTS5 is already schema-defined — this is implementation, not design, work
+    mitigation: n/a — low-risk slice
+
+cross_cutting:
+  - concern: documentation
+    action: "saf-07 documents search/logging as shipped capabilities"
+  - concern: metrics
+    action: "See metric: block below"
+
+metric:
+  applies: true
+  name: contacts_searchable_and_interactions_loggable
+  direction: up
+  baseline: 0
+  target: "search returns expected matches across name/org/what/angle/tags, and at least 1 logged interaction is persisted and displayed"
+  window: story-integrate
+  source:
+    kind: sql
+    ref: "SELECT COUNT(*) FROM interactions — queried against ROLODEX_DB after the manual spot check, plus the FTS5 unit test suite"
+  verify_at: integrate
+  owner: developer
+
+references:
+  - path: .pHive/epics/standalone-app-foundation/docs/vertical-plan.md
+    relevant_excerpt: |
+      Deferred: needsFollowUp() / a dedicated "who's gone cold" view — Store
+      method exists as a stub; not wired to any UI in this plan.
+
+wireframes:
+  approved: .pHive/design/search-and-logging/wireframe.txt
+  brief: .pHive/design/search-and-logging/brief.md
+  topic: search-and-logging
+  note: "Frame0 CLI unavailable — text-based/ASCII fallback per wireframe-protocol.md. Additive to the contact-list-and-detail topic's screens — search box on List, log-interaction form + history on Detail."
+  renditions:
+    - .pHive/design/search-and-logging/wireframe.txt
+  selected: 1
