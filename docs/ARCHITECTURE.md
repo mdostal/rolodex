@@ -1,42 +1,303 @@
 # rolodex — architecture
 
-## Layers (keep them separate — same rule as gigradar)
+## This doc supersedes the old MCP-first framing
+
+Earlier versions of this document (and of README.md) described rolodex as
+"a Pantheon plugin / MCP tool" first, with a UI listed as an optional,
+last-priority line in a build-out roadmap. **That framing is no longer
+accurate and this document explicitly supersedes it**, not just reorders it
+quietly. As of the `standalone-app-foundation` epic, the primary interface to
+rolodex is the **standalone local app** — a desktop shell + local server
+hosting a real SQLite store, a first-run setup wizard, and a browser-tab UI.
+The MCP server (`src/mcp/server.ts`) still exists, is still stubbed (every
+tool body throws/returns "not implemented yet"), and remains a secondary
+integration surface to be wired up in a later epic — it is not, and is no
+longer treated as, the thing this repo builds first.
+
+## What's actually built today
+
+- A local Node HTTP server (`src/shell/server.ts`) that hosts `Store`
+  in-process and serves a browser-tab UI (`src/shell/index.html`) plus a
+  first-run setup wizard (`src/shell/wizard.html`).
+- A real `Store` (`src/lib/store.ts`, `node:sqlite`/WAL) with working
+  `list`, `upsert`, `get`, `setVerdict`, `setNextStep`, `logInteraction`,
+  `listInteractions`, and `search`. (`needsFollowUp` is still a stub —
+  see Remaining Gaps.)
+- A pluggable `SecretsAdapter` (`src/lib/secrets-adapter.ts`) backed by the
+  macOS keychain, used by the wizard and by Google sync.
+- A one-shot Google Contacts pull (`src/lib/google-sync.ts`) that seeds the
+  rolodex from the owner's Google Contacts, with local-only fields preserved
+  across the merge.
+- Search (FTS5-backed, with a LIKE-scan fallback) and interaction logging,
+  reachable from the UI and the HTTP API.
+- No login, no logout, no in-app access control of any kind. See below.
+
+## Why standalone-app-first (not MCP-first)
+
+The owner's north star (`.pHive/project-profile.yaml`) is a standalone
+desktop app — own UI, own install/setup wizard — with the MCP/Pantheon
+integration as a secondary layer added *after* the app exists, not before.
+The planning trail for this (`.pHive/epics/standalone-app-foundation/docs/design-discussion.md`)
+is explicit that shipping UI code without updating these docs would leave the
+repo self-contradictory for new contributors — hence this rewrite.
+
+## Layers
 | Layer | Lives where | Contains |
 |---|---|---|
-| **Core (generic OSS)** | this repo, `src/` | types, SQLite store + FTS, Google-sync adapter, MCP server/tools |
-| **Your layer** | env + `.local/` (gitignored) | `ROLODEX_DB` path, your Google OAuth creds/token, your data |
+| **Core (generic OSS)** | this repo, `src/` | types, SQLite store + FTS, SecretsAdapter, Google-sync adapter, desktop shell/server, wizard + UI, MCP server/tools |
+| **Your layer** | OS keychain + `~/.local/share/rolodex/` (outside the repo, gitignored) | resolved `ROLODEX_DB` path, your Google OAuth client credentials/token, your data |
 
-The core knows nothing about any specific user. Adding your credentials or moving your DB requires zero core edits.
+The core knows nothing about any specific user. Adding your credentials or
+moving your DB requires zero core edits — it's all resolved through the
+wizard, the DB-path resolver, and `SecretsAdapter`, never hardcoded or
+tracked in source.
 
 ## Data model (`src/lib/types.ts`)
-- **Contact** — `name, org, role, email, phone, met, what, angle, verdict, nextStep, tags, googleResourceName, timestamps`. `verdict` = strong / watch / referral-only / pass / none. `googleResourceName` links to Google People for idempotent sync.
-- **Interaction** — `contactId, at, note, channel` — the touch log that powers follow-up detection.
+- **Contact** — `name, org, role, email, phone, met, what, angle, verdict, nextStep, tags, googleResourceName, timestamps`. `verdict` = strong / watch / referral-only / pass / none. `googleResourceName` links to Google People for idempotent sync. `met`/`what`/`angle`/`nextStep`/`tags`/`verdict` are **local-only** — Google has no equivalent fields for any of them.
+- **Interaction** — `contactId, at, note, channel` — the touch log that (eventually) powers follow-up detection.
+
+## Desktop shell + local server (`src/shell/server.ts`)
+
+Chosen shape (saf-01): a local Node HTTP server hosting `Store` in-process,
+with an ordinary browser tab as the UI — not Electron, not Tauri. `Store`
+already runs as ordinary Node (it needs `node:sqlite`), so an ordinary Node
+process serving it needs no IPC bridge, no renderer sandboxing story, and no
+native-module rebuild risk. Electron/Tauri remain reasonable future upgrades
+if a truly native window (tray icon, offline-from-`file://`) is ever
+required; nothing here forecloses that since `Store` itself is untouched by
+this choice.
+
+Run it with `npm run shell`. It:
+- Binds to **127.0.0.1 only** — never `0.0.0.0`/all interfaces. This server
+  carries OAuth secrets during the wizard flow and full contact data
+  afterward, with zero authentication, so it must never be reachable from
+  other devices on the network.
+- Uses a fixed port (`ROLODEX_SHELL_PORT`, default 4173) as a de facto
+  single-instance lock: a second launch can't bind the port, so it can't
+  stand up a second server racing the first over the same SQLite file.
+- Serves the setup wizard until `POST /api/wizard/complete` has run, then
+  serves the main contact UI on every subsequent request. `Store` is not
+  constructed — the SQLite file is not opened or created — until wizard
+  completion (or, on an already-configured install, first request after
+  boot), so a first-run user gets to confirm/change the DB location before
+  any file is created.
+- Opens the OS default browser automatically on macOS (`open <url>`) unless
+  `ROLODEX_NO_OPEN` is set.
+
+## First-run setup wizard (`src/shell/wizard.html`, saf-04)
+
+Five screens, in order: **Welcome → Database location → Connect Google
+Contacts → Checking secure storage (SecretsAdapter capability probe) →
+Finish.** The Finish screen is what actually calls
+`POST /api/wizard/complete`, which is the real commit point — it constructs
+`Store` (opening/creating the SQLite file, running migrations) at whatever
+path the Database screen resolved, and writes a `wizard.completed` sentinel
+through `SecretsAdapter`. There is no "un-complete setup" affordance; once
+the sentinel is set, wizard mode never comes back for that install.
+
+The wizard's Google-connect step only collects and stores the OAuth client
+id/secret via `SecretsAdapter` (key `google.oauth.client`) — it does not open
+a browser for consent or talk to Google at all. The real OAuth exchange
+(browser consent, refresh-token exchange, writing `google.oauth.token`) is a
+remaining gap; see below.
 
 ## Store (`src/lib/store.ts`)
-SQLite (`node:sqlite`, WAL) with an **FTS5** virtual table over name/org/what/angle/tags so search is real, not a LIKE scan. DB defaults to `~/.local/share/rolodex/rolodex.db` (outside the repo); override with `ROLODEX_DB`. All access through the `Store` class — nothing else writes SQL. `upsert` dedups by `googleResourceName`/email and preserves `createdAt`.
+SQLite (`node:sqlite`, WAL) with an **FTS5** virtual table over
+name/org/what/angle/tags so search is real, not just a LIKE scan — except see
+the Node-version caveat below. DB defaults to
+`~/.local/share/rolodex/rolodex.db` (outside the repo); override with
+`ROLODEX_DB`, or let the wizard's Database screen resolve/persist a
+different path. All access goes through the `Store` class — nothing else
+writes SQL. `upsert` dedups by `googleResourceName` then email, and preserves
+`createdAt`.
 
-## Google sync (`src/lib/google-sync.ts`) — this is how it reaches your Gmail contacts
-Runs in *your* environment on *your* OAuth, so no third party ever holds your token.
-1. Enable **People API** in your GCP project (e.g. `personalsites-487021`).
-2. OAuth client (Desktop) or service account; creds via `GOOGLE_APPLICATION_CREDENTIALS` or a local token file (both gitignored).
+**Node-version caveat:** `node:sqlite`'s bundled SQLite build on Node 22.x
+has no `fts5` module compiled in (`no such module: fts5`, even with
+`--experimental-sqlite`). Node 23+ does have it. `Store` handles this
+gracefully: `contacts`/`interactions` tables and every non-search method
+(`list`, `get`, `upsert`, `setVerdict`, `setNextStep`, `logInteraction`,
+`listInteractions`) work identically either way. `search()` tries an FTS5
+`MATCH` query first and, if that throws (fts5 unavailable), transparently
+falls back to a `LIKE`-based scan across the same fields — unranked, but
+functionally complete. No feature is actually lost on Node 22.x; search just
+degrades from ranked to unranked.
+
+## SecretsAdapter (`src/lib/secrets-adapter.ts`)
+
+Pluggable storage for this instance's Google OAuth credentials, shaped to
+mirror the `GoogleSync` pattern below: **an interface, a factory, and a
+swappable concrete implementation.**
+
+```ts
+export interface SecretsAdapter {
+  get(key: string): Promise<string | undefined>;
+  set(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+export function createSecretsAdapter(opts?: CreateSecretsAdapterOptions): SecretsAdapter;
+export function createInMemorySecretsAdapter(): SecretsAdapter; // fake, and the fallback target
+```
+
+- **Real backend:** macOS Keychain via the `security` CLI
+  (`add/find/delete-generic-password`), invoked through
+  `child_process.execFile` with an argv array (never a shell string).
+  Deliberately **not** `keytar` (archived/unmaintained) and not a compiled
+  native module like `@napi-rs/keyring` (per-platform prebuilds are an
+  install-time risk this factory needs to avoid) — `security` ships with
+  every macOS install and needs no dependency or compilation.
+- **Fake backend:** a plain in-memory `Map`, used by tests and as the
+  automatic fallback target.
+- `createSecretsAdapter()` auto-detects: non-Darwin platforms get the
+  in-memory fake immediately (with a `console.warn`); on Darwin, if the real
+  keychain backend throws on its first call (no `security` binary, sandboxed
+  environment, etc.) the whole adapter permanently swaps to the in-memory
+  fake for the rest of the process rather than crashing the app.
+- Errors thrown from the keychain `set()` path are deliberately sanitized
+  before they can reach a log line — `security`'s own error object embeds
+  the full invoked argv (including the plaintext secret) in `.message`/`.cmd`;
+  `secrets-adapter.ts`'s `sanitizeSetError()` strips that before anything
+  downstream (including the wizard's own error UI) can see it.
+- The interface boundary exists specifically so a future OSS contribution
+  (the owner has named a `Portunus` adapter — key injection from an
+  encrypted external store) can plug in without touching `Store`, the wizard,
+  or the UI. This epic ships exactly one real backend (OS keychain); no
+  second backend is implemented yet.
+
+## Google sync (`src/lib/google-sync.ts`)
+
+Runs in *your* environment on *your* OAuth, so no third party ever holds your
+token. Shape mirrors `SecretsAdapter`: an interface, a factory, one real
+implementation.
+
+```ts
+export interface GoogleSync {
+  pull(): Promise<Contact[]>;
+  push(c: Contact): Promise<{ resourceName: string }>; // stub — see Remaining Gaps
+}
+export function createGoogleSync(opts?: CreateGoogleSyncOptions): GoogleSync;
+```
+
+1. Enable the People API in your GCP project.
+2. Create an OAuth client (Desktop); the wizard's Google-connect screen
+   saves the client id/secret under `SecretsAdapter` key `google.oauth.client`.
 3. Scope: `https://www.googleapis.com/auth/contacts`.
-4. Pull via `people.connections.list` (paginate); push via `people.createContact` / `people.updateContact`. Map `resourceName` ↔ `Contact.googleResourceName`. **Verdict/angle/next-step are local-only** (Google has no field for them) — never lost on sync.
+4. `pull()` reads the stored client credentials and OAuth token (key
+   `google.oauth.token`) from `SecretsAdapter`, then pages through
+   `people.connections.list`, mapping each `resourceName` to
+   `Contact.googleResourceName` for idempotent re-sync.
 
-## MCP surface (`src/mcp/server.ts`)
-Stdio MCP server exposing: `rolodex_upsert`, `rolodex_search`, `rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`. Add it to any agent host and the agent operates the rolodex directly.
+**One-shot pull only, today.** `POST /api/sync/google` on the shell server
+calls `pull()`, then merges each pulled contact with any existing local match
+(by `googleResourceName`, then email) before handing it to `Store.upsert()` —
+this merge (`mergeLocalOnlyFields()`) is what actually protects
+verdict/angle/nextStep/tags/met/what/createdAt from being clobbered by a
+resync; `Store.upsert()` itself has no notion of "leave this column alone"
+and always writes every field it's given. `push()` remains an explicit stub
+(`throw new Error("not implemented")`) — two-way sync is out of scope for
+this epic.
 
-## Data-integrity rules (non-negotiable)
+**Real OAuth exchange is not built yet.** The wizard only collects/stores the
+client id/secret; nothing today opens a browser for consent or writes
+`google.oauth.token`. Until a later story adds that exchange, `pull()` fails
+with an actionable error ("Google sign-in hasn't happened yet...").
+
+## MCP surface (`src/mcp/server.ts`) — secondary, not yet wired
+
+Stdio MCP server exposing `rolodex_upsert`, `rolodex_search`,
+`rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`. Every
+tool body is still a stub (`"not implemented yet"`) — this file was
+deliberately **not touched** by the standalone-app-foundation epic beyond
+keeping `Store` as the single source of truth both surfaces will eventually
+share. Wiring these tool bodies to the real `Store`/`GoogleSync` is a
+remaining gap (see below), to be picked up once the standalone app's own
+scope is stable. Run it with `npm run dev`.
+
+## Single-user, no in-app login — deliberate, not an oversight
+
+**This app has no login/logout screen, no PIN gate, no session model, and no
+in-app access control of any kind.** It is single-user-per-instance: each
+person runs their own installation against their own SQLite file. Whatever
+protection exists is **OS-account/filesystem-level** — i.e., outside this
+app entirely. If rolodex is ever run somewhere the local machine/account
+boundary isn't sufficient access control on its own (e.g. a shared host),
+that is the responsibility of whatever "super-level" system wraps and
+deploys per-user instances of it — not something this app implements
+internally. This was a deliberate decision made by the owner during this
+epic's planning (see
+`.pHive/epics/standalone-app-foundation/docs/design-discussion.md` §3), not
+an oversight or a placeholder for a later login feature. `SecretsAdapter`
+exists purely to store this instance's Google OAuth credentials — it is not,
+and does not become, a session/login mechanism.
+
+One consequence: there is no at-rest database encryption either. The SQLite
+file at `~/.local/share/rolodex/rolodex.db` (or wherever `ROLODEX_DB`/the
+wizard resolved it to) is plain, unencrypted SQLite, protected only by
+normal filesystem permissions.
+
+## Data-integrity and security posture (non-negotiable)
 1. **You own the data** — local SQLite, exportable, no lock-in.
-2. **Secrets never in the repo** — Google creds/token from env/local file, gitignored.
-3. **Local fields survive sync** — verdict/angle/next-step are never overwritten by a Google pull.
-4. **No silent guesses** — an agent leaves a field blank rather than inventing org/angle/verdict.
+2. **OAuth secrets only ever go through `SecretsAdapter`** — the OS keychain
+   via the macOS `security` CLI (not `keytar`, not a compiled native
+   module). They are never written to an environment variable, a log line,
+   or a file. `server.ts`'s wizard-Google route and `secrets-adapter.ts`'s
+   own error-sanitization both exist specifically to hold this line even on
+   the error path.
+3. **The local server binds to `127.0.0.1` only** — never reachable from
+   another device on the network, since it has zero authentication of its
+   own.
+4. **Local-only fields survive a Google sync** — `verdict`/`angle`/
+   `nextStep`/`tags`/`met`/`what`/`createdAt` are never overwritten by a
+   Google pull; `google-sync.ts`'s `mergeLocalOnlyFields()` re-attaches them
+   before every `Store.upsert()` call a sync makes.
+5. **No silent guesses** — a sync or the UI leaves a field blank rather than
+   inventing org/angle/verdict.
+6. **No in-app access control** — see above; this is deliberate, not a gap.
 
-## Build-out roadmap
-- [ ] Implement `Store` bodies (upsert+FTS reindex, search MATCH, needsFollowUp, setters, logInteraction) + tests.
-- [ ] Implement Google People pull/push (googleapis) with owner OAuth + dedup.
-- [ ] Wire the MCP tool bodies to the store + sync.
-- [ ] CSV importer for a LinkedIn/Google Contacts export (seed the rolodex).
-- [ ] Optional: a tiny read-only web/board view rendered from the DB.
+## Build-out status
+
+Done (this epic, `standalone-app-foundation`):
+- [x] Desktop shell + local server, bound to loopback, real `Store` wired in.
+- [x] `Store` bodies: `list`, `upsert`, `get`, `setVerdict`, `setNextStep`,
+      `logInteraction`, `listInteractions`, `search` (FTS5 + LIKE fallback).
+- [x] `SecretsAdapter`: interface + factory + macOS-keychain implementation +
+      in-memory fake, with automatic fallback and error sanitization.
+- [x] Five-screen first-run setup wizard, no login/logout anywhere.
+- [x] One-shot Google Contacts pull, with local-only-fields-survive-sync
+      guarantee.
+- [x] Search (UI + API) and interaction logging (UI + API).
+- [x] Docs rewrite (this file + README.md) and CI (this story).
+
+Remaining gaps (see
+`.pHive/epics/standalone-app-foundation/docs/vertical-plan.md` §4 "Deferred
+Items" for the authoritative list):
+- [ ] Google `push()` / full two-way sync — pull-only today; no real OAuth
+      consent-and-token exchange exists yet either (the wizard only stores
+      client id/secret).
+- [ ] MCP tool bodies (`rolodex_upsert`, `rolodex_search`,
+      `rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`)
+      — still all stubs; wiring them to the real `Store`/`GoogleSync` is a
+      future epic.
+- [ ] Enrichment-on-add (public-info lookup to speed up capturing
+      org/role/what-they-do) — deferred; needs to reconcile with the
+      "no silent guesses" convention before it's designed.
+- [ ] `Store.needsFollowUp()` and a "who's gone cold" UI — `Store` method is
+      still a stub (`throw new Error("not implemented")`); not wired to any
+      screen.
+- [ ] A dedicated settings/account screen (re-auth on token expiry, change
+      `ROLODEX_DB` after first run, re-run the wizard).
+- [ ] Portunus (or any second) `SecretsAdapter` backend — interface is open,
+      only one real implementation ships.
+- [ ] Cross-platform packaging/distribution — developed and verified on
+      macOS only so far.
+- [ ] Full at-rest database encryption — see "Single-user, no in-app login"
+      above; not planned as an in-app feature.
+- [ ] Comprehensive loading/error/toast state coverage across the Contact UI
+      beyond each slice's basic error handling.
 
 ## Owner note (Mathew)
-This is the "DIY + MCP, owns-your-data" answer from the contacts CBA (`command-center/dostal-tech/CRM-CBA.md`) — cheaper and more integrable than a hosted CRM, and it doubles as the People-API bridge to me@mdostal's Google Contacts. Seed it from your Google Contacts via `rolodex_sync_google` once the sync is implemented.
+This is the "DIY, owns-your-data" answer from the contacts CBA
+(`command-center/dostal-tech/CRM-CBA.md`) — cheaper and more integrable than
+a hosted CRM, and it doubles as the People-API bridge to me@mdostal's Google
+Contacts. Run `npm run shell`, complete the wizard, then use "Sync now" (or
+`POST /api/sync/google`) to pull in your Google Contacts once Google sign-in
+is connected.

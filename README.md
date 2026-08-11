@@ -1,30 +1,79 @@
 # rolodex
 
-**Your relationship rolodex, as an MCP tool.** Own your contacts (local SQLite), sync them with your Google Contacts, and give your AI agents a rolodex they can read, search, and keep warm. Configure it once per install; add it as a tool and it's *yours* — no bespoke integration each time.
-
-Built to be a Pantheon plugin / MCP tool in the same spirit as the rest of the suite (gigradar, allergy-locator): a **generic core** you configure, not a script you edit.
+**Your relationship rolodex, as a standalone app you run locally.** Own your
+contacts (local SQLite), sync them with your Google Contacts, and keep track
+of who you met, the verdict, and the next step — searchable, with a logged
+history of every touchpoint.
 
 ## Why this exists
-A static contacts file is a goldfish — nothing maintains it. This makes the rolodex a **tool your agents operate**: they log who you met, set the verdict + next step, search it, and surface who's gone cold — so nobody good slips. And because it syncs to Google Contacts on *your* credentials, it's also how an agent reaches your Gmail contacts without anyone else holding your token.
+A static contacts file is a goldfish — nothing maintains it. Rolodex gives
+you a working contact list you actually use: log who you met, set a verdict
+and next step, search it, and (soon) see who's gone cold. Because it syncs
+with Google Contacts on *your* credentials, it also reaches your Gmail
+contacts without anyone else holding your token.
 
-## The shape
-- **You own the data** — SQLite (FTS5 full-text search), path outside the repo (`ROLODEX_DB`). Export any time; no lock-in. *(FTS5 search needs Node 23+; on Node 22.x `node:sqlite` ships without the fts5 module, so search degrades gracefully — contacts and interactions still work.)*
-- **Google People API sync** — two-way with your Google Contacts (verdict/angle/next-step stay local; name/email/phone sync). Runs on *your* OAuth, sourced from env/local token (gitignored).
-- **MCP tools** — `rolodex_upsert`, `rolodex_search`, `rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`. Add the server to any agent host and it just works.
-- **Config per-install** — nothing about any one user lives in the core; your DB path + Google creds are your layer.
-
-## Relationship model (partner/network focused)
-Each contact carries: `org`, `role`, how you `met` them, `what` they do, the partnership `angle`, a **verdict** (`strong` / `watch` / `referral-only` / `pass`), and the ONE **next step**. Interactions are logged so `rolodex_followups` can surface anyone with a next step who's gone quiet.
-
-## Install (add it as a tool)
-```jsonc
-// in your MCP host config (Claude Desktop, Pantheon, etc.)
-{ "mcpServers": { "rolodex": { "command": "npx", "args": ["-y", "rolodex-mcp"] } } }
+## Run it
+```sh
+npm install
+npm run shell
 ```
-Set `ROLODEX_DB` and your Google OAuth (see docs/ARCHITECTURE.md → Google sync setup).
+This starts a local server on `http://localhost:4173` (loopback only — never
+reachable from other devices) and opens it in your browser. On first run
+you'll walk through a five-screen setup wizard: pick where your database
+lives, optionally connect Google Contacts (paste an OAuth client id/secret),
+a quick check that secure credential storage works, and finish — no account
+to create, no login screen, straight into your (empty) contact list. From
+there: add a contact, search, log interactions, and pull in your Google
+Contacts once connected.
+
+**There is no login/logout in this app.** It's single-user-per-instance —
+whatever access control you need is your OS account / filesystem
+permissions, not anything rolodex enforces itself. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for why that's a deliberate
+decision, not a gap.
+
+### The shape
+- **You own the data** — SQLite, stored at `~/.local/share/rolodex/rolodex.db`
+  by default (or wherever the wizard's Database screen points it, or
+  `ROLODEX_DB`). Export any time; no lock-in. Full-text search (FTS5) needs
+  **Node 23+**; on Node 22.x it degrades gracefully to a slower but fully
+  functional LIKE-based scan — contacts and interactions work identically
+  either way.
+- **Google Contacts sync** — one-shot pull today (push/two-way is a planned
+  follow-up), deduped by resource name/email. Verdict/angle/next-step are
+  local-only and always survive a sync. Runs on *your* OAuth, stored via the
+  OS keychain (`SecretsAdapter`) — never an env var, log, or file.
+- **Search + interaction logging** — find a contact by name/org/what-they-do/
+  angle/tags, and log calls/emails/meetings against them.
+
+### Relationship model
+Each contact carries: `org`, `role`, how you `met` them, `what` they do, the
+partnership `angle`, a **verdict** (`strong` / `watch` / `referral-only` /
+`pass` / `none`), and a **next step**. Interactions are logged so you can see
+the full touch history per contact.
+
+## MCP server (secondary, not yet wired up)
+`src/mcp/server.ts` is a stdio MCP server exposing `rolodex_upsert`,
+`rolodex_search`, `rolodex_followups`, `rolodex_log_interaction`,
+`rolodex_sync_google` — meant for adding rolodex as a tool to an agent host.
+Every tool body is still a stub today; this is a secondary integration
+surface planned for after the standalone app, not the primary way to use
+rolodex right now. Run it (once implemented) with `npm run dev`.
+
+## Development
+```sh
+npm run typecheck   # tsc --noEmit
+npm test            # vitest
+npm run build        # compile to dist/
+```
 
 ## Status
-`v0.1.0` — scaffold. Types, the SQLite/FTS store contract, the Google People sync adapter, and the MCP tool surface are defined and wired; the method bodies are the build-out (marked `not implemented`). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+`v0.1.0` — the standalone app is the primary, working surface: shell +
+server, setup wizard, contact CRUD, search, interaction logging, and a
+one-shot Google Contacts pull all work end to end. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and
+the list of remaining gaps (Google push/two-way sync, the MCP tool bodies,
+enrichment-on-add, a "who's gone cold" view).
 
 ## License
 MIT © 2026 Mathew Dostal
