@@ -1,7 +1,7 @@
 id: saf-02-core-crud
 epic: standalone-app-foundation
 title: Add and view a contact end-to-end
-status: pending
+status: in_progress
 complexity: high
 methodology: classic
 depends_on: [saf-01-shell-store-bridge]
