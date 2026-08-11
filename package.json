@@ -1,0 +1,25 @@
+{
+  "name": "rolodex",
+  "version": "0.1.0",
+  "private": false,
+  "license": "MIT",
+  "description": "Open-source relationship rolodex as an MCP tool: own your contacts (SQLite), sync with Google Contacts, and give your AI agents a rolodex they can read, search, and update. Configured per-install; add it as a tool and it's yours.",
+  "type": "module",
+  "bin": { "rolodex-mcp": "dist/mcp/server.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/mcp/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0",
+    "vitest": "^2.1.0"
+  }
+}
