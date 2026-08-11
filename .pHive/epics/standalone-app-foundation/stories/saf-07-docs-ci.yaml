@@ -1,7 +1,7 @@
 id: saf-07-docs-ci
 epic: standalone-app-foundation
 title: Documentation rewrite and CI
-status: pending
+status: in_progress
 complexity: low
 methodology: classic
 depends_on: [saf-01-shell-store-bridge, saf-02-core-crud, saf-03-secrets-adapter, saf-04-setup-wizard, saf-05-google-sync, saf-06-search-logging]
