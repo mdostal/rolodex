@@ -125,6 +125,7 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
   const HERE = path.dirname(fileURLToPath(import.meta.url));
   const indexHtmlPath = opts.indexHtmlPath ?? path.join(HERE, "index.html");
   const wizardHtmlPath = opts.wizardHtmlPath ?? path.join(HERE, "wizard.html");
+  const assetsDir = path.join(HERE, "assets");
   const homeDir = opts.homeDir;
   const secrets = opts.secrets ?? createSecretsAdapter();
   const secretsCapabilityFactory = opts.secretsCapabilityFactory ?? createSecretsAdapter;
@@ -277,6 +278,50 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const parts = url.pathname.split("/").filter(Boolean); // e.g. ["api","contacts",":id"]
+
+      // GET /assets/* — static assets (currently just the favicon) shared by
+      // both the wizard and the main app shells. Deliberately NOT gated
+      // behind isWizardCompleted(): the favicon has to load on both
+      // wizard.html and index.html regardless of setup state. This is a
+      // single flat directory with an extension allowlist, not a
+      // general-purpose static file server — no subdirectories are expected.
+      if (req.method === "GET" && parts[0] === "assets" && parts.length === 2) {
+        const ASSET_CONTENT_TYPES: Record<string, string> = {
+          ".svg": "image/svg+xml",
+          ".png": "image/png",
+          ".ico": "image/x-icon",
+        };
+        let assetName: string;
+        try {
+          assetName = decodeURIComponent(parts[1]!);
+        } catch {
+          // Malformed percent-encoding (e.g. a lone invalid "%ff") — treat
+          // like any other not-found asset rather than letting it fall
+          // through to the outer catch as a 500.
+          res.writeHead(404, { "content-type": "text/plain" });
+          res.end("not found");
+          return;
+        }
+        const contentType = ASSET_CONTENT_TYPES[path.extname(assetName)];
+        // Reject anything without a recognized extension or containing ".."
+        // (defense in depth — decodeURIComponent can turn an encoded
+        // traversal segment into one that would otherwise resolve outside
+        // assetsDir; a literal "/" can't reach here since `parts` is already
+        // split on "/").
+        if (contentType && !assetName.includes("..")) {
+          try {
+            const data = await readFile(path.join(assetsDir, assetName));
+            res.writeHead(200, { "content-type": contentType, "cache-control": "public, max-age=3600" });
+            res.end(data);
+            return;
+          } catch {
+            // fall through to 404 below
+          }
+        }
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("not found");
+        return;
+      }
 
       if (parts[0] === "api" && parts[1] === "wizard") {
         await handleWizardRoute(req, res, parts.slice(2), url);
