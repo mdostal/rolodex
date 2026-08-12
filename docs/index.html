@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rolodex — a relationship rolodex you actually own</title>
+<meta name="description" content="Local-first relationship tracking. Your contacts live in your own SQLite file, not someone else's server. Open source, MCP-ready.">
+<meta property="og:title" content="rolodex">
+<meta property="og:description" content="Local-first relationship tracking. Your contacts live in your own SQLite file, not someone else's server.">
+<meta property="og:type" content="website">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #E8EAE3;
+    --surface: #F4F5EF;
+    --surface-2: #DEE1D6;
+    --ink: #1C2420;
+    --ink-soft: #55605A;
+    --border: #C7C2AC;
+    --brass: #92651E;
+    --brass-soft: rgba(146, 101, 30, 0.12);
+    --shadow: rgba(28, 36, 32, 0.16);
+
+    --font-display: "Fraunces", Georgia, serif;
+    --font-body: "Source Sans 3", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1A211D;
+      --surface: #212B24;
+      --surface-2: #29342C;
+      --ink: #E9EAE3;
+      --ink-soft: #A6B0A7;
+      --border: #3A483E;
+      --brass: #D19B4C;
+      --brass-soft: rgba(209, 155, 76, 0.16);
+      --shadow: rgba(0, 0, 0, 0.4);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation: none !important; transition: none !important; }
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--brass); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; border-radius: 2px; }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  header.site {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  header.site .wrap { display: flex; align-items: center; justify-content: space-between; padding-top: 16px; padding-bottom: 16px; }
+  .wordmark { display: flex; align-items: center; gap: 10px; font-family: var(--font-display); font-weight: 600; font-size: 1.25rem; text-decoration: none; color: var(--ink); }
+  .wordmark img { width: 28px; height: 28px; }
+  nav.site-links { display: flex; gap: 24px; font-family: var(--font-mono); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  nav.site-links a { text-decoration: none; color: var(--ink-soft); }
+  nav.site-links a:hover { color: var(--brass); }
+
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--brass); display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px;
+  }
+  .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--brass); display: inline-block; }
+
+  section.hero { padding: 88px 0 40px; }
+  h1 {
+    font-family: var(--font-display); font-weight: 600; font-size: clamp(2.4rem, 5vw, 3.6rem);
+    line-height: 1.06; margin: 0 0 22px; text-wrap: balance; max-width: 15ch;
+  }
+  .lede { font-size: 1.2rem; color: var(--ink-soft); max-width: 52ch; margin: 0 0 34px; text-wrap: pretty; }
+
+  .cta-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 64px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 12px 22px; border-radius: 8px;
+    font-family: var(--font-body); font-weight: 600; font-size: 0.98rem; text-decoration: none;
+    border: 1px solid transparent; transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: var(--brass); color: #F4F1E6; box-shadow: 0 2px 0 var(--shadow); }
+  .btn-secondary { background: transparent; color: var(--ink); border-color: var(--border); }
+  .btn-secondary:hover { border-color: var(--brass); color: var(--brass); }
+
+  .card-frame {
+    position: relative; margin: 0 auto; max-width: 920px;
+    border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
+    box-shadow: 0 24px 60px -20px var(--shadow); overflow: hidden;
+    transform: rotate(-0.6deg);
+  }
+  .card-frame .chrome {
+    display: flex; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface-2);
+  }
+  .card-frame .chrome span { width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+  .card-frame img { display: block; width: 100%; height: auto; }
+
+  section.features { padding: 88px 0; }
+  .section-head { max-width: 60ch; margin-bottom: 48px; }
+  .section-head .eyebrow { margin-bottom: 12px; }
+  h2 { font-family: var(--font-display); font-weight: 600; font-size: clamp(1.8rem, 3.2vw, 2.4rem); margin: 0 0 14px; text-wrap: balance; }
+  .section-head p { color: var(--ink-soft); font-size: 1.05rem; margin: 0; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  @media (max-width: 800px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+
+  .index-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 22px 20px; position: relative;
+  }
+  .index-card::before {
+    content: ""; position: absolute; top: 0; left: 18px; right: 18px; height: 2px; background: var(--brass);
+    border-radius: 0 0 2px 2px;
+  }
+  .index-card .tag {
+    font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--brass); background: var(--brass-soft); display: inline-block; padding: 3px 8px; border-radius: 5px; margin-bottom: 12px;
+  }
+  .index-card h3 { font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; margin: 0 0 8px; }
+  .index-card p { margin: 0; color: var(--ink-soft); font-size: 0.95rem; }
+
+  section.detail { padding: 40px 0 96px; }
+  .detail-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  @media (max-width: 860px) { .detail-layout { grid-template-columns: 1fr; } }
+  .detail-layout .copy p { color: var(--ink-soft); font-size: 1.02rem; }
+  .detail-layout ul { padding-left: 0; list-style: none; margin: 20px 0 0; display: flex; flex-direction: column; gap: 10px; }
+  .detail-layout li { padding-left: 22px; position: relative; font-size: 0.98rem; }
+  .detail-layout li::before { content: "◆"; position: absolute; left: 0; top: 1px; color: var(--brass); font-size: 0.7rem; }
+  .detail-layout .card-frame { transform: rotate(0.6deg); max-width: 100%; }
+
+  section.agents {
+    padding: 72px 0; background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  }
+  .agents-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 48px; align-items: start; }
+  @media (max-width: 860px) { .agents-grid { grid-template-columns: 1fr; } }
+  .tool-list { display: flex; flex-direction: column; gap: 12px; font-family: var(--font-mono); font-size: 0.88rem; }
+  .tool-list div { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+  .tool-list strong { color: var(--brass); }
+
+  section.start { padding: 88px 0; }
+  pre {
+    background: var(--ink); color: var(--bg); border-radius: 10px; padding: 24px 26px;
+    font-family: var(--font-mono); font-size: 0.9rem; line-height: 1.8; overflow-x: auto; margin: 0;
+    box-shadow: 0 20px 44px -24px var(--shadow);
+  }
+  @media (prefers-color-scheme: dark) { pre { background: #0F1310; } }
+  pre .comment { color: #8A9A8C; }
+  pre .prompt { color: var(--brass); }
+
+  footer.site { border-top: 1px solid var(--border); padding: 40px 0 56px; }
+  .footer-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; }
+  .footer-row p { margin: 0; color: var(--ink-soft); font-size: 0.9rem; }
+  .footer-links { display: flex; gap: 20px; font-size: 0.9rem; }
+  .footer-links a { text-decoration: none; }
+  .footer-links a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="wordmark" href="#top">
+      <img src="assets/favicon.svg" alt="" width="28" height="28">
+      rolodex
+    </a>
+    <nav class="site-links">
+      <a href="https://github.com/mdostal/rolodex">GitHub</a>
+      <a href="https://github.com/mdostal/rolodex/releases">Releases</a>
+      <a href="https://github.com/mdostal/rolodex#readme">Docs</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" id="top">
+    <div class="wrap">
+      <span class="eyebrow">Open source · Local-first · MIT</span>
+      <h1>Your rolodex. Your machine. Your rules.</h1>
+      <p class="lede">
+        A relationship tracker that runs on your computer, not someone else's
+        server. Contacts, verdicts, next steps, and touch history live in
+        one SQLite file you own — with an optional pull from Google
+        Contacts, and an MCP surface if you want an AI agent to read and
+        update it too.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/mdostal/rolodex">View on GitHub</a>
+        <a class="btn btn-secondary" href="https://github.com/mdostal/rolodex#readme">Read the docs</a>
+      </div>
+      <div class="card-frame">
+        <div class="chrome"><span></span><span></span><span></span></div>
+        <img src="assets/screenshot-list.png" alt="rolodex contacts list, showing four contacts with verdict and next-step columns" loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <section class="features">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">What it actually does</span>
+        <h2>Not a CRM. A rolodex with judgment built in.</h2>
+        <p>Every install is one person's own data. No accounts, no team seats, no server to trust.</p>
+      </div>
+      <div class="grid">
+        <div class="index-card">
+          <span class="tag">Storage</span>
+          <h3>Local SQLite, full stop</h3>
+          <p>Your contacts live in one file on your own disk. No hosted database, no vendor to go out of business.</p>
+        </div>
+        <div class="index-card">
+          <span class="tag">Judgment</span>
+          <h3>Verdict &amp; next step</h3>
+          <p>Every contact carries a real read on the relationship — strong, watch, referral-only, pass — plus what to do next.</p>
+        </div>
+        <div class="index-card">
+          <span class="tag">Follow-up</span>
+          <h3>Who's gone cold</h3>
+          <p>A configurable follow-up window surfaces contacts with an open next step and no recent touch.</p>
+        </div>
+        <div class="index-card">
+          <span class="tag">Sync</span>
+          <h3>Google Contacts, one-way</h3>
+          <p>Pull from Google Contacts without losing your own notes — verdict, angle, and next step always survive a sync.</p>
+        </div>
+        <div class="index-card">
+          <span class="tag">Secrets</span>
+          <h3>OS Keychain, not a .env</h3>
+          <p>OAuth credentials live in your operating system's keychain through a pluggable adapter — never a file, env var, or log.</p>
+        </div>
+        <div class="index-card">
+          <span class="tag">Agents</span>
+          <h3>MCP-ready</h3>
+          <p>Add rolodex to Claude or any MCP host and an agent can search, log, and update your rolodex directly.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="detail">
+    <div class="wrap">
+      <div class="detail-layout">
+        <div class="card-frame">
+          <div class="chrome"><span></span><span></span><span></span></div>
+          <img src="assets/screenshot-detail.png" alt="A contact detail screen showing organization, role, verdict, next step, tags, and interaction history" loading="lazy">
+        </div>
+        <div class="copy">
+          <span class="eyebrow">Beyond a name and email</span>
+          <h2>Every contact carries the whole relationship</h2>
+          <p>
+            How you met, what they do, the angle of the partnership, and a
+            running log of every call, email, and meeting — searchable,
+            and never silently overwritten by a sync.
+          </p>
+          <ul>
+            <li>Org, role, and how you met</li>
+            <li>Full-text search across every field</li>
+            <li>Interaction history with timestamps and channel</li>
+            <li>Tags for your own categorization</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="agents">
+    <div class="wrap">
+      <div class="agents-grid">
+        <div>
+          <span class="eyebrow">Secondary surface</span>
+          <h2>Let your AI agents use it too</h2>
+          <p style="color: var(--ink-soft); max-width: 52ch;">
+            The standalone app is the primary way to use rolodex — but a
+            stdio MCP server ships alongside it, wired to the exact same
+            store. Add it to Claude Code or any MCP host, and a
+            <a href="https://github.com/mdostal/rolodex/blob/main/.claude/skills/rolodex/SKILL.md">bundled skill</a>
+            teaches the agent how to use it well: search before creating,
+            never fabricate a match, respect the verdict enum.
+          </p>
+        </div>
+        <div class="tool-list">
+          <div><strong>rolodex_upsert</strong> — add or update a contact</div>
+          <div><strong>rolodex_search</strong> — full-text search</div>
+          <div><strong>rolodex_followups</strong> — who's gone cold</div>
+          <div><strong>rolodex_log_interaction</strong> — log a touch</div>
+          <div><strong>rolodex_sync_google</strong> — one-way pull from Google Contacts</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="start">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Get started</span>
+        <h2>Running locally takes a minute</h2>
+        <p>Requires Node ≥ 22. No account, no signup, no install script phoning home.</p>
+      </div>
+      <pre><span class="comment"># clone and install</span>
+<span class="prompt">$</span> git clone https://github.com/mdostal/rolodex.git
+<span class="prompt">$</span> cd rolodex &amp;&amp; npm install
+
+<span class="comment"># run the app</span>
+<span class="prompt">$</span> npm run shell
+<span class="comment"># → http://127.0.0.1:PORT, first-run wizard walks you through the rest</span></pre>
+    </div>
+  </section>
+</main>
+
+<footer class="site">
+  <div class="wrap footer-row">
+    <p>MIT licensed. Built by Mathew Dostal.</p>
+    <div class="footer-links">
+      <a href="https://github.com/mdostal/rolodex/blob/main/LICENSE">License</a>
+      <a href="https://github.com/mdostal/rolodex/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/mdostal/rolodex/releases/tag/v0.3.0">v0.3.0</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
