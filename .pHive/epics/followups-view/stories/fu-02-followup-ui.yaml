@@ -1,0 +1,118 @@
+id: fu-02-followup-ui
+epic: followups-view
+title: Follow-up filter toggle + settings panel UI
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [fu-01-followup-config-and-query]
+
+description: |
+  Surface fu-01's needsFollowUp() query and settings in the shell UI: a
+  "Needs follow-up (N)" toggle button in the list view's header (between
+  the search box and "Sync now"), and a minimal settings panel (gear icon
+  in the topbar) for editing the follow-up window/grace-period values.
+
+  Toggle behavior: off = outline button, on = filled/primary button
+  (reusing existing button styles, no new component). Count badge always
+  visible in the label regardless of on/off state. Search and the toggle
+  compose (intersection), not reset each other. A distinct empty state
+  ("Nobody needs a follow-up right now.") when toggled on with zero
+  matches — not the existing "add your first contact" or "no search
+  results" empty states, both of which would be wrong here.
+
+  This settings panel is explicitly the first, narrow seed of the fuller
+  settings screen already named as a Deferred Item in
+  standalone-app-foundation's vertical-plan.md (Google reconnect, DB
+  location change) — scoped here to just the two follow-up fields, not
+  the full screen.
+
+acceptance_criteria:
+  - "Given the list view, when the follow-up toggle is off, then it shows an outline button labeled 'Needs follow-up (N)' with the real count from a live query"
+  - "Given the toggle is clicked, when it turns on, then the list re-fetches from GET /api/contacts/needs-follow-up and renders only those contacts, and the button becomes filled/primary styled"
+  - "Given the toggle is on and the user types in the search box, then results are filtered to the intersection (needs-follow-up AND matches search), not one resetting the other"
+  - "Given the toggle is on and zero contacts match, then a distinct empty-state message renders ('Nobody needs a follow-up right now.'), not the empty-DB or no-search-results states"
+  - "Given the settings panel is opened, when the user changes windowDays or graceDays and saves, then PUT /api/settings/follow-up persists the new values and a subsequent toggle-on fetch reflects them"
+
+steps:
+  - id: research
+    description: Confirm fu-01's final API shape (route paths, response format for needs-follow-up and settings/follow-up) before wiring the UI against it
+    agent: researcher
+  - id: ui-design
+    description: Delegate to /design for wireframes (atomic external call; see skills/design/SKILL.md). Covers the toggle button states, the three list-view empty states (existing two plus the new toggled-on-zero-results state), and the settings panel.
+    agent: ui-designer
+    delegates_to: design
+    depends_on: [research]
+  - id: implement
+    description: Implement the toggle button, its data-flow (re-fetch on toggle, compose with search), the new empty state, and the settings panel (open/edit/save) in src/shell/index.html
+    agent: developer
+    depends_on: [ui-design]
+    inputs:
+      - source: step_output
+        step: ui-design
+        key: wireframe_brief
+  - id: test
+    description: Write and pass tests covering the toggle's data-flow and empty-state logic where testable at this layer; manual smoke test for the rest (live browser)
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review implementation and tests for correctness and convention compliance
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/shell/index.html
+      purpose: "renderList()/runSearch() closures to extend (per tpm's H/V-equivalent review finding: this touches real existing data-flow, not just adding a button); existing .btn/.btn.primary styles to reuse for on/off toggle states"
+
+files_to_modify:
+  - file: src/shell/index.html
+    change: "add follow-up toggle button + data-flow, third empty state, settings panel"
+
+design_decisions:
+  - decision: "Toggle and search compose (intersection), never reset each other"
+    rationale: "Matches user mental model of two active filters; decided during design-discussion review."
+  - decision: "Settings panel is scoped to exactly two fields, not the full deferred settings screen"
+    rationale: "Keeps this epic Small; the fuller settings screen (Google reconnect, DB location) stays a separate future epic per vertical-plan.md's Deferred Items."
+
+risks:
+  - severity: medium
+    description: "Toggle integration touches existing render/search data-flow in index.html more than a typical additive UI change (tpm review finding from design-discussion gate)"
+    mitigation: "ui-design step produces a concrete brief for the three-empty-state + toggle-state behavior before implementation starts, so the developer isn't improvising the data-flow contract"
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md/docs/ARCHITECTURE.md could note the follow-up feature and settings table exist — small optional addition, not required to block this story"
+
+metric:
+  applies: true
+  name: contacts_flaggable_via_followup_toggle
+  direction: up
+  baseline: 0
+  target: "toggling the follow-up filter on correctly surfaces at least 1 real overdue contact (seeded via a contact with a stale nextStep) and the count badge matches"
+  window: story-integrate
+  source:
+    kind: manual
+    ref: "live browser smoke test per acceptance criteria above"
+  verify_at: integrate
+  owner: developer
+
+references:
+  - path: .pHive/epics/followups-view/docs/design-discussion.md
+    relevant_excerpt: |
+      §3 step 5 — toggle specifics (position, visual states, count badge,
+      search composition, empty state) resolved after team review.
+
+wireframes:
+  approved: .pHive/design/followups-toggle-and-settings/wireframe.txt
+  brief: .pHive/design/followups-toggle-and-settings/brief.md
+  topic: followups-toggle-and-settings
+  rendered_review: https://claude.ai/code/artifact/b469d2df-c640-4317-b70f-cb380818f76c
+  note: "Frame0 CLI unavailable — text-based/ASCII fallback per wireframe-protocol.md, additionally rendered as a visual Artifact per owner preference (ASCII-only wireframes aren't actually visible/reviewable)."
+  renditions:
+    - .pHive/design/followups-toggle-and-settings/wireframe.txt
+  selected: 1

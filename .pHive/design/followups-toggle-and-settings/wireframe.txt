@@ -1,0 +1,66 @@
+Follow-up toggle + settings panel — rolodex
+Text-based ASCII mockups (Frame0 CLI unavailable — documented fallback)
+Visual language read directly from src/shell/index.html — no invented components.
+
+=== 1. Header row — toggle OFF (default) ===
+
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│  Contacts                                                                                   │
+│  42 contacts     🔍[ Search name, org, notes, tags…      ]  ( Needs follow-up (3) )  ( Sync now ) │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+                        ^search box, unchanged        ^NEW: toggle, outline    ^existing, unchanged
+                                                        style (button.secondary)
+
+=== 2. Header row — toggle ON ===
+
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│  Contacts                                                                                   │
+│  3 contacts      🔍[ Search name, org, notes, tags…      ]  [[ Needs follow-up (3) ]]  ( Sync now ) │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+                        search still live, composes         ^now filled/primary
+                        with the filter (intersection)         (default button style)
+
+Legend: ( Label ) = outline/secondary button, [[ Label ]] = filled/primary button
+
+=== 3. Third empty state (toggle ON, zero matches) ===
+
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│  Contacts                                                                                   │
+│  0 contacts      🔍[ Search name, org, notes, tags…      ]  [[ Needs follow-up (0) ]]  ( Sync now ) │
+├──────────────────────────────────────────────────────────────────────────────────────────┤
+│                                              ✅                                              │
+│                              Nobody needs a follow-up right now.                            │
+│                   Contacts with an overdue next step will show up here.                     │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+
+  Compare against the two empty states that already exist:
+  EXISTING empty DB:        👥  "No contacts yet" + [+ Add contact] CTA
+  EXISTING no search match: 🔍  "No matches" + retry copy, no CTA
+  NEW toggle-zero:          ✅  "Nobody needs a follow-up right now." — no CTA (this is a
+                                 good state, not a call to action)
+
+=== 4. Settings panel (open state, anchored under the gear icon) ===
+
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│  rolodex                                                          ( ⚙ )   [[ + Add contact ]] │
+└───────────────────────────────────────────────────────────────────┬────────────────────────┘
+                                                                      │
+                                                    ┌─────────────────▼───────────────┐
+                                                    │ Follow-up settings               │
+                                                    ├───────────────────────────────────┤
+                                                    │ Follow-up window (days)           │
+                                                    │ ┌───────────────────────────┐     │
+                                                    │ │ 30                        │     │
+                                                    │ └───────────────────────────┘     │
+                                                    │                                    │
+                                                    │ Grace period (days)               │
+                                                    │ ┌───────────────────────────┐     │
+                                                    │ │ 14                        │     │
+                                                    │ └───────────────────────────┘     │
+                                                    │                                    │
+                                                    │                 ( Cancel )  [[ Save ]] │
+                                                    └───────────────────────────────────┘
+
+Panel reuses: border/radius/padding from .log-interaction-form; label/input styling
+from .form-field; Cancel/Save row from .form-actions; error state from
+.form-error-banner — no new panel CSS beyond the absolute-position anchor.

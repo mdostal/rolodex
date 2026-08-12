@@ -1,0 +1,110 @@
+id: fu-01-followup-config-and-query
+epic: followups-view
+title: Follow-up config (settings table) + real needsFollowUp() query
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Implement Store.needsFollowUp() for real (currently a stub that throws
+  "not implemented" — the last unimplemented piece of the original Store
+  interface), backed by a new configurable settings mechanism rather than
+  hardcoded numbers. A contact needs follow-up when it has a nextStep set,
+  is older than the configured grace period, and has no interaction within
+  the configured window (or no interaction at all).
+
+  Adds a new `settings` key-value table (additive, no changes to existing
+  tables), Store.getSetting/setSetting plus typed getFollowUpConfig/
+  setFollowUpConfig wrappers, and two new API routes: GET
+  /api/contacts/needs-follow-up (optional withinDays/graceDays query-param
+  overrides) and GET/PUT /api/settings/follow-up.
+
+  Defaults are seeded lazily on first read (windowDays: 30, graceDays: 14) —
+  set by a quorum (median) of 5 differing-opinion personas during planning,
+  not a single guess. See design-discussion.md §7 for the full breakdown.
+
+acceptance_criteria:
+  - "Given a contact with a nextStep set, no interactions, and older than the grace period, when needsFollowUp() is called, then it is included in the result"
+  - "Given a contact with a nextStep set and an interaction logged within the configured window, when needsFollowUp() is called, then it is excluded"
+  - "Given a contact with no nextStep set, when needsFollowUp() is called, then it is excluded regardless of interaction history"
+  - "Given a contact created more recently than the configured grace period, when needsFollowUp() is called, then it is excluded even if it has a nextStep and no interactions"
+  - "Given no settings row exists yet, when getFollowUpConfig() is called, then it returns and persists the quorum defaults (windowDays: 30, graceDays: 14)"
+  - "Given PUT /api/settings/follow-up with a non-positive-integer value, then it returns 400 and does not persist"
+  - "Given GET /api/contacts/needs-follow-up?withinDays=N&graceDays=N, then the query params override the persisted settings for that call only, without changing the stored default"
+
+steps:
+  - id: research
+    description: Confirm current Store schema/migrate() structure and server.ts's existing route/validation patterns (MalformedJsonError, verdict-enum validation) before adding new ones
+    agent: researcher
+  - id: implement
+    description: Add the settings table + get/set methods, real needsFollowUp() query (correlated-subquery or LEFT JOIN + MAX(at) GROUP BY, NULL-last-interaction sorts as oldest), and the two new server routes
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Write and pass unit tests for needsFollowUp() (all acceptance criteria above) and settings get/set/lazy-seed, plus server route tests
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review implementation and tests for correctness, SQL query soundness, and convention compliance
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/lib/store.ts
+      purpose: "needsFollowUp() stub at line 194 to implement; migrate() at lines 18-49 to extend with the settings table; listInteractions() at line 231 shows the established query style"
+    - path: src/shell/server.ts
+      purpose: "Manual path-segment routing style, readJsonBody/MalformedJsonError (400) pattern, and the verdict-enum validation pattern (400 on invalid input) to mirror for the new routes"
+
+files_to_modify:
+  - file: src/lib/store.ts
+    change: "add settings table to migrate(); implement needsFollowUp(); add getSetting/setSetting/getFollowUpConfig/setFollowUpConfig"
+  - file: src/shell/server.ts
+    change: "add GET /api/contacts/needs-follow-up and GET/PUT /api/settings/follow-up routes"
+
+code_examples:
+  - title: Existing stub contract to satisfy
+    file: src/lib/store.ts
+    snippet: |
+      /** Contacts with a nextStep set and no recent interaction — "don't let them go cold". */
+      needsFollowUp(_withinDays = 30): Contact[] { throw new Error("not implemented"); }
+  - title: Existing 400-validation pattern to mirror (verdict enum)
+    file: src/shell/server.ts
+    snippet: |
+      const VALID_VERDICTS = ["strong", "watch", "referral-only", "pass", "none"];
+      function isValidVerdict(v: unknown): v is Contact["verdict"] {
+        return typeof v === "string" && (VALID_VERDICTS as string[]).includes(v);
+      }
+
+design_decisions:
+  - decision: "Grace period and follow-up window are configurable settings, not hardcoded constants"
+    rationale: "Owner directive during design-discussion review: judgment calls like these should be user-editable, not baked in."
+  - decision: "Shipped defaults (windowDays: 30, graceDays: 14) set by quorum (median) of 5 differing-opinion personas, not a single planner guess"
+    rationale: "Owner directive: 'make your defaults the quorum of a group of 5 personas that differ in opinions.' Full breakdown in design-discussion.md §7."
+  - decision: "Never-touched contacts sort as the oldest-possible value (above any real last-interaction date)"
+    rationale: "Grill finding H1: 'never followed up' is more urgent than 'it's been a while.'"
+
+risks:
+  - severity: low
+    description: SQL correctness for the "most recent interaction per contact" comparison
+    mitigation: "Covered by the acceptance criteria's explicit test scenarios; use whichever of correlated-subquery/LEFT JOIN+GROUP BY is clearest given node:sqlite's actual support (confirm during research step)"
+
+cross_cutting:
+  - concern: documentation
+    action: "New settings table and needsFollowUp() behavior should be noted in docs/ARCHITECTURE.md's data model section — bundle into fu-02 or a small follow-up, not required to block this story"
+
+metric:
+  applies: false
+  justification: "Substrate story — needsFollowUp() and the settings table have no standalone user-facing surface until fu-02 wires the filter toggle and settings panel; correctness is gated by this story's own unit tests (all 7 acceptance criteria above), not a moving number."
+
+references:
+  - path: .pHive/epics/followups-view/docs/design-discussion.md
+    relevant_excerpt: |
+      §7 Configuration — settings table, get/set methods, quorum-derived
+      defaults (windowDays: 30, graceDays: 14).
