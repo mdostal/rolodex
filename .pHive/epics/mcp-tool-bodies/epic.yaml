@@ -1,0 +1,23 @@
+name: mcp-tool-bodies
+title: Wire the 5 rolodex_* MCP tool bodies to real Store/GoogleSync logic
+target_codebase: /Users/mdostal/Documents/work/rolodex
+methodology: classic
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: []
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning: {}
+  confidence: matched
+  gate_decisions: {}
+
+stories:
+  - id: mtb-01-wire-mcp-tools
+    title: Wire the 5 rolodex_* MCP tool bodies to the real Store/GoogleSync
+    complexity: medium
+    depends_on: []

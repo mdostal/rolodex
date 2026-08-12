@@ -1,9 +1,13 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { Store } from "../lib/store.js";
-import { createGoogleSync } from "../lib/google-sync.js";
+import { applyPullToStore, createGoogleSync, type GoogleSync } from "../lib/google-sync.js";
+import type { Contact, Interaction, Verdict } from "../lib/types.js";
 
 /**
  * The rolodex, exposed as an MCP tool. Add this server to any agent host
@@ -11,60 +15,246 @@ import { createGoogleSync } from "../lib/google-sync.js";
  * read, search, and update — no bespoke integration each time. Config + data
  * live per-install (ROLODEX_DB, the owner's Google OAuth); the code is generic.
  */
-const store = new Store();
-const google = createGoogleSync();
 
-const server = new McpServer({ name: "rolodex", version: "0.1.0" });
+// ---------------------------------------------------------------------------
+// Tool arg shapes (mirrors each server.tool()'s zod schema below) — kept as
+// plain interfaces rather than z.infer<> so the handler functions below have
+// a stable, explicit type independent of the zod call sites.
+// ---------------------------------------------------------------------------
 
-server.tool(
-  "rolodex_upsert",
-  "Add or update a contact (partner/network). Provide any known fields.",
-  {
-    id: z.string().optional(),
-    name: z.string(),
-    org: z.string().optional(),
-    role: z.string().optional(),
-    email: z.string().optional(),
-    met: z.string().optional(),
-    what: z.string().optional(),
-    angle: z.string().optional(),
-    verdict: z.enum(["strong", "watch", "referral-only", "pass", "none"]).optional(),
-    nextStep: z.string().optional(),
-    tags: z.array(z.string()).optional(),
-  },
-  async (args) => {
-    // TODO(build): normalize -> store.upsert; return the saved contact id.
-    void store;
-    return { content: [{ type: "text", text: `upsert not implemented yet: ${args.name}` }] };
-  },
-);
+interface UpsertArgs {
+  id?: string;
+  name: string;
+  org?: string;
+  role?: string;
+  email?: string;
+  met?: string;
+  what?: string;
+  angle?: string;
+  verdict?: Verdict;
+  nextStep?: string;
+  tags?: string[];
+}
 
-server.tool(
-  "rolodex_search",
-  "Full-text search contacts by name/org/what-they-do/angle/tags.",
-  { query: z.string(), verdict: z.enum(["strong", "watch", "referral-only", "pass", "none"]).optional(), limit: z.number().optional() },
-  async ({ query }) => ({ content: [{ type: "text", text: `search not implemented yet: ${query}` }] }),
-);
+interface SearchArgs {
+  query: string;
+  verdict?: Verdict;
+  limit?: number;
+}
 
-server.tool(
-  "rolodex_followups",
-  "List contacts with a next step set that have gone cold (no recent interaction).",
-  { withinDays: z.number().optional() },
-  async () => ({ content: [{ type: "text", text: "followups not implemented yet" }] }),
-);
+interface FollowupsArgs {
+  withinDays?: number;
+}
 
-server.tool(
-  "rolodex_log_interaction",
-  "Log a touch (call/email/meeting/note) against a contact.",
-  { contactId: z.string(), note: z.string(), at: z.string().optional(), channel: z.enum(["call", "email", "dm", "meeting", "other"]).optional() },
-  async ({ contactId }) => ({ content: [{ type: "text", text: `log not implemented yet: ${contactId}` }] }),
-);
+interface LogInteractionArgs {
+  contactId: string;
+  note: string;
+  at?: string;
+  channel?: Interaction["channel"];
+}
 
-server.tool(
-  "rolodex_sync_google",
-  "Two-way sync with the owner's Google Contacts (People API). Verdict/angle/next-step stay local.",
-  { direction: z.enum(["pull", "push", "both"]).default("both") },
-  async () => { void google; return { content: [{ type: "text", text: "google sync not implemented yet" }] }; },
-);
+interface SyncGoogleArgs {
+  direction: "pull" | "push" | "both";
+}
 
-await server.connect(new StdioServerTransport());
+/** Handlers exposed alongside the McpServer they're registered on, so tests
+ * can call them directly (in-process, no transport) rather than round-tripping
+ * through stdio JSON-RPC just to exercise the logic. See createRolodexMcpServer's
+ * doc comment for why this shape was chosen over reaching into the SDK's
+ * internal tool registry. */
+export interface RolodexMcpHandlers {
+  rolodex_upsert: (args: UpsertArgs, extra?: unknown) => Promise<CallToolResult>;
+  rolodex_search: (args: SearchArgs, extra?: unknown) => Promise<CallToolResult>;
+  rolodex_followups: (args: FollowupsArgs, extra?: unknown) => Promise<CallToolResult>;
+  rolodex_log_interaction: (args: LogInteractionArgs, extra?: unknown) => Promise<CallToolResult>;
+  rolodex_sync_google: (args: SyncGoogleArgs, extra?: unknown) => Promise<CallToolResult>;
+}
+
+export interface RolodexMcpServerOptions {
+  /** Pre-built Store to use instead of the real, env-configured default —
+   * mainly for tests that want a Store pointed at a throwaway temp file. */
+  store?: Store;
+  /** Pre-built GoogleSync to use instead of the real, keychain-backed
+   * default — mainly for tests that want to inject a fake People API client
+   * (or one that just throws) without touching the OS keychain or network. */
+  google?: GoogleSync;
+}
+
+function textResult(payload: unknown): CallToolResult {
+  return { content: [{ type: "text", text: JSON.stringify(payload) }] };
+}
+
+function errorResult(err: unknown): CallToolResult {
+  const message = err instanceof Error ? err.message : String(err);
+  return { content: [{ type: "text", text: JSON.stringify({ error: message }) }], isError: true };
+}
+
+/** Wraps a tool handler so any thrown error (a Store method throwing, a
+ * GoogleSync call rejecting, etc.) turns into a `{ isError: true }`
+ * CallToolResult instead of an uncaught rejection — letting one bad call
+ * escape here would crash the whole stdio server process, taking down every
+ * tool for whatever host is connected, not just the one call that failed. */
+function withErrorHandling<Args>(
+  fn: (args: Args, extra: unknown) => CallToolResult | Promise<CallToolResult>,
+): (args: Args, extra?: unknown) => Promise<CallToolResult> {
+  return async (args, extra) => {
+    try {
+      return await fn(args, extra);
+    } catch (err) {
+      return errorResult(err);
+    }
+  };
+}
+
+/**
+ * Builds the McpServer and registers all 5 rolodex tools against it, wiring
+ * each straight to the already-implemented, already-tested Store/GoogleSync
+ * methods — this layer is integration (arg shaping + error wrapping), not
+ * new logic.
+ *
+ * Returns `{ server, handlers }` rather than just `server`: the MCP SDK's
+ * `server.tool(...)` registers a callback internally but doesn't expose a
+ * simple "get me the callback for tool X" lookup on McpServer itself (only
+ * on the `RegisteredTool` each individual `.tool()` call returns, and even
+ * that's typed as a client/task-handler union rather than a plain callback).
+ * Since this function already builds each handler as its own named/typed
+ * const before handing it to `server.tool(...)`, collecting those same
+ * consts into `handlers` costs nothing extra and gives tests a directly
+ * callable, precisely-typed handle on each tool's logic — no fake transport,
+ * no reaching into SDK internals.
+ */
+export function createRolodexMcpServer(
+  opts: RolodexMcpServerOptions = {},
+): { server: McpServer; handlers: RolodexMcpHandlers } {
+  const store = opts.store ?? new Store();
+  const google = opts.google ?? createGoogleSync();
+
+  const server = new McpServer({ name: "rolodex", version: "0.1.0" });
+
+  const upsertHandler = withErrorHandling<UpsertArgs>(async (args) => {
+    // id/createdAt/updatedAt are left for Store.upsert() to fill in
+    // (`c.id || randomUUID()`, `c.createdAt || now`) — same pattern as the
+    // shell's POST /api/contacts route (src/shell/server.ts).
+    const saved = store.upsert({
+      id: args.id || undefined,
+      name: args.name,
+      org: args.org,
+      role: args.role,
+      email: args.email,
+      met: args.met,
+      what: args.what,
+      angle: args.angle,
+      verdict: args.verdict ?? "none",
+      nextStep: args.nextStep,
+      tags: args.tags,
+    } as Contact);
+    return textResult(saved);
+  });
+
+  server.tool(
+    "rolodex_upsert",
+    "Add or update a contact (partner/network). Provide any known fields.",
+    {
+      id: z.string().optional(),
+      name: z.string(),
+      org: z.string().optional(),
+      role: z.string().optional(),
+      email: z.string().optional(),
+      met: z.string().optional(),
+      what: z.string().optional(),
+      angle: z.string().optional(),
+      verdict: z.enum(["strong", "watch", "referral-only", "pass", "none"]).optional(),
+      nextStep: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+    },
+    upsertHandler,
+  );
+
+  const searchHandler = withErrorHandling<SearchArgs>(async (args) => {
+    const results = store.search(args.query, { verdict: args.verdict, limit: args.limit });
+    return textResult(results);
+  });
+
+  server.tool(
+    "rolodex_search",
+    "Full-text search contacts by name/org/what-they-do/angle/tags.",
+    { query: z.string(), verdict: z.enum(["strong", "watch", "referral-only", "pass", "none"]).optional(), limit: z.number().optional() },
+    searchHandler,
+  );
+
+  const followupsHandler = withErrorHandling<FollowupsArgs>(async (args) => {
+    const results = store.needsFollowUp(args.withinDays);
+    return textResult(results);
+  });
+
+  server.tool(
+    "rolodex_followups",
+    "List contacts with a next step set that have gone cold (no recent interaction).",
+    { withinDays: z.number().optional() },
+    followupsHandler,
+  );
+
+  const logInteractionHandler = withErrorHandling<LogInteractionArgs>(async (args) => {
+    const interaction: Interaction = {
+      id: randomUUID(),
+      contactId: args.contactId,
+      note: args.note,
+      at: args.at ?? new Date().toISOString(),
+      channel: args.channel,
+    };
+    store.logInteraction(interaction);
+    return textResult(interaction);
+  });
+
+  server.tool(
+    "rolodex_log_interaction",
+    "Log a touch (call/email/meeting/note) against a contact.",
+    { contactId: z.string(), note: z.string(), at: z.string().optional(), channel: z.enum(["call", "email", "dm", "meeting", "other"]).optional() },
+    logInteractionHandler,
+  );
+
+  const syncHandler = withErrorHandling<SyncGoogleArgs>(async (args) => {
+    if (args.direction === "push") {
+      // push() is explicitly still a stub (see google-sync.ts) — don't call
+      // it at all, just say so plainly rather than letting it throw its own
+      // "not implemented" error up through the generic error path.
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: "push is not implemented — one-shot pull only" }) }],
+        isError: true,
+      };
+    }
+
+    const pulled = await google.pull();
+    const summary = applyPullToStore(pulled, store);
+
+    if (args.direction === "both") {
+      return textResult({ ...summary, pushed: false, note: "push is not implemented — only the pull half of 'both' ran" });
+    }
+    return textResult(summary);
+  });
+
+  server.tool(
+    "rolodex_sync_google",
+    "Two-way sync with the owner's Google Contacts (People API). Verdict/angle/next-step stay local.",
+    { direction: z.enum(["pull", "push", "both"]).default("both") },
+    syncHandler,
+  );
+
+  return {
+    server,
+    handlers: {
+      rolodex_upsert: upsertHandler,
+      rolodex_search: searchHandler,
+      rolodex_followups: followupsHandler,
+      rolodex_log_interaction: logInteractionHandler,
+      rolodex_sync_google: syncHandler,
+    },
+  };
+}
+
+const isMainModule = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isMainModule) {
+  const { server } = createRolodexMcpServer();
+  await server.connect(new StdioServerTransport());
+}

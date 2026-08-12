@@ -52,13 +52,18 @@ partnership `angle`, a **verdict** (`strong` / `watch` / `referral-only` /
 `pass` / `none`), and a **next step**. Interactions are logged so you can see
 the full touch history per contact.
 
-## MCP server (secondary, not yet wired up)
+## MCP server (secondary integration surface)
 `src/mcp/server.ts` is a stdio MCP server exposing `rolodex_upsert`,
-`rolodex_search`, `rolodex_followups`, `rolodex_log_interaction`,
-`rolodex_sync_google` — meant for adding rolodex as a tool to an agent host.
-Every tool body is still a stub today; this is a secondary integration
-surface planned for after the standalone app, not the primary way to use
-rolodex right now. Run it (once implemented) with `npm run dev`.
+`rolodex_search`, `rolodex_followups`, `rolodex_log_interaction`, and
+`rolodex_sync_google` — add it to any agent host (Claude, your own agent
+swarm) and the agent has a real rolodex it can read, search, and update.
+Every tool is wired to the same `Store`/`GoogleSync` logic the standalone
+app uses — verdict/angle/next-step still stay local-only through a sync,
+and `rolodex_sync_google`'s `push` direction returns a clear
+not-implemented error rather than a silent no-op (two-way sync is still a
+planned follow-up). This remains a secondary integration surface, not the
+primary way to use rolodex — the standalone app is that. Run it with
+`npm run dev`.
 
 ## Development
 ```sh
