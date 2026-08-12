@@ -1,0 +1,136 @@
+id: mtb-01-wire-mcp-tools
+epic: mcp-tool-bodies
+title: Wire the 5 rolodex_* MCP tool bodies to the real Store/GoogleSync
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Every rolodex_* MCP tool has a real, already-correct zod schema but a stub
+  handler returning "not implemented yet" text. Every Store/GoogleSync method
+  these tools need is already implemented and tested (upsert, get, search,
+  needsFollowUp, logInteraction, GoogleSync.pull, and the local-fields-
+  preserving merge helpers). This story wires the handlers to real logic —
+  the last unimplemented surface in the project.
+
+  Response format: JSON-stringified data (agents consume these
+  programmatically, not humans reading prose). Errors surface via the MCP
+  SDK's isError:true flag from a per-handler try/catch, not an uncaught
+  throw that would crash the whole stdio process. rolodex_sync_google's
+  push direction returns a clear, structured not-implemented response
+  (push() itself stays a stub, out of scope project-wide) rather than
+  crashing or silently no-op-ing.
+
+acceptance_criteria:
+  - "Given rolodex_upsert with a name, when called, then it persists via Store.upsert() and returns the saved contact as JSON"
+  - "Given rolodex_search with a query, when called, then it returns real Store.search() results as JSON"
+  - "Given rolodex_followups, when called, then it returns real Store.needsFollowUp() results as JSON"
+  - "Given rolodex_log_interaction with a contactId and note, when called, then it persists via Store.logInteraction() and returns the created interaction as JSON"
+  - "Given rolodex_sync_google with direction=pull or both, when called, then it calls GoogleSync.pull() and routes results through the existing applyPullToStore/mergeLocalOnlyFields helpers, preserving local-only fields exactly as the shell's Sync now button does"
+  - "Given rolodex_sync_google with direction=push, when called, then it returns a clear, structured not-implemented response, not a crash or silent no-op"
+  - "Given any handler's underlying Store/GoogleSync call throws, when that happens, then the tool returns { content, isError: true } instead of crashing the stdio server process"
+
+steps:
+  - id: research
+    description: Confirm the exact current stub bodies and zod schemas in src/mcp/server.ts, and the exported signatures of Store/GoogleSync methods being wired
+    agent: researcher
+  - id: implement
+    description: Replace all 5 stub handler bodies with real calls to Store/GoogleSync methods, JSON-stringified responses, per-handler try/catch with isError:true on failure
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Write and pass unit tests per tool (call handlers directly against a real temp-file Store, no mocks, following src/shell/server.test.ts's pattern) plus one real end-to-end smoke test via the MCP SDK's stdio client against a scratch ROLODEX_DB
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review implementation and tests for correctness, error-handling completeness (all 5 handlers), and convention compliance
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/mcp/server.ts
+      purpose: "All 5 stub handlers to replace; zod schemas already correct, do not change them"
+    - path: src/lib/store.ts
+      purpose: "upsert/get/search/needsFollowUp/logInteraction — all real, already tested"
+    - path: src/lib/google-sync.ts
+      purpose: "pull() real; push() stays a stub; applyPullToStore/mergeLocalOnlyFields/findExistingMatch already exported, reuse directly for rolodex_sync_google's pull path"
+
+files_to_modify:
+  - file: src/mcp/server.ts
+    change: "replace all 5 stub handler bodies with real Store/GoogleSync calls, JSON responses, try/catch + isError:true"
+
+code_examples:
+  - title: Current stub to replace (one of five, same shape for the rest)
+    file: src/mcp/server.ts
+    snippet: |
+      server.tool(
+        "rolodex_upsert",
+        "Add or update a contact (partner/network). Provide any known fields.",
+        { id: z.string().optional(), name: z.string(), /* ...rest of real schema... */ },
+        async (args) => {
+          // TODO(build): normalize -> store.upsert; return the saved contact id.
+          void store;
+          return { content: [{ type: "text", text: `upsert not implemented yet: ${args.name}` }] };
+        },
+      );
+  - title: Reusable local-fields-preserving merge (already exported, do not reimplement)
+    file: src/lib/google-sync.ts
+    snippet: |
+      export function applyPullToStore(pulled: Contact[], store: UpsertableStore): ApplyPullSummary {
+        for (const contact of pulled) {
+          const existing = findExistingMatch(contact, store.list());
+          const merged = mergeLocalOnlyFields(contact, existing);
+          store.upsert(merged);
+        }
+        // ...
+      }
+  - title: MCP SDK error-response shape to use on any thrown error
+    file: node_modules/@modelcontextprotocol/sdk/dist/esm/types.d.ts
+    snippet: |
+      // CallToolResult carries an optional isError: boolean field.
+      // On failure: { content: [{ type: "text", text: <error message> }], isError: true }
+
+design_decisions:
+  - decision: "Response format is JSON-stringified data, not human-prose summaries"
+    rationale: "These tools exist for an agent to parse and act on programmatically — matches the north star framing ('let your AI agents read, search, and update')."
+  - decision: "rolodex_sync_google's push direction returns a structured not-implemented response rather than crashing or silently doing nothing"
+    rationale: "The tool's existing zod schema already commits to a 3-way direction enum including push; the schema shouldn't silently lie about a capability that doesn't exist."
+  - decision: "Every handler gets its own try/catch returning isError:true on failure"
+    rationale: "An uncaught throw inside one MCP tool handler would crash the whole stdio server process, taking down all 5 tools for whatever host is connected — confirmed via the SDK's isError field as the correct mechanism, not custom error plumbing."
+
+risks:
+  - severity: low
+    description: Response-shape ergonomics (what exactly to JSON.stringify per tool) rather than logic risk, since all underlying methods are already tested
+    mitigation: "Acceptance criteria above are explicit per-tool about what gets returned"
+
+cross_cutting:
+  - concern: documentation
+    action: "README.md's MCP section (currently says method bodies are stubbed) should be updated to reflect this is now real — small addition, bundle into this story's integrate step or a fast follow-up"
+  - concern: metrics
+    action: "See metric: block below"
+
+metric:
+  applies: true
+  name: mcp_tools_functional
+  direction: up
+  baseline: 0
+  target: "all 5 rolodex_* tools return real data (not 'not implemented yet' text) when called via a real MCP stdio client against a scratch database"
+  window: story-integrate
+  source:
+    kind: manual
+    ref: "end-to-end smoke test via the MCP SDK's stdio client, per this story's test step"
+  verify_at: integrate
+  owner: developer
+
+references:
+  - path: .pHive/epics/mcp-tool-bodies/docs/design-discussion.md
+    relevant_excerpt: |
+      §3 — per-tool wiring approach, JSON response format, isError-based
+      error handling, push-direction not-implemented response.
