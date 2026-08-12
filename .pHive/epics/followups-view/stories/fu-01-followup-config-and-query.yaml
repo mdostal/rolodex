@@ -1,7 +1,7 @@
 id: fu-01-followup-config-and-query
 epic: followups-view
 title: Follow-up config (settings table) + real needsFollowUp() query
-status: pending
+status: in_progress
 complexity: medium
 methodology: classic
 depends_on: []
