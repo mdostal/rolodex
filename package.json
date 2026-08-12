@@ -7,6 +7,29 @@
   "type": "module",
   "bin": { "rolodex-mcp": "dist/mcp/server.js" },
   "engines": { "node": ">=22.0.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/mdostal/rolodex.git" },
+  "homepage": "https://github.com/mdostal/rolodex#readme",
+  "bugs": { "url": "https://github.com/mdostal/rolodex/issues" },
+  "author": "Mathew Dostal",
+  "keywords": [
+    "crm",
+    "contacts",
+    "relationship-management",
+    "networking",
+    "local-first",
+    "sqlite",
+    "mcp",
+    "model-context-protocol",
+    "google-contacts"
+  ],
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "NODE_OPTIONS=--experimental-sqlite tsx src/mcp/server.ts",
