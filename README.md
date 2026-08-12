@@ -65,6 +65,10 @@ planned follow-up). This remains a secondary integration surface, not the
 primary way to use rolodex — the standalone app is that. Run it with
 `npm run dev`.
 
+If you use Claude Code, `.claude/skills/rolodex/SKILL.md` teaches an agent
+how to use these tools well (when to search before upserting, what never
+to fabricate, how to handle the still-unimplemented push direction).
+
 ## Development
 ```sh
 npm run typecheck   # tsc --noEmit
