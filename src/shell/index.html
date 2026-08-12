@@ -181,12 +181,23 @@
     .channel-picker label:has(input:checked) { border-color: var(--accent); color: var(--accent); }
     .log-interaction-form .form-field { margin-bottom: 12px; }
     .log-interaction-form .form-field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
-    .log-interaction-form input[type="date"], .log-interaction-form textarea {
+    .log-interaction-form input[type="date"], .log-interaction-form input[type="number"], .log-interaction-form textarea {
       width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
       background: transparent; color: inherit; font: inherit;
     }
     .log-interaction-form textarea { min-height: 64px; resize: vertical; }
     .log-interaction-form .form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+    /* Follow-up settings popover — anchored under-right of the gear button,
+       reusing .log-interaction-form's border/padding/fieldset styling as-is;
+       this pair is the one CSS addition the design brief allows for
+       positioning the popover itself. */
+    .settings-anchor { position: relative; display: inline-block; margin-right: 8px; }
+    .settings-panel {
+      position: absolute; top: calc(100% + 8px); right: 0; z-index: 20;
+      width: 260px; margin-bottom: 0; background: var(--bg);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    }
 
     /* Interaction history */
     .interaction-history { list-style: none; margin: 0; padding: 0; }
@@ -326,6 +337,14 @@
       });
     const syncGoogle = () => api("/api/sync/google", { method: "POST" });
     const searchContacts = (q) => api("/api/contacts/search?q=" + encodeURIComponent(q));
+    const getNeedsFollowUp = () => api("/api/contacts/needs-follow-up");
+    const getFollowUpSettings = () => api("/api/settings/follow-up");
+    const putFollowUpSettings = (payload) =>
+      api("/api/settings/follow-up", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
     const getInteractions = (id) => api("/api/contacts/" + encodeURIComponent(id) + "/interactions");
     const postInteraction = (id, payload) =>
       api("/api/contacts/" + encodeURIComponent(id) + "/interactions", {
@@ -427,7 +446,13 @@
     async function renderList() {
       setTopbar({
         left: '<span class="brand">rolodex</span>',
-        right: '<button id="add-top">+ Add contact</button>',
+        right:
+          '<span class="settings-anchor" id="settings-anchor">' +
+          '<button type="button" class="secondary" id="settings-toggle" aria-label="Follow-up settings" ' +
+          'aria-expanded="false" aria-controls="settings-panel-wrap">&#9881;</button>' +
+          '<div id="settings-panel-wrap"></div>' +
+          "</span>" +
+          '<button id="add-top">+ Add contact</button>',
       });
       content.innerHTML =
         '<div class="page-header">' +
@@ -439,6 +464,7 @@
         '<input id="search-input" type="search" placeholder="Search name, org, notes, tags…" />' +
         '<button type="button" id="search-clear" class="search-clear" aria-label="Clear search" hidden>&times;</button>' +
         "</div>" +
+        '<button type="button" class="secondary" id="followup-toggle" aria-pressed="false">Needs follow-up</button>' +
         '<button type="button" class="secondary" id="sync-now">Sync now</button>' +
         "</div>" +
         "</div>" +
@@ -447,6 +473,7 @@
         '<div id="list-body"></div>';
 
       document.getElementById("add-top").addEventListener("click", () => navigate("#/new"));
+      wireSettingsPanel();
 
       const syncStatusEl = document.getElementById("sync-status");
       if (lastSyncMessage) {
@@ -476,6 +503,7 @@
       const resultSummary = document.getElementById("result-summary");
       const searchInput = document.getElementById("search-input");
       const searchClearBtn = document.getElementById("search-clear");
+      const followupToggleBtn = document.getElementById("followup-toggle");
 
       function attachRowHandlers() {
         for (const tr of listBody.querySelectorAll("tbody tr")) {
@@ -511,6 +539,20 @@
           "</section>";
       }
 
+      // Third empty state: toggle is ON and nobody currently qualifies.
+      // Reassuring tone, no "add contact" CTA — this is a good state to be
+      // in, not a gap to fill. Distinct icon from both the empty-DB (person)
+      // and empty-search-results (magnifying glass) states so the three are
+      // never visually confusable.
+      function renderEmptyFollowUp() {
+        listBody.innerHTML =
+          '<section class="empty-state" id="empty-followup-state">' +
+          '<span class="icon" aria-hidden="true">&#10003;</span>' +
+          "<h2>You're all caught up</h2>" +
+          "<p>Nobody needs a follow-up right now. Check back later, or adjust your follow-up settings.</p>" +
+          "</section>";
+      }
+
       function renderRows(list) {
         if (list.length === 0) {
           renderEmptyResults();
@@ -531,11 +573,38 @@
       let totalCount = 0;
       let searchDebounce = null;
 
+      // Follow-up toggle state. `needsFollowUpContacts` is fetched once (in
+      // parallel with the normal contacts fetch, below) so the button's count
+      // label is accurate before the user ever clicks it; toggling ON reuses
+      // that same snapshot rather than re-fetching, since nothing changes it
+      // except a settings save (handled explicitly in wireSettingsPanel) or a
+      // fresh renderList() (e.g. navigating away and back, or "Sync now").
+      let followUpOn = false;
+      let needsFollowUpContacts = null;
+
+      function formatToggleLabel(count) {
+        return count === null ? "Needs follow-up" : "Needs follow-up (" + count + ")";
+      }
+
+      function setToggleUi() {
+        followupToggleBtn.setAttribute("aria-pressed", String(followUpOn));
+        followupToggleBtn.classList.toggle("secondary", !followUpOn);
+        followupToggleBtn.textContent = formatToggleLabel(
+          needsFollowUpContacts ? needsFollowUpContacts.length : null,
+        );
+      }
+
       // Search-as-you-type (~250ms debounce), Enter for an immediate search,
       // Escape to clear + refocus — per the search-and-logging design brief.
       // Whitespace-only queries are treated as empty (don't hit the store);
       // an empty DB's own empty state always wins over a search's, since
       // there's nothing to search regardless of what's typed.
+      //
+      // Toggle + search compose rather than reset each other: the toggle
+      // picks the "base list" search filters within (needs-follow-up vs. all
+      // contacts), and search filters within whichever base is currently
+      // active. Empty-state precedence (most fundamental first): empty DB >
+      // toggle-ON-zero-results > search-zero-results.
       async function runSearch(rawQuery) {
         const trimmed = rawQuery.trim();
         searchClearBtn.hidden = trimmed === "";
@@ -545,22 +614,55 @@
           renderEmptyDb();
           return;
         }
+
+        const base = followUpOn ? needsFollowUpContacts || [] : allContacts;
+
+        if (followUpOn && base.length === 0) {
+          resultSummary.textContent = "";
+          renderEmptyFollowUp();
+          return;
+        }
+
         if (!trimmed) {
           resultSummary.textContent = "";
-          renderRows(allContacts);
+          renderRows(base);
           return;
         }
         try {
           const results = await searchContacts(trimmed);
-          const matched = results.map((r) => r.contact);
+          let matched = results.map((r) => r.contact);
+          if (followUpOn) {
+            const baseIds = new Set(base.map((c) => c.id));
+            matched = matched.filter((c) => baseIds.has(c.id));
+          }
           resultSummary.textContent =
-            "Showing " + matched.length + " of " + totalCount + ' contacts for "' + trimmed + '"';
+            "Showing " + matched.length + " of " + base.length + ' contacts for "' + trimmed + '"';
           renderRows(matched);
         } catch (err) {
           resultSummary.textContent = "Search failed: " + err.message;
           console.error(err);
         }
       }
+
+      followupToggleBtn.addEventListener("click", async () => {
+        followUpOn = !followUpOn;
+        setToggleUi();
+        if (followUpOn && needsFollowUpContacts === null) {
+          // The parallel load-time fetch failed earlier — retry now rather
+          // than silently showing an empty toggle-on list.
+          try {
+            needsFollowUpContacts = await getNeedsFollowUp();
+            setToggleUi();
+          } catch (err) {
+            followUpOn = false;
+            setToggleUi();
+            resultSummary.textContent = "Couldn't load follow-ups: " + err.message;
+            console.error(err);
+            return;
+          }
+        }
+        runSearch(searchInput.value);
+      });
 
       searchInput.addEventListener("input", () => {
         clearTimeout(searchDebounce);
@@ -587,9 +689,25 @@
       });
 
       try {
-        allContacts = await getContacts();
+        // Fetched in parallel, not sequentially: the needs-follow-up count
+        // must be accurate on the toggle button before the user ever clicks
+        // it, and this avoids a second round-trip on the common
+        // load-then-toggle path. A failure on the follow-up side (network
+        // hiccup, etc.) shouldn't take down the whole list, so it's caught
+        // independently and just leaves the count/toggle in its "unknown"
+        // state (retried lazily on click — see the toggle's own handler).
+        const [contacts, followUps] = await Promise.all([
+          getContacts(),
+          getNeedsFollowUp().catch((err) => {
+            console.error(err);
+            return null;
+          }),
+        ]);
+        allContacts = contacts;
         totalCount = allContacts.length;
+        needsFollowUpContacts = followUps;
         countEl.textContent = totalCount + " contact" + (totalCount === 1 ? "" : "s");
+        setToggleUi();
         if (totalCount === 0) {
           renderEmptyDb();
           return;
@@ -598,6 +716,163 @@
       } catch (err) {
         countEl.textContent = "Failed to load contacts";
         console.error(err);
+      }
+
+      // ---- Follow-up settings popover ------------------------------------
+      // Structurally cloned from wireInteractionsPanel()'s open/close/focus
+      // contract (empty wrapper when closed, form innerHTML when open, focus
+      // moves to the first control on open and back to the toggle button on
+      // any close path) — plus outside-click/Escape dismissal, since this is
+      // a non-modal popover rather than an inline disclosure and needs its
+      // own way to go away without a Cancel click. Nested here (rather than
+      // a top-level function) so it can reach the toggle's followUpOn/
+      // needsFollowUpContacts state and re-run runSearch()/setToggleUi()
+      // after a save, per the design brief's post-save recommendation.
+      function settingsFormHtml(windowDays, graceDays) {
+        return (
+          '<form class="log-interaction-form settings-panel" id="settings-form" aria-label="Follow-up settings" novalidate>' +
+          '<div class="form-error-banner" id="settings-form-error" hidden></div>' +
+          '<div class="form-field" id="settings-window-field">' +
+          '<label for="settings-window">Follow-up window (days)</label>' +
+          '<input type="number" id="settings-window" min="1" step="1" inputmode="numeric" ' +
+          'value="' + escapeHtml(String(windowDays)) + '" aria-describedby="settings-window-error" />' +
+          '<span class="field-error" id="settings-window-error" hidden>Enter a positive whole number.</span>' +
+          "</div>" +
+          '<div class="form-field" id="settings-grace-field">' +
+          '<label for="settings-grace">Grace period (days)</label>' +
+          '<input type="number" id="settings-grace" min="1" step="1" inputmode="numeric" ' +
+          'value="' + escapeHtml(String(graceDays)) + '" aria-describedby="settings-grace-error" />' +
+          '<span class="field-error" id="settings-grace-error" hidden>Enter a positive whole number.</span>' +
+          "</div>" +
+          '<div class="form-actions">' +
+          '<button type="button" class="secondary" id="settings-cancel">Cancel</button>' +
+          '<button type="submit" id="settings-save">Save</button>' +
+          "</div>" +
+          "</form>"
+        );
+      }
+
+      function wireSettingsPanel() {
+        const anchor = document.getElementById("settings-anchor");
+        const toggleBtn = document.getElementById("settings-toggle");
+        const wrap = document.getElementById("settings-panel-wrap");
+        let panelOpen = false;
+
+        function onDocumentMousedown(e) {
+          if (panelOpen && !anchor.contains(e.target)) {
+            // Prevent the browser's native default mousedown action (which
+            // shifts focus to <body> for clicks on non-focusable elements)
+            // from clobbering the explicit toggleBtn.focus() in closePanel().
+            // That default action runs AFTER this synchronous handler
+            // returns, so without preventDefault() here, focus would land on
+            // <body> instead of the gear button.
+            e.preventDefault();
+            closePanel();
+          }
+        }
+        function onDocumentKeydown(e) {
+          if (panelOpen && e.key === "Escape") {
+            e.preventDefault();
+            closePanel();
+          }
+        }
+        function onHashChange() {
+          closePanel();
+        }
+
+        function closePanel() {
+          if (!panelOpen) return;
+          panelOpen = false;
+          wrap.innerHTML = "";
+          toggleBtn.setAttribute("aria-expanded", "false");
+          document.removeEventListener("mousedown", onDocumentMousedown);
+          document.removeEventListener("keydown", onDocumentKeydown);
+          window.removeEventListener("hashchange", onHashChange);
+          toggleBtn.focus();
+        }
+
+        function validatePositiveInt(input, fieldId, errorId) {
+          const raw = input.value.trim();
+          const n = Number(raw);
+          const valid = raw !== "" && Number.isInteger(n) && n > 0;
+          document.getElementById(fieldId).classList.toggle("invalid", !valid);
+          document.getElementById(errorId).hidden = valid;
+          if (valid) input.removeAttribute("aria-invalid");
+          else input.setAttribute("aria-invalid", "true");
+          return valid ? n : null;
+        }
+
+        function wireForm() {
+          const form = document.getElementById("settings-form");
+          const windowInput = document.getElementById("settings-window");
+          const graceInput = document.getElementById("settings-grace");
+
+          document.getElementById("settings-cancel").addEventListener("click", () => closePanel());
+
+          form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+
+            const windowDays = validatePositiveInt(windowInput, "settings-window-field", "settings-window-error");
+            const graceDays = validatePositiveInt(graceInput, "settings-grace-field", "settings-grace-error");
+            if (windowDays === null || graceDays === null) {
+              (windowDays === null ? windowInput : graceInput).focus();
+              return;
+            }
+
+            const errorBanner = document.getElementById("settings-form-error");
+            const saveBtn = document.getElementById("settings-save");
+            saveBtn.disabled = true;
+            try {
+              await putFollowUpSettings({ windowDays, graceDays });
+              errorBanner.hidden = true;
+              closePanel();
+              // Recommendation beyond the bare acceptance criteria: if the
+              // follow-up toggle is currently ON, the visible list was built
+              // from the OLD window/grace values — re-fetch immediately so it
+              // (and the count badge) reflect what was just saved, instead of
+              // waiting for the next toggle click.
+              if (followUpOn) {
+                try {
+                  needsFollowUpContacts = await getNeedsFollowUp();
+                } catch (err) {
+                  console.error(err);
+                }
+                setToggleUi();
+                runSearch(searchInput.value);
+              }
+            } catch (err) {
+              // Save fails: keep the panel open with an inline error banner,
+              // preserving the user's edits (matches the log-interaction
+              // form's failure behavior).
+              errorBanner.hidden = false;
+              errorBanner.textContent = "Couldn't save: " + err.message;
+            } finally {
+              saveBtn.disabled = false;
+            }
+          });
+        }
+
+        async function openPanel() {
+          panelOpen = true;
+          toggleBtn.setAttribute("aria-expanded", "true");
+          let current = { windowDays: 30, graceDays: 14 };
+          try {
+            current = await getFollowUpSettings();
+          } catch (err) {
+            console.error(err);
+          }
+          wrap.innerHTML = settingsFormHtml(current.windowDays, current.graceDays);
+          wireForm();
+          document.getElementById("settings-window").focus();
+          document.addEventListener("mousedown", onDocumentMousedown);
+          document.addEventListener("keydown", onDocumentKeydown);
+          window.addEventListener("hashchange", onHashChange);
+        }
+
+        toggleBtn.addEventListener("click", () => {
+          if (panelOpen) closePanel();
+          else openPanel();
+        });
       }
     }
 
