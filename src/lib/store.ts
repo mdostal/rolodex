@@ -2,6 +2,13 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import type { Contact, Interaction, SearchResult, Verdict } from "./types.js";
 
+/** Settings-table key under which the follow-up config (windowDays/graceDays)
+ * is stored, JSON-encoded as a single row. */
+const FOLLOW_UP_CONFIG_KEY = "followUp.config";
+
+/** Defaults getFollowUpConfig() lazily seeds when no settings row exists yet. */
+const FOLLOW_UP_DEFAULTS = { windowDays: 30, graceDays: 14 } as const;
+
 /**
  * Owns-your-data store. SQLite with an FTS5 full-text index so search is real
  * (name/org/what/angle/tags), not a LIKE scan. The DB path defaults to a
@@ -27,6 +34,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS interactions (
         id TEXT PRIMARY KEY, contactId TEXT NOT NULL, at TEXT NOT NULL, note TEXT NOT NULL, channel TEXT,
         FOREIGN KEY(contactId) REFERENCES contacts(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY, value TEXT NOT NULL
       );
     `);
     // FTS5 is a separate statement, in a separate try/catch, deliberately:
@@ -190,8 +200,97 @@ export class Store {
     }
   }
 
-  /** Contacts with a nextStep set and no recent interaction — "don't let them go cold". */
-  needsFollowUp(_withinDays = 30): Contact[] { throw new Error("not implemented"); }
+  /** Generic settings read: returns the persisted value for `key`, or
+   * `fallback` if no row exists yet. Never writes — callers that want
+   * lazy-seed-on-first-read behavior (e.g. getFollowUpConfig()) do that
+   * themselves on top of this. */
+  getSetting(key: string, fallback: string): string {
+    const row = this.db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
+      | { value: string }
+      | undefined;
+    return row ? row.value : fallback;
+  }
+
+  /** Generic settings write: upserts `key` -> `value`. */
+  setSetting(key: string, value: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(key, value);
+  }
+
+  /** Follow-up config, stored as one JSON-encoded settings row under
+   * FOLLOW_UP_CONFIG_KEY. If no row exists yet (fresh DB, or a settings
+   * table that's never had this key written), this lazily seeds the row
+   * with the defaults (windowDays=30, graceDays=14) — NOT done eagerly in
+   * migrate(), only on first read — and returns those same defaults. */
+  getFollowUpConfig(): { windowDays: number; graceDays: number } {
+    const raw = this.getSetting(FOLLOW_UP_CONFIG_KEY, "");
+    if (!raw) {
+      this.setFollowUpConfig(FOLLOW_UP_DEFAULTS);
+      return { ...FOLLOW_UP_DEFAULTS };
+    }
+    return JSON.parse(raw) as { windowDays: number; graceDays: number };
+  }
+
+  setFollowUpConfig(cfg: { windowDays: number; graceDays: number }): void {
+    this.setSetting(FOLLOW_UP_CONFIG_KEY, JSON.stringify(cfg));
+  }
+
+  /**
+   * Contacts with a nextStep set and no recent interaction — "don't let them
+   * go cold". `withinDays`/`graceDays` default to the persisted
+   * getFollowUpConfig() values when omitted.
+   *
+   * A contact qualifies when: nextStep is non-null/non-empty AND createdAt
+   * is older than `graceDays` ago (so a contact just added today isn't
+   * immediately flagged before anyone's had a chance to reach out) AND
+   * either it has no interactions at all, or its most recent interaction's
+   * `at` is older than `withinDays` ago.
+   *
+   * Implemented as a single query: a LEFT JOIN against a per-contact
+   * MAX(at) subquery (grouped once, not one query per contact) rather than
+   * a correlated subquery run per row — node:sqlite (SQLite proper) supports
+   * both equally well, but the grouped-subquery join reads more directly as
+   * "each contact's most recent interaction" and keeps the WHERE/ORDER BY
+   * clauses simple boolean/string comparisons against a single `lastAt`
+   * column instead of repeating the subquery in multiple places.
+   *
+   * ISO-8601 timestamps sort correctly as plain strings, so cutoffs are
+   * computed in JS and compared with <=/>= rather than reaching for
+   * SQLite's julianday()/datetime() functions.
+   *
+   * Sort: contacts with zero interactions ever rank above (more urgent
+   * than) any contact with a real last-interaction date, regardless of how
+   * old that date is; among contacts that do have interactions, oldest
+   * last-interaction first. `(li.lastAt IS NULL)` evaluates to 1/0 in
+   * SQLite, so ordering it DESC puts the "never touched" rows first.
+   */
+  needsFollowUp(withinDays?: number, graceDays?: number): Contact[] {
+    const cfg = this.getFollowUpConfig();
+    const effectiveWithinDays = withinDays ?? cfg.windowDays;
+    const effectiveGraceDays = graceDays ?? cfg.graceDays;
+
+    const now = Date.now();
+    const graceCutoff = new Date(now - effectiveGraceDays * 86_400_000).toISOString();
+    const withinCutoff = new Date(now - effectiveWithinDays * 86_400_000).toISOString();
+
+    const rows = this.db
+      .prepare(
+        `SELECT c.* FROM contacts c
+         LEFT JOIN (
+           SELECT contactId, MAX(at) AS lastAt FROM interactions GROUP BY contactId
+         ) li ON li.contactId = c.id
+         WHERE c.nextStep IS NOT NULL AND TRIM(c.nextStep) <> ''
+           AND c.createdAt <= ?
+           AND (li.lastAt IS NULL OR li.lastAt <= ?)
+         ORDER BY (li.lastAt IS NULL) DESC, li.lastAt ASC`,
+      )
+      .all(graceCutoff, withinCutoff);
+    return rows.map(rowToContact);
+  }
 
   setVerdict(id: string, v: Verdict): void {
     this.db

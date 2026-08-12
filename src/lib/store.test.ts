@@ -231,6 +231,144 @@ describe("Store.search()", () => {
   });
 });
 
+describe("Store.getFollowUpConfig() / Store.setFollowUpConfig()", () => {
+  it("lazily seeds and returns the 30/14 defaults when no settings row exists yet", () => {
+    const store = new Store(dbPath);
+    expect(store.getFollowUpConfig()).toEqual({ windowDays: 30, graceDays: 14 });
+
+    // Confirm it was actually persisted (not just returned in-memory) by
+    // opening a second Store against the same file.
+    const reopened = new Store(dbPath);
+    expect(reopened.getFollowUpConfig()).toEqual({ windowDays: 30, graceDays: 14 });
+  });
+
+  it("setFollowUpConfig persists and a subsequent get reflects it", () => {
+    const store = new Store(dbPath);
+    store.setFollowUpConfig({ windowDays: 45, graceDays: 7 });
+    expect(store.getFollowUpConfig()).toEqual({ windowDays: 45, graceDays: 7 });
+
+    const reopened = new Store(dbPath);
+    expect(reopened.getFollowUpConfig()).toEqual({ windowDays: 45, graceDays: 7 });
+  });
+});
+
+describe("Store.getSetting() / Store.setSetting()", () => {
+  it("returns the fallback when no row exists", () => {
+    const store = new Store(dbPath);
+    expect(store.getSetting("nope", "fallback-value")).toBe("fallback-value");
+  });
+
+  it("setSetting persists and getSetting reads it back, ignoring the fallback", () => {
+    const store = new Store(dbPath);
+    store.setSetting("some.key", "some-value");
+    expect(store.getSetting("some.key", "fallback-value")).toBe("some-value");
+  });
+
+  it("setSetting overwrites an existing value rather than duplicating the row", () => {
+    const store = new Store(dbPath);
+    store.setSetting("some.key", "first");
+    store.setSetting("some.key", "second");
+    expect(store.getSetting("some.key", "fallback-value")).toBe("second");
+  });
+});
+
+describe("Store.needsFollowUp()", () => {
+  const DAY = 86_400_000;
+  const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+
+  it("includes a contact with nextStep set, no interactions, past the grace period", () => {
+    const store = new Store(dbPath);
+    const c = store.upsert(
+      baseContact({ name: "Stale Contact", nextStep: "Send intro", createdAt: iso(40 * DAY) }),
+    );
+    const results = store.needsFollowUp(30, 14);
+    expect(results.map((r) => r.id)).toEqual([c.id]);
+  });
+
+  it("excludes a contact with an interaction inside the window", () => {
+    const store = new Store(dbPath);
+    const c = store.upsert(
+      baseContact({ name: "Recently Touched", nextStep: "Follow up", createdAt: iso(60 * DAY) }),
+    );
+    store.logInteraction({ id: "int-1", contactId: c.id, at: iso(2 * DAY), note: "Caught up recently" });
+    const results = store.needsFollowUp(30, 14);
+    expect(results.map((r) => r.id)).not.toContain(c.id);
+  });
+
+  it("excludes a contact with no nextStep regardless of interaction history", () => {
+    const store = new Store(dbPath);
+    store.upsert(baseContact({ name: "No Next Step", createdAt: iso(60 * DAY) }));
+    store.upsert(baseContact({ name: "Empty Next Step", nextStep: "", createdAt: iso(60 * DAY) }));
+    const results = store.needsFollowUp(30, 14);
+    expect(results).toEqual([]);
+  });
+
+  it("excludes a contact still inside its grace period even with a stale/no interaction", () => {
+    const store = new Store(dbPath);
+    store.upsert(baseContact({ name: "Brand New", nextStep: "Say hi", createdAt: iso(1 * DAY) }));
+    const results = store.needsFollowUp(30, 14);
+    expect(results).toEqual([]);
+  });
+
+  it("sorts never-touched contacts above any contact with a real last-interaction date", () => {
+    const store = new Store(dbPath);
+    const neverTouched = store.upsert(
+      baseContact({ name: "Never Touched", nextStep: "Reach out", createdAt: iso(20 * DAY) }),
+    );
+    const touchedRecently = store.upsert(
+      baseContact({ name: "Touched But Stale", nextStep: "Follow up", createdAt: iso(200 * DAY) }),
+    );
+    // This interaction is ancient — much older than `neverTouched`'s
+    // createdAt — yet `neverTouched` (zero interactions ever) must still
+    // rank above it.
+    store.logInteraction({
+      id: "int-1",
+      contactId: touchedRecently.id,
+      at: iso(150 * DAY),
+      note: "Very old touch",
+    });
+
+    const results = store.needsFollowUp(30, 14);
+    expect(results.map((r) => r.id)).toEqual([neverTouched.id, touchedRecently.id]);
+  });
+
+  it("among contacts with interactions, sorts oldest last-interaction first", () => {
+    const store = new Store(dbPath);
+    const older = store.upsert(
+      baseContact({ name: "Older Last Touch", nextStep: "Follow up", createdAt: iso(200 * DAY) }),
+    );
+    const newer = store.upsert(
+      baseContact({ name: "Newer Last Touch", nextStep: "Follow up", createdAt: iso(200 * DAY) }),
+    );
+    store.logInteraction({ id: "int-older", contactId: older.id, at: iso(100 * DAY), note: "Old touch" });
+    store.logInteraction({ id: "int-newer", contactId: newer.id, at: iso(50 * DAY), note: "Newer touch" });
+
+    const results = store.needsFollowUp(30, 14);
+    expect(results.map((r) => r.id)).toEqual([older.id, newer.id]);
+  });
+
+  it("falls back to the persisted follow-up config when withinDays/graceDays are omitted", () => {
+    const store = new Store(dbPath);
+    store.setFollowUpConfig({ windowDays: 5, graceDays: 1 });
+    const c = store.upsert(
+      baseContact({ name: "Just Past Config Grace", nextStep: "Ping them", createdAt: iso(2 * DAY) }),
+    );
+    const results = store.needsFollowUp();
+    expect(results.map((r) => r.id)).toEqual([c.id]);
+  });
+
+  it("only considers the MOST RECENT interaction, not an older one that's outside the window", () => {
+    const store = new Store(dbPath);
+    const c = store.upsert(
+      baseContact({ name: "Mixed History", nextStep: "Follow up", createdAt: iso(200 * DAY) }),
+    );
+    store.logInteraction({ id: "int-old", contactId: c.id, at: iso(150 * DAY), note: "Old touch" });
+    store.logInteraction({ id: "int-new", contactId: c.id, at: iso(2 * DAY), note: "Recent touch" });
+    const results = store.needsFollowUp(30, 14);
+    expect(results.map((r) => r.id)).not.toContain(c.id);
+  });
+});
+
 describe("Store.logInteraction() / Store.listInteractions()", () => {
   it("persists an interaction and a subsequent listInteractions() call returns it", () => {
     const store = new Store(dbPath);
