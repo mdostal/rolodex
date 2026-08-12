@@ -1,6 +1,6 @@
 {
   "name": "rolodex",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "license": "MIT",
   "description": "Open-source relationship rolodex you run locally as a standalone app: own your contacts (SQLite), sync with Google Contacts, and search/log through a real UI. MCP is a secondary integration surface, letting your AI agents read, search, and update the same rolodex.",

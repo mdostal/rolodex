@@ -1,0 +1,6 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-12T14:32:51Z"
+artifacts:
+  - src/lib/store.ts
+  - src/shell/server.ts

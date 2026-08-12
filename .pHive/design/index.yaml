@@ -1,5 +1,15 @@
-updated_at: "2026-08-11T18:45:33Z"
+updated_at: "2026-08-12T00:00:00Z"
 briefs:
+  - topic: "followups-toggle-and-settings"
+    surface_kind: "component"
+    brief_path: ".pHive/design/followups-toggle-and-settings/brief.md"
+    wireframe_path: ".pHive/design/followups-toggle-and-settings/wireframe.txt"
+    export_paths: []
+    rendered_review: "https://claude.ai/code/artifact/b469d2df-c640-4317-b70f-cb380818f76c"
+    selected_rendition: 1
+    source: "standalone"
+    created_at: "2026-08-12T00:00:00Z"
+    linked_story: ["fu-02-followup-ui"]
   - topic: "contact-list-and-detail"
     surface_kind: "screen"
     brief_path: ".pHive/design/contact-list-and-detail/brief.md"

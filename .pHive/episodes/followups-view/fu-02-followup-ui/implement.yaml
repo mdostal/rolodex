@@ -1,0 +1,5 @@
+step_id: implement
+status: completed
+timestamp: "2026-08-12T15:20:48Z"
+artifacts:
+  - src/shell/index.html

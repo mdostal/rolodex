@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRolodexServer, type RolodexServerOptions } from "./server.js";
 import { createInMemorySecretsAdapter } from "../lib/secrets-adapter.js";
 import type { SecretsAdapter } from "../lib/secrets-adapter.js";
+import { Store } from "../lib/store.js";
 
 let dir: string;
 let server: Server | undefined;
@@ -61,6 +62,16 @@ async function postJson(url: string, payload?: unknown): Promise<{ status: numbe
 async function patchJson(url: string, payload?: unknown): Promise<{ status: number; body: unknown }> {
   const res = await fetch(url, {
     method: "PATCH",
+    headers: payload !== undefined ? { "content-type": "application/json" } : undefined,
+    body: payload !== undefined ? JSON.stringify(payload) : undefined,
+  });
+  const body = await res.json().catch(() => undefined);
+  return { status: res.status, body };
+}
+
+async function putJson(url: string, payload?: unknown): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(url, {
+    method: "PUT",
     headers: payload !== undefined ? { "content-type": "application/json" } : undefined,
     body: payload !== undefined ? JSON.stringify(payload) : undefined,
   });
@@ -486,5 +497,125 @@ describe("PATCH /api/contacts/:id/verdict validation", () => {
       expect(status).toBe(200);
       expect((body as { verdict?: string }).verdict).toBe(verdict);
     }
+  });
+});
+
+const DAY_MS = 86_400_000;
+function daysAgoIso(days: number): string {
+  return new Date(Date.now() - days * DAY_MS).toISOString();
+}
+
+describe("GET/PUT /api/settings/follow-up", () => {
+  it("GET returns 409 before the wizard is complete", async () => {
+    const { baseUrl } = await start();
+    const { status } = await getJson(baseUrl + "/api/settings/follow-up");
+    expect(status).toBe(409);
+  });
+
+  it("GET returns the lazily-seeded 30/14 defaults on a fresh store", async () => {
+    const { baseUrl } = await startReady();
+    const { status, body } = await getJson(baseUrl + "/api/settings/follow-up");
+    expect(status).toBe(200);
+    expect(body).toEqual({ windowDays: 30, graceDays: 14 });
+  });
+
+  it("PUT persists a new config and GET reflects it afterward", async () => {
+    const { baseUrl } = await startReady();
+    const put = await putJson(baseUrl + "/api/settings/follow-up", { windowDays: 45, graceDays: 7 });
+    expect(put.status).toBe(200);
+    expect(put.body).toEqual({ windowDays: 45, graceDays: 7 });
+
+    const get = await getJson(baseUrl + "/api/settings/follow-up");
+    expect(get.body).toEqual({ windowDays: 45, graceDays: 7 });
+  });
+
+  it("PUT rejects non-positive-integer values with 400 and does not persist them", async () => {
+    const { baseUrl } = await startReady();
+
+    const cases: unknown[] = [
+      { windowDays: 0, graceDays: 14 },
+      { windowDays: 30, graceDays: -1 },
+      { windowDays: 1.5, graceDays: 14 },
+      { windowDays: "30", graceDays: 14 },
+      { windowDays: 30 },
+      {},
+    ];
+    for (const payload of cases) {
+      const { status, body } = await putJson(baseUrl + "/api/settings/follow-up", payload);
+      expect(status).toBe(400);
+      expect((body as { error?: string }).error).toBeTruthy();
+    }
+
+    // None of the rejected payloads should have clobbered the defaults.
+    const get = await getJson(baseUrl + "/api/settings/follow-up");
+    expect(get.body).toEqual({ windowDays: 30, graceDays: 14 });
+  });
+
+  it("PUT with malformed JSON returns 400, not 500", async () => {
+    const { baseUrl } = await startReady();
+    const { status } = await postRawBody(baseUrl + "/api/settings/follow-up", "PUT", "{not valid json");
+    expect(status).toBe(400);
+  });
+});
+
+describe("GET /api/contacts/needs-follow-up", () => {
+  it("returns 409 before the wizard is complete", async () => {
+    const { baseUrl } = await start();
+    const { status } = await getJson(baseUrl + "/api/contacts/needs-follow-up");
+    expect(status).toBe(409);
+  });
+
+  it("uses the persisted settings when no query params are given", async () => {
+    // Uses a store built directly against a known temp file (rather than
+    // startReady()'s implicit one) so the test can backdate a contact's
+    // createdAt through the SAME Store instance the server queries against —
+    // the HTTP API has no route for setting createdAt directly.
+    const dbStore = new Store(path.join(dir, "rolodex.db"));
+    const { baseUrl } = await start({ store: dbStore });
+    await postJson(baseUrl + "/api/wizard/complete");
+    await putJson(baseUrl + "/api/settings/follow-up", { windowDays: 30, graceDays: 14 });
+
+    dbStore.upsert({
+      id: "",
+      name: "Stale Contact",
+      verdict: "none",
+      nextStep: "Send intro",
+      createdAt: daysAgoIso(40),
+      updatedAt: daysAgoIso(40),
+    });
+
+    const { status, body } = await getJson(baseUrl + "/api/contacts/needs-follow-up");
+    expect(status).toBe(200);
+    expect((body as Array<{ name: string }>).map((c) => c.name)).toEqual(["Stale Contact"]);
+  });
+
+  it("query params override the persisted settings for this call only, without persisting them", async () => {
+    const dbStore = new Store(path.join(dir, "rolodex.db"));
+    const { baseUrl } = await start({ store: dbStore });
+    await postJson(baseUrl + "/api/wizard/complete");
+    // Persisted config is wide enough that nothing qualifies by default.
+    await putJson(baseUrl + "/api/settings/follow-up", { windowDays: 365, graceDays: 365 });
+
+    const created = dbStore.upsert({
+      id: "",
+      name: "Moderately Stale",
+      verdict: "none",
+      nextStep: "Follow up",
+      createdAt: daysAgoIso(20),
+      updatedAt: daysAgoIso(20),
+    });
+
+    // Against the persisted config (365/365) this contact is excluded.
+    const defaultResult = await getJson(baseUrl + "/api/contacts/needs-follow-up");
+    expect((defaultResult.body as Array<{ id: string }>).map((c) => c.id)).not.toContain(created.id);
+
+    // A tighter override (withinDays/graceDays small) picks it up...
+    const overridden = await getJson(baseUrl + "/api/contacts/needs-follow-up?withinDays=5&graceDays=5");
+    expect(overridden.status).toBe(200);
+    expect((overridden.body as Array<{ id: string }>).map((c) => c.id)).toEqual([created.id]);
+
+    // ...but must not have persisted: the settings are unchanged afterward.
+    const settings = await getJson(baseUrl + "/api/settings/follow-up");
+    expect(settings.body).toEqual({ windowDays: 365, graceDays: 365 });
   });
 });

@@ -304,6 +304,37 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
         return;
       }
 
+      // GET/PUT /api/settings/follow-up — persisted config (windowDays,
+      // graceDays) that drives GET /api/contacts/needs-follow-up when its own
+      // query params are omitted. Gated behind wizard completion, same as
+      // the /api/contacts and /api/sync/google routes, since it needs a real
+      // Store.
+      if (parts[0] === "api" && parts[1] === "settings" && parts.length === 3 && parts[2] === "follow-up") {
+        if (!(await isWizardCompleted())) {
+          sendJson(res, 409, { error: "setup not complete" });
+          return;
+        }
+        const s = await getStore();
+
+        if (req.method === "GET") {
+          sendJson(res, 200, s.getFollowUpConfig());
+          return;
+        }
+
+        if (req.method === "PUT") {
+          const body = (await readJsonBody(req)) as { windowDays?: unknown; graceDays?: unknown };
+          const isPositiveInt = (v: unknown): v is number =>
+            typeof v === "number" && Number.isInteger(v) && v > 0;
+          if (!isPositiveInt(body.windowDays) || !isPositiveInt(body.graceDays)) {
+            sendJson(res, 400, { error: "windowDays and graceDays must both be positive integers" });
+            return;
+          }
+          s.setFollowUpConfig({ windowDays: body.windowDays, graceDays: body.graceDays });
+          sendJson(res, 200, s.getFollowUpConfig());
+          return;
+        }
+      }
+
       if (parts[0] === "api" && parts[1] === "contacts") {
         // Main app routes are only meaningful once setup has resolved a real
         // DB location — refuse rather than silently constructing Store
@@ -364,6 +395,32 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
             if (Number.isFinite(n) && n > 0) searchOpts.limit = n;
           }
           sendJson(res, 200, s.search(q, searchOpts));
+          return;
+        }
+
+        // GET /api/contacts/needs-follow-up?withinDays=N&graceDays=N — same
+        // "checked ahead of the generic :id block" reasoning as search above:
+        // a literal contact id can't collide with this route (never produced
+        // by randomUUID(), but worth being explicit), so this is safe to
+        // match before parts.length===3 falls through to the :id GET below.
+        // Both query params are optional and, when given, override the
+        // persisted settings for THIS call only — Store.needsFollowUp()
+        // itself falls back to getFollowUpConfig() for whichever is omitted,
+        // and neither is ever written back to settings here.
+        if (req.method === "GET" && parts.length === 3 && parts[2] === "needs-follow-up") {
+          const withinParam = url.searchParams.get("withinDays");
+          const graceParam = url.searchParams.get("graceDays");
+          let withinDays: number | undefined;
+          let graceDays: number | undefined;
+          if (withinParam !== null) {
+            const n = Number(withinParam);
+            if (Number.isFinite(n) && n > 0) withinDays = n;
+          }
+          if (graceParam !== null) {
+            const n = Number(graceParam);
+            if (Number.isFinite(n) && n > 0) graceDays = n;
+          }
+          sendJson(res, 200, s.needsFollowUp(withinDays, graceDays));
           return;
         }
 

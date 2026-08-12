@@ -1,0 +1,29 @@
+name: followups-view
+title: Follow-up tracking (needsFollowUp) + configurable settings
+target_codebase: /Users/mdostal/Documents/work/rolodex
+methodology: classic
+version_bump: patch
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: [ui]
+  roster: [researcher, technical-writer, tpm, ui-designer]
+  per_tag_reasoning:
+    ui: "New filter toggle + settings panel on the existing contact list view — has_ui: true in project profile."
+  confidence: matched
+  gate_decisions:
+    ui: included
+
+stories:
+  - id: fu-01-followup-config-and-query
+    title: Follow-up config (settings table) + real needsFollowUp() query
+    complexity: medium
+    depends_on: []
+  - id: fu-02-followup-ui
+    title: Follow-up filter toggle + settings panel UI
+    complexity: medium
+    depends_on: [fu-01-followup-config-and-query]
