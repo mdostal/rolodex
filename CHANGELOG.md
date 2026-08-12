@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-12
+
+First tagged release.
+
 ### Changed
 
 - **`mcp-tool-bodies` release finalization.** Applied the planned `minor` version bump (`0.2.1` → `0.3.0`) for wiring the MCP tool bodies.
