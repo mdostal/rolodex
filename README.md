@@ -8,7 +8,7 @@ history of every touchpoint.
 ## Why this exists
 A static contacts file is a goldfish — nothing maintains it. Rolodex gives
 you a working contact list you actually use: log who you met, set a verdict
-and next step, search it, and (soon) see who's gone cold. Because it syncs
+and next step, search it, and see who's gone cold. Because it syncs
 with Google Contacts on *your* credentials, it also reaches your Gmail
 contacts without anyone else holding your token.
 
@@ -20,11 +20,13 @@ npm run shell
 This starts a local server on `http://localhost:4173` (loopback only — never
 reachable from other devices) and opens it in your browser. On first run
 you'll walk through a five-screen setup wizard: pick where your database
-lives, optionally connect Google Contacts (paste an OAuth client id/secret),
-a quick check that secure credential storage works, and finish — no account
-to create, no login screen, straight into your (empty) contact list. From
+lives, optionally connect Google Contacts (paste an OAuth client id/secret,
+then sign in through Google's real consent screen in your browser), a quick
+check that secure credential storage works, and finish — no account to
+create, no login screen, straight into your (empty) contact list. From
 there: add a contact, search, log interactions, and pull in your Google
-Contacts once connected.
+Contacts once connected. A "Reconnect Google" action lives in Settings if a
+connection ever needs re-establishing without rerunning the wizard.
 
 **There is no login/logout in this app.** It's single-user-per-instance —
 whatever access control you need is your OS account / filesystem
@@ -41,8 +43,11 @@ decision, not a gap.
   either way.
 - **Google Contacts sync** — one-shot pull today (push/two-way is a planned
   follow-up), deduped by resource name/email. Verdict/angle/next-step are
-  local-only and always survive a sync. Runs on *your* OAuth, stored via the
-  OS keychain (`SecretsAdapter`) — never an env var, log, or file.
+  local-only and always survive a sync. Connects through a real OAuth 2.0
+  consent flow in your own browser (Google's current "loopback" mechanism
+  for a desktop app), with the resulting token — and every later refresh —
+  stored via the OS keychain (`SecretsAdapter`) and never an env var, log,
+  or file.
 - **Search + interaction logging** — find a contact by name/org/what-they-do/
   angle/tags, and log calls/emails/meetings against them.
 
@@ -77,12 +82,13 @@ npm run build        # compile to dist/
 ```
 
 ## Status
-`v0.1.0` — the standalone app is the primary, working surface: shell +
-server, setup wizard, contact CRUD, search, interaction logging, and a
-one-shot Google Contacts pull all work end to end. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and
-the list of remaining gaps (Google push/two-way sync, the MCP tool bodies,
-enrichment-on-add, a "who's gone cold" view).
+`v0.4.0` — the standalone app is the primary, working surface: shell +
+server, setup wizard, contact CRUD, search, interaction logging, a real
+Google Contacts connect-and-pull flow, and a "who's gone cold" follow-up
+view all work end to end. The MCP server's tool bodies are wired to that
+same real logic. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the
+full architecture and the list of remaining gaps (Google push/two-way sync,
+enrichment-on-add).
 
 ## License
 MIT © 2026 Mathew Dostal
