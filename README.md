@@ -90,5 +90,9 @@ same real logic. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the
 full architecture and the list of remaining gaps (Google push/two-way sync,
 enrichment-on-add).
 
+A future Pantheon plugin tie-in exists only as a dormant, unwired stub —
+see [`docs/PANTHEON.md`](docs/PANTHEON.md). Rolodex has zero Pantheon
+dependency today and always will be usable standalone.
+
 ## License
 MIT © 2026 Mathew Dostal
