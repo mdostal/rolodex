@@ -1,0 +1,86 @@
+id: gof-02-wizard-connect-wiring
+epic: google-oauth-flow
+title: Wire the real consent flow into the setup wizard
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [gof-01-core-oauth-flow]
+
+description: |
+  Replaces wizard.html's hardcoded "Google sign-in happens the first time
+  you sync — coming soon" placeholder (line 546) with a real multi-step
+  connect: save client id/secret (existing, unchanged) -> trigger
+  connectGoogleAccount() via a new server route -> show real success or a
+  real, specific error. Adds a Cancel button for the up-to-120s wait,
+  wired to a real AbortController so cancelling actually tears down the
+  server-side listener (via gof-01's AbortSignal support) instead of
+  leaving it running in the background.
+
+  New route: POST /api/wizard/google/connect. Reads and parses
+  GOOGLE_OAUTH_CLIENT_KEY itself (mirroring exactly how the existing
+  POST /api/wizard/google route already reads/parses stored client
+  credentials — same pattern, new route), calls connectGoogleAccount()
+  from gof-01, and forwards the request's own abort signal through so a
+  client-side cancel propagates server-side.
+
+acceptance_criteria:
+  - "Given client id/secret are already saved, when the user clicks Connect, then the browser opens to Google's real consent screen (verified via the injected/testable browser-open call, not a live browser in tests)"
+  - "Given a successful consent, when the flow completes, then wizard.html shows a real success state — not the old hardcoded 'coming soon' string, which must no longer appear anywhere in the file"
+  - "Given the user clicks Deny on Google's consent screen (or the server returns the access_denied case), when that response reaches the wizard, then a real, specific error message is shown — not a generic failure"
+  - "Given the connect step is in progress, when the user clicks the new Cancel button, then the client-side fetch aborts AND the server-side listener from gof-01 is torn down via the forwarded AbortSignal (not just abandoned to run out its 120s timeout)"
+  - "Given the wizard is used end-to-end with a fake/injected OAuth flow in a test, when the full save-then-connect sequence runs, then GET-ing the resulting stored token key reflects a real persisted Credentials blob"
+
+steps:
+  - id: implement
+    description: Add POST /api/wizard/google/connect to server.ts (mirroring the existing google-client route's credential-reading pattern) and rewrite wizard.html's onConnect() into a real multi-step flow with a working Cancel button
+    agent: developer
+  - id: test
+    description: Write/extend server.test.ts and any wizard-flow-level tests covering the acceptance criteria above, using gof-01's DI seams (fake connectGoogleAccount or fake OAuth2Client/browser-opener) — no real network call
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review for correctness, that the old placeholder string is fully gone, and that cancel genuinely propagates server-side rather than just hiding the UI state
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/shell/server.ts
+      purpose: "POST /api/wizard/google (lines 211-233) — the existing sibling route whose credential-reading pattern the new connect route mirrors; also the 127.0.0.1-only binding convention (lines 607-618) already established"
+    - path: src/shell/wizard.html
+      purpose: "onConnect() (lines 511-554) and the literal 'coming soon' placeholder at line 546 this story removes"
+    - path: src/lib/google-oauth-flow.ts
+      purpose: "connectGoogleAccount() from gof-01 — this story's route calls it directly, no changes to it"
+
+files_to_modify:
+  - file: src/shell/server.ts
+    change: "add POST /api/wizard/google/connect, forwarding request abort to connectGoogleAccount's signal"
+  - file: src/shell/wizard.html
+    change: "rewrite onConnect() into a real multi-step flow with Cancel button; remove the hardcoded 'coming soon' string entirely"
+
+code_examples:
+  - title: "Existing sibling route this story's new route mirrors"
+    file: src/shell/server.ts
+    snippet: |
+      // POST /api/wizard/google — saves clientId/clientSecret under
+      // GOOGLE_OAUTH_CLIENT_KEY. FUTURE OAUTH EXCHANGE PLUGS IN HERE.
+
+design_decisions:
+  - decision: "Cancel aborts both client-side fetch and the server-side listener, not just the UI state"
+    rationale: "Researcher review flagged that onConnect()'s existing fetch has no AbortController/timeout at all today — up to 120s with no way to bail out short of closing the tab. A cancel that only hides the UI while the listener keeps running server-side would be a half-fix."
+
+risks:
+  - severity: low
+    description: "Response-shape/UI-state ergonomics rather than logic risk — gof-01 already carries the hard security/lifecycle work"
+    mitigation: "Acceptance criteria above are explicit about the exact states (success/denied/cancel) the UI must show"
+
+references:
+  - path: .pHive/epics/google-oauth-flow/docs/design-discussion.md
+    relevant_excerpt: |
+      §3 step 10 and the researcher-review clarification — the Cancel
+      button and AbortSignal-forwarding design this story implements.

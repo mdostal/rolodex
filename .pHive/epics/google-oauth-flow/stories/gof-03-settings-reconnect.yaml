@@ -1,0 +1,75 @@
+id: gof-03-settings-reconnect
+epic: google-oauth-flow
+title: Reconnect Google from Settings (outside the first-run wizard)
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [gof-02-wizard-connect-wiring]
+
+description: |
+  Closes the gap where a revoked or expired refresh_token leaves a user
+  with no way back into a working Google connection short of rerunning the
+  whole 5-screen first-run wizard. Adds a "Reconnect Google" action to the
+  shell's existing settings popover (the ⚙ icon in index.html).
+
+  This is real, non-trivial UI work, not a same-pattern plug-in: today's
+  settingsFormHtml()/wireSettingsPanel() (index.html:736-797) is a
+  single-purpose form for two numeric fields (follow-up window/grace days)
+  with its own submit handler and focus-trap logic — there's no existing
+  action-list/menu structure. This story either restructures the popover
+  into sections or adds a second, parallel disclosure alongside the
+  existing form; either is acceptable, developer's judgment, as long as
+  the existing follow-up settings behavior is untouched.
+
+  Reuses gof-01's connectGoogleAccount() and gof-02's
+  POST /api/wizard/google/connect route as-is — no new server-side OAuth
+  logic, purely a new UI entry point into the already-built flow.
+
+acceptance_criteria:
+  - "Given the settings popover is open, when the user looks for it, then a 'Reconnect Google' action is present and does not interfere with the existing follow-up window/grace-period form's behavior (verified by the existing settings tests still passing unmodified)"
+  - "Given the user clicks Reconnect Google, when the flow runs, then it reuses the exact same POST /api/wizard/google/connect route and connectGoogleAccount() flow from gof-01/gof-02 — no duplicated OAuth logic"
+  - "Given the reconnect flow is in progress, when the user wants to back out, then the same Cancel/abort behavior from gof-02 is available here too"
+  - "Given this story is dropped or deferred, when checked, then nothing else in the epic depends on it — the wizard-only flow from gof-01/gof-02 remains fully functional on its own"
+
+steps:
+  - id: implement
+    description: Add the Reconnect Google entry point to the settings popover (restructure into sections, or add a parallel disclosure — developer's call), wired to the existing gof-02 route
+    agent: developer
+  - id: test
+    description: Extend shell/server.test.ts and any relevant UI-level tests; confirm the pre-existing follow-up-settings tests are unaffected
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review for UI correctness and that no OAuth logic was duplicated rather than reused
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/shell/index.html
+      purpose: "wireSettingsPanel()/settingsFormHtml() (lines 736-797) — the existing single-purpose settings popover this story extends"
+
+files_to_modify:
+  - file: src/shell/index.html
+    change: "add a Reconnect Google action to the settings popover, wired to the existing gof-02 connect route"
+
+design_decisions:
+  - decision: "This story is explicitly droppable and depends only on gof-02, not the other way around"
+    rationale: "Confirmed during collaborative review that nothing else in the epic depends on Settings having a reconnect action — the wizard flow is fully functional without it."
+
+risks:
+  - severity: low
+    description: "Scoped as UI-only reuse of already-built, already-reviewed OAuth logic"
+    mitigation: "Acceptance criteria explicitly require reuse, not duplication, of gof-01/gof-02's flow"
+
+references:
+  - path: .pHive/epics/google-oauth-flow/docs/design-discussion.md
+    relevant_excerpt: |
+      §3's corrected open-question-1 resolution — this is real, if modest,
+      new UI structure, sized as its own story per the researcher review's
+      correction of the original "small addition" framing.

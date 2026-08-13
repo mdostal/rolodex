@@ -526,30 +526,67 @@
         });
         showStatus("checking", '<span class="spinner" aria-hidden="true"></span> Saving your credentials…');
         try {
-          // NOTE(future work): this call only validates the two fields are
-          // non-empty and writes them through SecretsAdapter — see the
-          // matching comment at the server route (src/shell/server.ts,
-          // POST /api/wizard/google) for exactly where the real OAuth
-          // consent flow (system-browser redirect + token exchange) plugs
-          // in later. It does not happen here, so there is no "Connected as
-          // <email>" to show yet, per this story's explicit scope boundary.
           await api("/api/wizard/google", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ clientId, clientSecret }),
           });
-          clientIdEl.disabled = true;
-          clientSecretEl.disabled = true;
-          document.getElementById("g-secret-toggle").disabled = true;
-          showStatus(
-            "success",
-            "&#10003; Credentials saved to your keychain. Google sign-in happens the first time you sync — coming soon.",
-          );
-          reachedIndex = Math.max(reachedIndex, 3);
-          setTimeout(() => navigate("secrets"), 700);
         } catch (err) {
           showStatus("error", escapeHtml(err.message || "Something went wrong saving your credentials."));
           wireFooter();
+          return;
+        }
+
+        clientIdEl.disabled = true;
+        clientSecretEl.disabled = true;
+        document.getElementById("g-secret-toggle").disabled = true;
+
+        await runConnect();
+      }
+
+      // Runs the real OAuth loopback consent flow (opens the system browser
+      // and waits — server-side — up to 120s for the user to finish there).
+      // Assumes credentials are already saved (onConnect() only calls this
+      // after that succeeds).
+      async function runConnect() {
+        const clientIdEl = document.getElementById("g-client-id");
+        const clientSecretEl = document.getElementById("g-client-secret");
+        const secretToggleEl = document.getElementById("g-secret-toggle");
+        showStatus(
+          "checking",
+          '<span class="spinner" aria-hidden="true"></span> Connecting… waiting for you to finish in your browser.',
+        );
+        const controller = new AbortController();
+
+        function cancel() {
+          controller.abort();
+        }
+
+        setFooter({
+          backOnClick: () => { cancel(); navigate("database"); },
+          extraButtons: [{ label: "Cancel", onClick: cancel }],
+          primaryLabel: "Connecting…",
+          primaryEnabled: false,
+          primaryOnClick: () => {},
+        });
+
+        try {
+          await api("/api/wizard/google/connect", { method: "POST", signal: controller.signal });
+          showStatus("success", "&#10003; Google account connected.");
+          reachedIndex = Math.max(reachedIndex, 3);
+          setTimeout(() => navigate("secrets"), 700);
+        } catch (err) {
+          if (err && err.name === "AbortError") {
+            // Clean, retryable state — not an error banner.
+            showStatus("", "Connection canceled. You can try connecting again whenever you're ready.");
+          } else {
+            showStatus("error", escapeHtml(err.message || "Something went wrong connecting your Google account."));
+          }
+          clientIdEl.disabled = false;
+          clientSecretEl.disabled = false;
+          secretToggleEl.disabled = false;
+          wireFooter();
+          return;
         }
       }
 
