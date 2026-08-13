@@ -9,10 +9,11 @@ accurate and this document explicitly supersedes it**, not just reorders it
 quietly. As of the `standalone-app-foundation` epic, the primary interface to
 rolodex is the **standalone local app** — a desktop shell + local server
 hosting a real SQLite store, a first-run setup wizard, and a browser-tab UI.
-The MCP server (`src/mcp/server.ts`) still exists, is still stubbed (every
-tool body throws/returns "not implemented yet"), and remains a secondary
-integration surface to be wired up in a later epic — it is not, and is no
-longer treated as, the thing this repo builds first.
+The MCP server (`src/mcp/server.ts`) still exists and remains a secondary
+integration surface — it is not, and is no longer treated as, the thing this
+repo builds first. Its tool bodies are wired to the same real `Store`/
+`GoogleSync` logic the standalone app uses (see "MCP surface" below); it just
+isn't the primary way to use rolodex.
 
 ## What's actually built today
 
@@ -21,13 +22,18 @@ longer treated as, the thing this repo builds first.
   first-run setup wizard (`src/shell/wizard.html`).
 - A real `Store` (`src/lib/store.ts`, `node:sqlite`/WAL) with working
   `list`, `upsert`, `get`, `setVerdict`, `setNextStep`, `logInteraction`,
-  `listInteractions`, and `search`. (`needsFollowUp` is still a stub —
-  see Remaining Gaps.)
+  `listInteractions`, `search`, and `needsFollowUp` (surfaced as a "Needs
+  follow-up" view in the UI, with a configurable follow-up window/grace
+  period).
 - A pluggable `SecretsAdapter` (`src/lib/secrets-adapter.ts`) backed by the
   macOS keychain, used by the wizard and by Google sync.
-- A one-shot Google Contacts pull (`src/lib/google-sync.ts`) that seeds the
+- A one-shot Google Contacts pull (`src/lib/google-sync.ts`), connected
+  through a real OAuth 2.0 consent flow (`src/lib/google-oauth-flow.ts`) run
+  from the setup wizard or re-triggered from Settings, that seeds the
   rolodex from the owner's Google Contacts, with local-only fields preserved
   across the merge.
+- All 5 MCP tools (`src/mcp/server.ts`) wired to that same real `Store`/
+  `GoogleSync` logic.
 - Search (FTS5-backed, with a LIKE-scan fallback) and interaction logging,
   reachable from the UI and the HTTP API.
 - No login, no logout, no in-app access control of any kind. See below.
@@ -95,11 +101,17 @@ path the Database screen resolved, and writes a `wizard.completed` sentinel
 through `SecretsAdapter`. There is no "un-complete setup" affordance; once
 the sentinel is set, wizard mode never comes back for that install.
 
-The wizard's Google-connect step only collects and stores the OAuth client
-id/secret via `SecretsAdapter` (key `google.oauth.client`) — it does not open
-a browser for consent or talk to Google at all. The real OAuth exchange
-(browser consent, refresh-token exchange, writing `google.oauth.token`) is a
-remaining gap; see below.
+The wizard's Google-connect step collects and stores the OAuth client
+id/secret via `SecretsAdapter` (key `google.oauth.client`), then runs the
+real OAuth exchange: `src/lib/google-oauth-flow.ts`'s `connectGoogleAccount()`
+opens Google's consent screen in the system browser, catches the redirect on
+a short-lived local `127.0.0.1` listener (Google's current "loopback IP
+address" flow for a Desktop-app client), exchanges the code, and writes the
+resulting token — and every later silent refresh — to `SecretsAdapter` (key
+`google.oauth.token`). A working Cancel button tears the listener down
+immediately rather than waiting out its 120s timeout. The same flow is
+reachable again later from Settings ("Reconnect Google") if a connection is
+ever revoked or expires, without rerunning the whole wizard.
 
 ## Store (`src/lib/store.ts`)
 SQLite (`node:sqlite`, WAL) with an **FTS5** virtual table over
@@ -196,21 +208,25 @@ and always writes every field it's given. `push()` remains an explicit stub
 (`throw new Error("not implemented")`) — two-way sync is out of scope for
 this epic.
 
-**Real OAuth exchange is not built yet.** The wizard only collects/stores the
-client id/secret; nothing today opens a browser for consent or writes
-`google.oauth.token`. Until a later story adds that exchange, `pull()` fails
-with an actionable error ("Google sign-in hasn't happened yet...").
+**Real OAuth exchange is built** (`src/lib/google-oauth-flow.ts`,
+`connectGoogleAccount()`) — see "First-run setup wizard" above for the full
+flow. `pull()` only fails with an actionable error if a real user genuinely
+hasn't connected Google yet (or a refresh token was revoked and needs
+reconnecting), not because the exchange doesn't exist.
 
-## MCP surface (`src/mcp/server.ts`) — secondary, not yet wired
+## MCP surface (`src/mcp/server.ts`) — secondary, wired to the real logic
 
 Stdio MCP server exposing `rolodex_upsert`, `rolodex_search`,
 `rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`. Every
-tool body is still a stub (`"not implemented yet"`) — this file was
-deliberately **not touched** by the standalone-app-foundation epic beyond
-keeping `Store` as the single source of truth both surfaces will eventually
-share. Wiring these tool bodies to the real `Store`/`GoogleSync` is a
-remaining gap (see below), to be picked up once the standalone app's own
-scope is stable. Run it with `npm run dev`.
+tool is wired to the same `Store`/`GoogleSync` logic the standalone app
+uses — JSON-stringified responses, `isError: true` on any thrown error
+instead of crashing the stdio process, and `rolodex_sync_google`'s `push`
+direction returning a clear not-implemented response rather than a silent
+no-op (two-way sync is still a genuine gap, see below). This remains a
+secondary integration surface, not the primary way to use rolodex — the
+standalone app is that. Run it with `npm run dev`. If you use Claude Code,
+`.claude/skills/rolodex/SKILL.md` teaches an agent how to use these tools
+well.
 
 ## Single-user, no in-app login — deliberate, not an oversight
 
@@ -255,40 +271,40 @@ normal filesystem permissions.
 
 ## Build-out status
 
-Done (this epic, `standalone-app-foundation`):
+Done (across `standalone-app-foundation`, `followups-view`,
+`mcp-tool-bodies`, and `google-oauth-flow`):
 - [x] Desktop shell + local server, bound to loopback, real `Store` wired in.
 - [x] `Store` bodies: `list`, `upsert`, `get`, `setVerdict`, `setNextStep`,
-      `logInteraction`, `listInteractions`, `search` (FTS5 + LIKE fallback).
+      `logInteraction`, `listInteractions`, `search` (FTS5 + LIKE fallback),
+      `needsFollowUp` — with a "Needs follow-up" UI view and a configurable
+      follow-up window/grace period.
 - [x] `SecretsAdapter`: interface + factory + macOS-keychain implementation +
       in-memory fake, with automatic fallback and error sanitization.
 - [x] Five-screen first-run setup wizard, no login/logout anywhere.
+- [x] A real Google OAuth 2.0 consent flow (loopback IP address flow,
+      `src/lib/google-oauth-flow.ts`), reachable from the wizard and from a
+      "Reconnect Google" action in Settings, with a working Cancel button.
 - [x] One-shot Google Contacts pull, with local-only-fields-survive-sync
-      guarantee.
+      guarantee, and a refreshed token now persisted back to the keychain.
+- [x] All 5 MCP tools wired to the same real `Store`/`GoogleSync` logic.
 - [x] Search (UI + API) and interaction logging (UI + API).
-- [x] Docs rewrite (this file + README.md) and CI (this story).
+- [x] Docs rewrite (this file + README.md) and CI.
 
-Remaining gaps (see
-`.pHive/epics/standalone-app-foundation/docs/vertical-plan.md` §4 "Deferred
-Items" for the authoritative list):
-- [ ] Google `push()` / full two-way sync — pull-only today; no real OAuth
-      consent-and-token exchange exists yet either (the wizard only stores
-      client id/secret).
-- [ ] MCP tool bodies (`rolodex_upsert`, `rolodex_search`,
-      `rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`)
-      — still all stubs; wiring them to the real `Store`/`GoogleSync` is a
-      future epic.
+Remaining gaps:
+- [ ] Google `push()` / full two-way sync — pull-only today; the OAuth
+      exchange itself is real, `push()` remains an explicit stub.
 - [ ] Enrichment-on-add (public-info lookup to speed up capturing
       org/role/what-they-do) — deferred; needs to reconcile with the
       "no silent guesses" convention before it's designed.
-- [ ] `Store.needsFollowUp()` and a "who's gone cold" UI — `Store` method is
-      still a stub (`throw new Error("not implemented")`); not wired to any
-      screen.
-- [ ] A dedicated settings/account screen (re-auth on token expiry, change
-      `ROLODEX_DB` after first run, re-run the wizard).
+- [ ] A dedicated settings/account screen beyond the current "Reconnect
+      Google" + follow-up-window popover (e.g. changing `ROLODEX_DB` after
+      first run, re-running the wizard).
 - [ ] Portunus (or any second) `SecretsAdapter` backend — interface is open,
       only one real implementation ships.
 - [ ] Cross-platform packaging/distribution — developed and verified on
-      macOS only so far.
+      macOS only so far (the OAuth flow's browser-opening step degrades to a
+      logged URL + manual open on non-Darwin, but is otherwise untested
+      there).
 - [ ] Full at-rest database encryption — see "Single-user, no in-app login"
       above; not planned as an in-app feature.
 - [ ] Comprehensive loading/error/toast state coverage across the Contact UI
