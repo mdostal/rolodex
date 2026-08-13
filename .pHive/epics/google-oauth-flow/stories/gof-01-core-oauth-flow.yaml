@@ -1,0 +1,139 @@
+id: gof-01-core-oauth-flow
+epic: google-oauth-flow
+title: Real Google OAuth 2.0 loopback consent flow
+status: pending
+complexity: high
+methodology: classic
+depends_on: []
+
+description: |
+  Implements the actual OAuth 2.0 "loopback IP address" consent flow Google
+  requires for a Desktop-app client (the old out-of-band/copy-paste-code
+  flow has been fully dead since Jan 2023). Today nothing in the codebase
+  ever writes SecretsAdapter key "google.oauth.token" — GoogleSync.pull()
+  reads it correctly but it's always empty for a real user. This story
+  makes that key real.
+
+  New module: src/lib/google-oauth-flow.ts, exporting
+  connectGoogleAccount(opts). It starts a short-lived http.createServer
+  bound to 127.0.0.1 on a random OS-assigned port (no path suffix on the
+  redirect_uri — only the bare http://127.0.0.1:<port> form is confirmed
+  by Google's current docs), builds the consent URL via
+  auth.generateAuthUrl({ access_type: "offline", prompt: "consent", scope,
+  state }), opens it in the system browser (reusing the existing `open` CLI
+  spawn pattern already used elsewhere in the codebase), and resolves only
+  on a request matching the root path with the correct `state` nonce —
+  anything else (wrong path, mismatched state, stray browser probes) is
+  ignored without settling the flow or closing the listener. Exchanges the
+  code via auth.getToken(code); wires auth.on("tokens", ...) BEFORE calling
+  getToken() so both the initial token and any later silent refresh persist
+  to the keychain through one path. A 120s timeout and an AbortSignal both
+  tear the listener down; a concurrency guard rejects a second concurrent
+  call. The callback HTML response is always one of a small fixed set of
+  strings (success/denied/state-mismatch/error) — it never interpolates
+  any request-derived value.
+
+  Also touches src/lib/google-sync.ts: exports GOOGLE_OAUTH_TOKEN_KEY (it's
+  currently unexported) and wires the same 'tokens' persistence hook into
+  pull()'s existing OAuth2Client construction, so a token refreshed during
+  a routine pull() also gets saved back to the keychain instead of being
+  silently re-derived from the refresh_token on every future call. This is
+  a small, deliberate two-line addition to an otherwise-untouched pull().
+
+acceptance_criteria:
+  - "Given a valid client id/secret and a completed consent (fake code returned by a test HTTP request), when connectGoogleAccount runs, then it exchanges the code and persists a Credentials JSON blob under GOOGLE_OAUTH_TOKEN_KEY via the injected SecretsAdapter"
+  - "Given the injected fake OAuth2Client emits a 'tokens' event a second time (simulating a later refresh), when that fires, then the updated Credentials are persisted again"
+  - "Given a callback with ?error=access_denied, when received, then connectGoogleAccount rejects with a distinct, clear 'consent denied' error — not the generic timeout error"
+  - "Given a callback with a mismatched or missing state, when received, then the listener does NOT close or settle the flow — it keeps waiting for a legitimate callback"
+  - "Given a request to any path other than the root during an open flow, when received, then it gets a generic 404/400 response and does not settle the flow"
+  - "Given no legitimate callback arrives within 120 seconds, when the timeout fires, then the listener closes and the promise rejects with an actionable error"
+  - "Given an AbortSignal passed to connectGoogleAccount is aborted mid-flow, when that happens, then the listener closes immediately without waiting for the 120s timeout"
+  - "Given connectGoogleAccount is called a second time while one call is already in flight, when that happens, then the second call rejects immediately and no second listener/browser tab opens"
+  - "Given the callback HTML response for any outcome (success/denied/mismatch/error), when inspected, then it never contains any raw request-derived query-parameter value — only fixed, hardcoded strings"
+  - "Given GoogleSync.pull() runs and its OAuth2Client's token is refreshed internally, when that refresh happens, then the refreshed Credentials are persisted back to the keychain (not just used in-memory for that one call)"
+
+steps:
+  - id: research
+    description: Confirm the exact current GOOGLE_OAUTH_TOKEN_KEY/pull() code in google-sync.ts, the SecretsAdapter interface and its {signal?} convention, and the real google-auth-library OAuth2Client types (generateAuthUrl/getToken/tokens-event) on disk in node_modules
+    agent: researcher
+  - id: implement
+    description: Build src/lib/google-oauth-flow.ts per the design (listener lifecycle, state-nonce CSRF check with non-settling ignore on mismatch, fixed-string-only callback responses, timeout, AbortSignal, concurrency guard, tokens-event persistence), plus the two-line google-sync.ts export+hook addition
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Write vitest tests per the acceptance criteria above, driving the real local listener with real HTTP requests and injected fakes for OAuth2Client/browser-opener/secrets — no real network call to Google, ever
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Adversarially review for the specific risks this story exists to close — CSRF, local-listener DoS/interference, reflected content in the callback HTML, argv exposure of the state nonce, and the token-refresh persistence path — not just a correctness pass
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/lib/google-sync.ts
+      purpose: "GOOGLE_OAUTH_TOKEN_KEY (currently unexported, line 53) and pull()'s existing OAuth2Client construction (lines 214-215) that gains the tokens-event persistence hook"
+    - path: src/lib/secrets-adapter.ts
+      purpose: "SecretsAdapter interface and its {signal?: AbortSignal} option convention, mirrored by connectGoogleAccount's own signal option"
+    - path: src/lib/google-sync.test.ts
+      purpose: "The DI/no-real-network test convention to mirror exactly for the new module's tests"
+
+files_to_modify:
+  - file: src/lib/google-oauth-flow.ts
+    change: "new file — connectGoogleAccount() implementing the full loopback OAuth flow"
+  - file: src/lib/google-oauth-flow.test.ts
+    change: "new file — tests per acceptance criteria"
+  - file: src/lib/google-sync.ts
+    change: "export GOOGLE_OAUTH_TOKEN_KEY; wire the same tokens-event persistence hook into pull()'s OAuth2Client"
+
+code_examples:
+  - title: "Existing pull() OAuth2Client construction this story adds a hook to (unchanged otherwise)"
+    file: src/lib/google-sync.ts
+    snippet: |
+      const auth = new google.auth.OAuth2(clientId, clientSecret);
+      auth.setCredentials(token);
+      const client = createPeopleClient(auth);
+  - title: "google-auth-library's tokens event (confirmed on-disk in node_modules/google-auth-library)"
+    file: node_modules/google-auth-library/build/src/auth/authclient.d.ts
+    snippet: |
+      on(event: 'tokens', listener: (tokens: Credentials) => void): this;
+  - title: "Existing browser-open pattern to reuse (Darwin `open` CLI, injectable)"
+    file: src/shell/server.ts
+    snippet: |
+      spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+
+design_decisions:
+  - decision: "redirect_uri is the bare http://127.0.0.1:<port> with no path suffix"
+    rationale: "Only this bare form was confirmed against Google's current loopback-flow docs during research; an earlier draft's /callback suffix was an unconfirmed addition, caught and removed during the grill adversarial pass."
+  - decision: "Non-matching requests (wrong path, bad state) never close the listener or settle the flow"
+    rationale: "Grill finding S1: settling on ANY request (e.g. a stray /favicon.ico probe) would let an unrelated local request kill the real Google callback before it arrives."
+  - decision: "Callback HTML response is always one of a small fixed set of hardcoded strings, never interpolates a query param"
+    rationale: "Grill finding S3: closes the reflected-content risk entirely by construction rather than relying on escaping untrusted input."
+  - decision: "The state nonce's brief visibility in the spawned open process's argv (via ps) is an accepted, documented risk, not silently ignored"
+    rationale: "Grill finding S2: this app's threat model is already single-user/local-machine (same class of exposure the OS keychain CLI calls already have); mitigated by the nonce being single-use and short-lived."
+  - decision: "google-sync.ts's GOOGLE_OAUTH_TOKEN_KEY becomes exported (a real import), unlike GOOGLE_OAUTH_CLIENT_KEY's deliberate duplication across the src/lib -> src/shell boundary"
+    rationale: "The duplication convention exists specifically to keep src/lib independent of src/shell. google-oauth-flow.ts lives in src/lib alongside google-sync.ts — a same-package import, not a cross-boundary one — so the rationale for duplication doesn't apply here."
+
+risks:
+  - severity: medium
+    description: "First real local HTTP listener + real OAuth exchange in the codebase — genuinely new pattern, not integration over already-tested code"
+    mitigation: "Explicit timeout, AbortSignal, concurrency guard, and a listener that only ever settles on a verified legitimate callback — all covered by acceptance criteria above"
+  - severity: low
+    description: "state nonce briefly visible via ps to other local accounts on the same machine"
+    mitigation: "Accepted risk under this app's single-user local-machine threat model; nonce is single-use and short-lived (documented in design-discussion.md §4)"
+
+references:
+  - path: .pHive/epics/google-oauth-flow/docs/design-discussion.md
+    relevant_excerpt: |
+      §3 — full connectGoogleAccount() step-by-step design, all grill/
+      researcher/TPM revisions baked in inline.
+  - path: .pHive/epics/google-oauth-flow/docs/grill-record.md
+    relevant_excerpt: |
+      11 findings (V1, H1, H2, T1, T2, C1, C2, S1, S2, S3) and their
+      resolutions — this story's acceptance criteria trace directly to
+      S1/S2/S3's security resolutions and H1's redirect_uri correction.

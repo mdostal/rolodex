@@ -1,0 +1,31 @@
+name: google-oauth-flow
+title: Real Google OAuth 2.0 consent flow (loopback IP address flow)
+target_codebase: /Users/mdostal/Documents/work/rolodex
+methodology: classic
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: main
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: []
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning: {}
+  confidence: matched
+  gate_decisions: {}
+
+stories:
+  - id: gof-01-core-oauth-flow
+    title: Real Google OAuth 2.0 loopback consent flow
+    complexity: high
+    depends_on: []
+  - id: gof-02-wizard-connect-wiring
+    title: Wire the real consent flow into the setup wizard
+    complexity: medium
+    depends_on: [gof-01-core-oauth-flow]
+  - id: gof-03-settings-reconnect
+    title: Reconnect Google from Settings (outside the first-run wizard)
+    complexity: medium
+    depends_on: [gof-02-wizard-connect-wiring]
