@@ -325,6 +325,98 @@ describe("POST /api/wizard/google/connect", () => {
   });
 });
 
+// The settings popover's "Reconnect Google" action (src/shell/index.html's
+// wireSettingsPanel()/runReconnect()) is a second UI entry point into this
+// exact same route — no new server-side route or OAuth logic was added for
+// it. That means: (1) the served main-app HTML must actually contain the new
+// action wired to this route, and (2) since the server has no notion of
+// "which UI called me", the abort-propagation contract already proven above
+// for the wizard's call site is the same contract this call site depends on
+// — proven again here specifically against a server in the *post-wizard*
+// state (wizard.completed already set), i.e. the state the settings popover
+// actually runs in, rather than only ever exercising this route mid-wizard.
+describe("Settings popover 'Reconnect Google' entry point", () => {
+  it("the served main app HTML includes a Reconnect Google action wired to POST /api/wizard/google/connect", async () => {
+    const secrets = createInMemorySecretsAdapter();
+    await secrets.set("wizard.completed", new Date().toISOString());
+    const { baseUrl } = await start({ secrets });
+
+    const res = await fetch(baseUrl + "/");
+    const html = await res.text();
+    expect(res.status).toBe(200);
+    // The settings popover's Google section and its idle action button.
+    expect(html).toContain('id="google-section"');
+    expect(html).toContain("Reconnect Google");
+    // The exact same route the wizard's Google-connect step uses — proves
+    // this is a second entry point into the existing flow, not a new one.
+    expect(html).toContain("/api/wizard/google/connect");
+    // The follow-up settings form must still be present, completely
+    // untouched, alongside the new Google section.
+    expect(html).toContain('id="settings-form"');
+    expect(html).toContain('id="settings-window"');
+    expect(html).toContain('id="settings-grace"');
+  });
+
+  it("on success, works identically when called after the wizard is already complete (the settings popover's real-world state)", async () => {
+    let calledWith: { clientId?: string; clientSecret?: string; secrets?: unknown } | undefined;
+    const fakeConnect = async (opts: { clientId: string; clientSecret: string; secrets: unknown }) => {
+      calledWith = opts;
+    };
+    const secrets = createInMemorySecretsAdapter();
+    await secrets.set("wizard.completed", new Date().toISOString());
+    const { baseUrl } = await start({ secrets, connectGoogleAccount: fakeConnect });
+    await postJson(baseUrl + "/api/wizard/google", { clientId: "client-abc", clientSecret: "s3cret" });
+
+    const { status, body } = await postJson(baseUrl + "/api/wizard/google/connect");
+    expect(status).toBe(200);
+    expect(body).toEqual({ connected: true });
+    expect(calledWith).toMatchObject({ clientId: "client-abc", clientSecret: "s3cret" });
+    expect(calledWith?.secrets).toBe(secrets);
+  });
+
+  it("aborting the HTTP request mid-flight (the settings popover's Cancel button / panel-close behavior) really propagates to connectGoogleAccount's AbortSignal, after the wizard is already complete", async () => {
+    const started = deferred();
+    const aborted = deferred<void>();
+    let capturedSignal: AbortSignal | undefined;
+    const fakeConnect = (opts: { signal?: AbortSignal }) => {
+      capturedSignal = opts.signal;
+      started.resolve();
+      return new Promise<void>((_resolve, reject) => {
+        // Same real proof as the wizard's own abort test: hangs until (and
+        // only until) an 'abort' event genuinely reaches this fake.
+        opts.signal?.addEventListener("abort", () => {
+          aborted.resolve();
+          reject(new Error("Google connect canceled."));
+        });
+      });
+    };
+    const secrets = createInMemorySecretsAdapter();
+    await secrets.set("wizard.completed", new Date().toISOString());
+    const { baseUrl } = await start({ secrets, connectGoogleAccount: fakeConnect });
+    await postJson(baseUrl + "/api/wizard/google", { clientId: "id", clientSecret: "secret" });
+
+    // Mirrors exactly what runReconnect()'s `api("/api/wizard/google/connect",
+    // { method: "POST", signal: controller.signal })` does, and what
+    // clicking the popover's Cancel button (or closing the panel mid-flight)
+    // does to that same controller.
+    const controller = new AbortController();
+    const fetchPromise = fetch(baseUrl + "/api/wizard/google/connect", {
+      method: "POST",
+      signal: controller.signal,
+    });
+    fetchPromise.catch(() => {});
+
+    await started.promise;
+    expect(capturedSignal?.aborted).toBe(false);
+
+    controller.abort();
+
+    await expect(fetchPromise).rejects.toThrow();
+    await aborted.promise;
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+});
+
 // checkSecretsCapability() (src/lib/secrets-check.ts) short-circuits to
 // `{ ok: false, backend: "none", error: "No secure keychain is available in
 // this session." }` on any non-Darwin platform BEFORE it ever calls the
