@@ -309,6 +309,9 @@ Remaining gaps:
       above; not planned as an in-app feature.
 - [ ] Comprehensive loading/error/toast state coverage across the Contact UI
       beyond each slice's basic error handling.
+- [ ] Pantheon plugin integration — a dormant, unwired stub exists (see
+      [`docs/PANTHEON.md`](PANTHEON.md)) with no real wiring into either
+      repo; explicitly deferred until Pantheon's own plugin system settles.
 
 ## Owner note (Mathew)
 This is the "DIY, owns-your-data" answer from the contacts CBA
