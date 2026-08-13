@@ -4,132 +4,148 @@ This document — and the dormant, unwired stub at
 [`src/integrations/pantheon.ts`](../src/integrations/pantheon.ts) — is
 deliberately **not a real integration**. Nothing in rolodex imports or
 registers this file today; rolodex runs entirely standalone with zero
-Pantheon dependency, and always will be usable that way. This exists so a
-future pass has a concrete, accurate starting point instead of a blank page,
-per the owner's explicit direction: research the real `mdostal/pantheon`
-plugin contract, stub against it, and defer full implementation.
+Pantheon dependency, and always will be usable that way.
 
-## What's real (confirmed by a full audit of `mdostal/pantheon`, 2026-08-12)
+## Correction
 
-Pantheon's actual plugin system, as it exists today on `main` (checked
-against every branch and tag — no "v2" of the plugin architecture, no
-numbered integration tiers, and no lifecycle-event mechanism exist anywhere
-in that repo as of this writing):
+An earlier version of this document was researched against
+`mdostal/pantheon` — an older, private dashboard repo (forked from
+Claud-ometer). That repo has no "v2," no numbered integration tiers, and no
+lifecycle-event system, and its content was written up here as the real
+contract, with an explicitly-aspirational section proposing what "L2" +
+lifecycle events might look like someday.
 
-- **`PantheonPlugin`** (`src/lib/pantheon/registry.ts`) — the bare
-  registry entry that drives the sidebar/mount page:
-  ```ts
-  export type PluginMount =
-    | { kind: 'route'; href: string }
-    | { kind: 'iframe'; port: number; path?: string }
-    | { kind: 'placeholder'; note: string };
+That was the wrong repo. The owner's actual "Pantheon v2" is a **separate**
+private repo, `mdostal/pantheon-v2` — *"the contract/wrapper/interface host
+that binds the standalone gods (Consus, Heimdall, Auriga, Minerva, Argus,
+Portunus) into one system."* It supersedes the older repo entirely (that
+repo's own content has since been vendored into pantheon-v2 as a plugin,
+`plugins/claud-ometer-upstream`, per pantheon-v2's own
+`docs/intro/prior-attempts.md`). This document now reflects **that** repo,
+confirmed by cloning it and reading real code — not the older one.
 
-  export interface PantheonPlugin {
-    id: string;
-    name: string;
-    description: string;
-    mount: PluginMount;
-    /** Probed server-side; drives the sidebar health dot. */
-    healthUrl?: string;
-    defaultEnabled: boolean;
-  }
-  ```
-- **`CatalogEntry`** (`src/lib/pantheon/catalog.ts`) — a richer layer with
-  an actual (non-numbered) tier concept:
-  ```ts
-  export type PluginLevel = 'harness-direct' | 'ui' | 'core';
-  export type CatalogStage = 'shipped' | 'stub' | 'planned';
+## What's actually real in `pantheon-v2` (confirmed 2026-08-12, `main`)
 
-  export interface CatalogEntry {
-    id: string;
-    frameworkId?: string;
-    name: string;
-    description: string;
-    level: PluginLevel;
-    stage: CatalogStage;
-    standalone: boolean;
-    port?: number;
-    healthUrl?: string;
-    pantheonTab?: string;
-    repoPath?: string;
-    installHint: string;
-    requires?: string[];
-    defaultEnabled: boolean;
-  }
-  ```
-- **UI mounting** is one of three kinds: `route` (a first-party Next.js
-  page in the Pantheon app itself), `iframe` (a standalone micro-UI on
-  another port of the same host — the real working precedent is Delphi,
-  `{ kind: 'iframe', port: 7806 }`, rendered via `PluginFrame`), or
-  `placeholder` (a reserved slot with no UI yet — this is the Portunus/Vault
-  entry's current state, and the precedent this stub follows).
-- **No lifecycle events.** Health is a passive, server-side `healthUrl`
-  probe (`probeHttp()`, 1.5s timeout, 10s cache) — nothing a plugin
-  registers for or emits into. "Install"/"enable" just record an intent /
-  flip a boolean in a local config file; no plugin code runs on either.
-  Every literal "v2" mention in that repo is a roadmap marker meaning "the
-  day someone builds real install/enable execution," not a shipped
-  architecture version — worth knowing so this isn't confused with a
-  genuine v1→v2 migration.
+**"L2" is not a trust/access tier — it's a capability-descriptor layer.**
+`contracts/l2/plugin-descriptor.ts` defines a discriminated union describing
+*what kind of thing* a plugin is:
+
+```ts
+// Zod schemas in the real repo; shown here as their inferred shape.
+type ServiceDescriptor = {
+  id: string;
+  type: "service";
+  capabilities: string[];
+  health_endpoint: string; // real URL
+  api_version: string;
+  port: number;
+  transport: "http" | "ndjson-stdio" | "grpc";
+};
+
+type DashboardComponentDescriptor = {
+  id: string;
+  type: "dashboard-component";
+  capabilities: string[];
+  mount_point: string;
+  props_schema: Record<string, unknown>;
+  event_subscriptions: string[];
+};
+
+// A third variant, RunnerDescriptor (invoke-and-return, call.{start,poll,
+// status,output}), is explicitly flagged in that repo's own docs as
+// unproven — no real committed example exists. Not used by this stub.
+```
+
+The wrapper that actually goes into `pantheon.plugins.yaml` (third-party
+plugins register here; the "gods" themselves use a separate
+`pantheon.gods.yaml` instead):
+
+```ts
+type PluginRegistryEntry = {
+  id: string;
+  type: "runner" | "service" | "dashboard-component" | "tool";
+  repo: string | null;
+  version: string; // semver
+  installed_at: string; // ISO datetime
+  updated_at: string;
+  enabled: boolean;
+  dependencies: string[];
+  descriptor?: ServiceDescriptor | DashboardComponentDescriptor; // (or RunnerDescriptor)
+  local_path: string;
+  port?: number;
+  notes?: string;
+};
+```
+
+Real precedent, closest analog to rolodex: `plugins/cadex` — a standalone
+reference plugin proving the `service` + separate `dashboard-component`
+descriptor pattern (one plugin, two descriptors, one per concern).
+
+**Lifecycle events are real, but not the mechanism the "L2" naming might
+suggest.** Two separate things exist under a shared "L1" name — worth not
+conflating, per that repo's own docs flagging this exact confusion:
+
+1. **In-process only.** Pantheon Core emits `plugin:install` / `plugin:enable`
+   / `plugin:disable` / `plugin:remove` on an in-process `EventEmitter`
+   when an operator installs/enables/disables/removes a plugin. A separate
+   plugin process (like rolodex would be) **cannot subscribe to this
+   directly** — it only exists inside Core's own Node process.
+2. **Real, working, cross-process.** An `L1Event` envelope
+   (`{type, payload, timestamp, source, correlationId}`) delivered by a
+   plugin `POST`ing its own payload to a Core webhook route; Core wraps it,
+   looks up subscribers, and does a fire-and-forget `POST` to each
+   subscriber's registered `callbackUrl` — **no delivery guarantee**,
+   failures are logged, never raised back to the sender. Proven working via
+   a real Consus → Minerva `decision:created` example
+   (`docs/cross-god-event-flow.md`). **Receiving-side subscription
+   registration happens on Core's own side**, not inside the emitting
+   plugin's repo — so a receiver isn't something rolodex could set up
+   unilaterally even if it wanted to.
+
+**UI mounting — two mechanisms, only one proven with real content.**
+- `kind: "proxy"` — full reverse-proxy of an entire standalone running app
+  under a basePath (`{id, kind:"proxy", basePath, proxyTo, enabled, nav}`,
+  via that repo's `lib/proxy-handler.ts`). **Real and working** — every
+  actual god with a real UI (Heimdall, Consus, Auriga, Minerva, Argus,
+  Mnemosyne, Janus) is mounted exactly this way today.
+- `kind: "plugin"` — a mountable React-component manifest, validated
+  against a JSON Schema, with real registered examples for several gods.
+  **Manifest-shape real, content not real yet** — that repo's own
+  `janus-plugin/loader.tsx` maps every single registered plugin ID
+  (including the "god" ones) to the same generic placeholder component;
+  nothing renders real content through this path yet.
+
+Since rolodex is a standalone local server with its own UI (not a React
+component to embed), `proxy` is both the closer conceptual fit **and** the
+one with a real, working precedent — unlike the `plugin`/React path, which
+is scaffold today. This stub uses `proxy`.
 
 ## The stub
 
-`src/integrations/pantheon.ts` exports two objects, kept separate because
-they're two separate layers in the real Pantheon architecture:
-`ROLODEX_PANTHEON_PLUGIN` (the leaner `registry.ts` shape, with `mount`) and
-`ROLODEX_PANTHEON_CATALOG_ENTRY` (the richer `catalog.ts` shape, cross-
-referencing the plugin via `pantheonTab`). Both are modeled directly on the
-real Portunus/Vault entries (the closest existing "documented, not-yet-built
-plugin" precedent):
+`src/integrations/pantheon.ts` exports:
+- `ROLODEX_PANTHEON_SERVICE_DESCRIPTOR` — a `service`-type L2 descriptor,
+  modeled on `cadex`'s.
+- `ROLODEX_PANTHEON_REGISTRY_ENTRY` — the `pantheon.plugins.yaml`-shaped
+  wrapper around it.
+- `ROLODEX_PANTHEON_WEB_PLUGIN` — a `proxy`-kind `pantheon.web-plugins.json`
+  entry, pointed at rolodex's existing shell server (port `4173`, see
+  [`README.md`](../README.md)).
+- `PantheonL1EventEnvelope` + `RolodexPantheonEventType` — the real event
+  envelope shape, plus **candidate** event names rolodex could emit if this
+  is ever wired up (`rolodex:follow-up-overdue`, `rolodex:contact-logged`,
+  `rolodex:google-sync-completed`). Rolodex does not emit any of these
+  today — this is a design note, not a claim of current behavior. Emitting
+  for real means rolodex `POST`s to a pantheon-v2 Core webhook route;
+  actually *receiving* them requires a subscription registered on
+  pantheon-v2's own side, which is future work on both repos, not just
+  this one.
 
-- `level: "ui"` — rolodex would be a display surface (contacts/follow-ups),
-  not harness-direct or core infrastructure.
-- `stage: "stub"` — matches this document's own status.
-- `mount: { kind: "placeholder", ... }` — no real mount exists yet. If/when
-  this is actually built, the natural real mount is `{ kind: "iframe", port:
-  4173 }` (rolodex's shell already runs as a local browser-tab server on
-  that port — see the main [`README.md`](../README.md) — so it's a
-  same-shape fit for Pantheon's existing iframe mechanism, not a new one).
-- `healthUrl` is deliberately left unset rather than pointed at a real
-  rolodex endpoint that doesn't yet exist for this purpose — rolodex has no
-  dedicated `/healthz` today. Adding one is real, small future work, not
-  invented here.
+`health_endpoint` is deliberately left as an obviously-fake placeholder URL
+rather than a plausible-looking one — rolodex has no dedicated `/health`
+endpoint today, and pantheon-v2's schema requires a real URL string. Adding
+a real health endpoint is small, genuine future work on rolodex's own side,
+not invented here.
 
-## Aspirational: a deeper ("L2") integration tier + lifecycle events
-
-**Everything in this section is a forward-looking design note, not a
-description of anything that exists in Pantheon today.** The owner asked
-specifically about "L2 integrations and lifecycle events" — the audit above
-confirms neither currently exists in `mdostal/pantheon`, so this is proposed
-vocabulary for a future discussion, clearly separated from the real contract
-above so nobody mistakes it for current fact.
-
-If Pantheon grows a genuine lifecycle-event system later, a numbered tier
-scheme might look like:
-
-- **L1** (today's whole plugin system) — passive display only. A plugin
-  mounts (`route`/`iframe`/`placeholder`) and is health-probed from the
-  outside; it has no way to push information into Pantheon or react to
-  anything happening there.
-- **L2** (proposed, not built) — a plugin additionally emits and/or
-  subscribes to lifecycle events for tighter dashboard integration, while
-  remaining fully optional — Pantheon degrades to L1-style passive display
-  if the plugin doesn't implement L2, and rolodex itself never requires
-  Pantheon to be present to function. Candidate rolodex hook points, if
-  this is ever built:
-  - `onFollowUpOverdue` — surface rolodex's `Store.needsFollowUp()` results
-    as a Pantheon dashboard widget/notification, via Pantheon polling or
-    subscribing rather than rolodex pushing into a Pantheon-owned store.
-  - `onContactLogged` — an optional, informational activity-feed entry
-    after an interaction is logged in rolodex.
-  - `onGoogleSyncComplete` — a lightweight sync-summary surfaced after
-    `GoogleSync.pull()` finishes.
-- **L3** (proposed, not built) — deep harness-level embedding, closer to
-  today's real `level: "harness-direct"` tier but with two-way event flow.
-  Not an obvious fit for rolodex, which is intentionally a standalone,
-  single-user app — noted here only for completeness of the proposed tier
-  scheme, not as a rolodex plan.
-
-None of this is scheduled work. It exists so that if/when Pantheon itself
-grows a real lifecycle-event system, rolodex has a concrete, already-thought-
-through starting point rather than a cold start.
+None of this is scheduled work, and nothing here is registered in either
+repo. It exists so a future integration pass — on either side — has an
+accurate, code-verified starting point instead of a cold start.
