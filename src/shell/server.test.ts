@@ -228,6 +228,103 @@ describe("POST /api/wizard/google", () => {
   });
 });
 
+/** A minimal deferred promise — same shape as google-oauth-flow.test.ts's own
+ * helper — used below to await "the fake connectGoogleAccount has actually
+ * been invoked" / "the signal it received actually fired abort" without
+ * depending on any arbitrary sleep/poll. */
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+describe("POST /api/wizard/google/connect", () => {
+  it("returns 400 and never calls connectGoogleAccount when no client credentials are saved yet", async () => {
+    let called = false;
+    const fakeConnect = async () => {
+      called = true;
+    };
+    const { baseUrl } = await start({ connectGoogleAccount: fakeConnect });
+
+    const { status, body } = await postJson(baseUrl + "/api/wizard/google/connect");
+    expect(status).toBe(400);
+    expect((body as { error?: string }).error).toBeTruthy();
+    expect(called).toBe(false);
+  });
+
+  it("on success, calls connectGoogleAccount with the saved credentials + this server's secrets adapter, and returns {connected:true}", async () => {
+    let calledWith: { clientId?: string; clientSecret?: string; secrets?: unknown } | undefined;
+    const fakeConnect = async (opts: { clientId: string; clientSecret: string; secrets: unknown }) => {
+      calledWith = opts;
+    };
+    const { baseUrl, secrets } = await start({ connectGoogleAccount: fakeConnect });
+    await postJson(baseUrl + "/api/wizard/google", { clientId: "client-abc", clientSecret: "s3cret" });
+
+    const { status, body } = await postJson(baseUrl + "/api/wizard/google/connect");
+    expect(status).toBe(200);
+    expect(body).toEqual({ connected: true });
+    expect(calledWith).toMatchObject({ clientId: "client-abc", clientSecret: "s3cret" });
+    expect(calledWith?.secrets).toBe(secrets);
+  });
+
+  it("returns a clear JSON error with a 5xx status when connectGoogleAccount rejects (denied/timeout/malformed)", async () => {
+    const fakeConnect = async () => {
+      throw new Error("Google sign-in was canceled: consent was denied.");
+    };
+    const { baseUrl } = await start({ connectGoogleAccount: fakeConnect });
+    await postJson(baseUrl + "/api/wizard/google", { clientId: "id", clientSecret: "secret" });
+
+    const { status, body } = await postJson(baseUrl + "/api/wizard/google/connect");
+    expect(status).toBeGreaterThanOrEqual(500);
+    expect(status).toBeLessThan(600);
+    expect((body as { error?: string }).error).toBe("Google sign-in was canceled: consent was denied.");
+  });
+
+  it("aborting the HTTP request mid-flight really propagates to connectGoogleAccount's AbortSignal", async () => {
+    const started = deferred();
+    const aborted = deferred<void>();
+    let capturedSignal: AbortSignal | undefined;
+    const fakeConnect = (opts: { signal?: AbortSignal }) => {
+      capturedSignal = opts.signal;
+      started.resolve();
+      return new Promise<void>((_resolve, reject) => {
+        // Proves the signal actually fires — not just that it's present —
+        // by hanging until (and only until) an 'abort' event really reaches
+        // this fake, mirroring how the real connectGoogleAccount tears its
+        // listener down on abort instead of running out the full 120s.
+        opts.signal?.addEventListener("abort", () => {
+          aborted.resolve();
+          reject(new Error("Google connect canceled."));
+        });
+      });
+    };
+    const { baseUrl } = await start({ connectGoogleAccount: fakeConnect });
+    await postJson(baseUrl + "/api/wizard/google", { clientId: "id", clientSecret: "secret" });
+
+    const controller = new AbortController();
+    const fetchPromise = fetch(baseUrl + "/api/wizard/google/connect", {
+      method: "POST",
+      signal: controller.signal,
+    });
+    fetchPromise.catch(() => {}); // client-side abort rejects this — expected, asserted below
+
+    // Wait for the server to have actually reached connectGoogleAccount
+    // before cancelling, so the abort is a genuine mid-flight cancel.
+    await started.promise;
+    expect(capturedSignal?.aborted).toBe(false);
+
+    controller.abort();
+
+    await expect(fetchPromise).rejects.toThrow();
+    // The real proof of propagation: the fake's own listener on the signal
+    // it was handed actually fired.
+    await aborted.promise;
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+});
+
 // checkSecretsCapability() (src/lib/secrets-check.ts) short-circuits to
 // `{ ok: false, backend: "none", error: "No secure keychain is available in
 // this session." }` on any non-Darwin platform BEFORE it ever calls the

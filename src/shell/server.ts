@@ -10,6 +10,7 @@ import type { Contact, Interaction } from "../lib/types.js";
 import { createSecretsAdapter, type CreateSecretsAdapterOptions, type SecretsAdapter } from "../lib/secrets-adapter.js";
 import { checkSecretsCapability } from "../lib/secrets-check.js";
 import { applyPullToStore, createGoogleSync } from "../lib/google-sync.js";
+import { connectGoogleAccount as defaultConnectGoogleAccount, type ConnectGoogleAccountOptions } from "../lib/google-oauth-flow.js";
 import {
   checkDbPathWritable,
   clearDbPathOverride,
@@ -83,6 +84,10 @@ export interface RolodexServerOptions {
   homeDir?: string;
   indexHtmlPath?: string;
   wizardHtmlPath?: string;
+  /** Runs the real Google OAuth loopback consent flow (src/lib/google-oauth-flow.ts).
+   * Defaults to the real `connectGoogleAccount`. Injectable so tests can
+   * substitute a fake and never open a real browser tab or talk to Google. */
+  connectGoogleAccount?: (opts: ConnectGoogleAccountOptions) => Promise<void>;
 }
 
 /** Thrown by readJsonBody() when the request body isn't valid JSON — a
@@ -132,6 +137,7 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
   // Shares this server's `secrets` adapter so a one-shot sync reads the same
   // OAuth client credentials the wizard's Google-connect step wrote.
   const googleSync = createGoogleSync({ secrets });
+  const connectGoogleAccount = opts.connectGoogleAccount ?? defaultConnectGoogleAccount;
 
   let store: Store | undefined = opts.store;
   // Once true, wizard completion can never revert within a process's
@@ -229,6 +235,56 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
       // never written to disk, an env var, or a log outside that call.
       await secrets.set(GOOGLE_OAUTH_CLIENT_KEY, JSON.stringify({ clientId, clientSecret }));
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    // POST /api/wizard/google/connect — runs the real OAuth loopback consent
+    // flow (src/lib/google-oauth-flow.ts) against whatever client id/secret
+    // POST /api/wizard/google already saved. Reads+parses GOOGLE_OAUTH_CLIENT_KEY
+    // the same way that route's own body-parsing does (typeof-guarded string
+    // fields, trimmed, both required) rather than inventing a new parsing
+    // convention for the read side.
+    if (req.method === "POST" && segs.length === 2 && segs[0] === "google" && segs[1] === "connect") {
+      const clientRaw = await secrets.get(GOOGLE_OAUTH_CLIENT_KEY);
+      let clientId = "";
+      let clientSecret = "";
+      if (clientRaw !== undefined) {
+        try {
+          const parsed = JSON.parse(clientRaw) as { clientId?: unknown; clientSecret?: unknown };
+          clientId = typeof parsed.clientId === "string" ? parsed.clientId.trim() : "";
+          clientSecret = typeof parsed.clientSecret === "string" ? parsed.clientSecret : "";
+        } catch {
+          // Corrupt stored value — treated the same as "nothing saved yet"
+          // below, via the empty clientId/clientSecret it leaves in place.
+        }
+      }
+      if (!clientId || !clientSecret) {
+        sendJson(res, 400, {
+          error: "Google isn't configured yet — save a Client ID and Client Secret first.",
+        });
+        return;
+      }
+
+      // Propagates a client-side cancel (the wizard's real Cancel button,
+      // which aborts its in-flight fetch) through to connectGoogleAccount's
+      // own AbortSignal, so the local OAuth listener is torn down
+      // immediately instead of sitting open for the full 120s timeout. The
+      // request's `close` event is Node's non-deprecated signal for "this
+      // request ended, however that happened" (the older `aborted` event is
+      // deprecated) — it also fires on ordinary completion, but aborting an
+      // already-settled connectGoogleAccount() call is a harmless no-op (see
+      // its own teardown()/torn guard).
+      const controller = new AbortController();
+      req.on("close", () => controller.abort());
+
+      try {
+        await connectGoogleAccount({ clientId, clientSecret, secrets, signal: controller.signal });
+        if (!res.writableEnded) sendJson(res, 200, { connected: true });
+      } catch (err) {
+        if (!res.writableEnded) {
+          sendJson(res, 502, { error: err instanceof Error ? err.message : String(err) });
+        }
+      }
       return;
     }
 
