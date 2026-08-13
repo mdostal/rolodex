@@ -199,6 +199,38 @@ describe("createGoogleSync().pull()", () => {
     await expect(sync.pull()).rejects.toThrow();
     expect(list).not.toHaveBeenCalled();
   });
+
+  // gof-01 AC10: pull()'s OAuth2Client construction wires the same
+  // 'tokens'-event persistence hook google-oauth-flow.ts uses, so a token
+  // refreshed internally during pull() (not just at initial connect) gets
+  // saved back to the keychain instead of being silently re-derived from
+  // refresh_token on every future call. createPeopleClient() is the only
+  // injection seam pull() has, but it's handed the *real* OAuth2Client
+  // instance it just constructed — that's a real EventEmitter, so a test
+  // can capture it and fire 'tokens' on it directly, exactly mirroring what
+  // googleapis' own internals do on a silent background refresh.
+  it("persists a refreshed token back to the keychain when the OAuth2Client's 'tokens' event fires during pull()", async () => {
+    const secrets = await seededSecrets();
+    let capturedAuth: { emit: (event: string, payload: unknown) => void } | undefined;
+    const list = vi.fn().mockResolvedValueOnce({ data: {} });
+    const sync = createGoogleSync({
+      secrets,
+      createPeopleClient: (auth) => {
+        capturedAuth = auth as unknown as { emit: (event: string, payload: unknown) => void };
+        return { people: { connections: { list } } };
+      },
+    });
+
+    await sync.pull();
+    expect(capturedAuth).toBeDefined();
+
+    capturedAuth!.emit("tokens", { access_token: "refreshed-access", refresh_token: "rt", expiry_date: Date.now() + 1000 });
+    // secrets.set() is async — give its microtask a turn.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const stored = await secrets.get(GOOGLE_OAUTH_TOKEN_KEY);
+    expect(JSON.parse(stored!)).toMatchObject({ access_token: "refreshed-access" });
+  });
 });
 
 describe("createGoogleSync().push()", () => {

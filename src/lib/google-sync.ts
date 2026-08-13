@@ -42,15 +42,15 @@ export interface GoogleSync {
 const GOOGLE_OAUTH_CLIENT_KEY = "google.oauth.client";
 
 /** SecretsAdapter key for the OAuth token (access/refresh token pair) minted
- * by the real consent flow. Per src/shell/server.ts's own comment: "A future
- * story adds 'google.oauth.token' alongside it once the real OAuth exchange
- * exists." That story hasn't landed yet (the wizard only saves the client
- * id/secret today — see wizard.html: "Google sign-in happens the first time
- * you sync — coming soon"), so in the current codebase this key is never
- * actually written; pull() below fails with an actionable error until it is.
- * Stored as `JSON.stringify(Credentials)` (googleapis' OAuth2Client shape:
+ * by the real consent flow. Written by src/lib/google-oauth-flow.ts's
+ * `connectGoogleAccount()` (the real loopback OAuth exchange) and refreshed
+ * in place by this file's own `pull()` below whenever googleapis silently
+ * refreshes the access token — see the `auth.on("tokens", ...)` hook in
+ * `pull()`. Exported (not duplicated, unlike `GOOGLE_OAUTH_CLIENT_KEY`) so
+ * that same-package `src/lib` import can share this exact literal. Stored as
+ * `JSON.stringify(Credentials)` (googleapis' OAuth2Client shape:
  * access_token/refresh_token/scope/token_type/expiry_date). */
-const GOOGLE_OAUTH_TOKEN_KEY = "google.oauth.token";
+export const GOOGLE_OAUTH_TOKEN_KEY = "google.oauth.token";
 
 /** People API field mask requested on every `connections.list` call — keep in
  * sync with the fields mapPersonToContact() actually reads. */
@@ -212,6 +212,16 @@ export function createGoogleSync(opts: CreateGoogleSyncOptions = {}): GoogleSync
       const token = parseStoredToken(tokenRaw);
 
       const auth = new google.auth.OAuth2(clientId, clientSecret);
+      // Persist a token refreshed during this pull() back to the keychain
+      // (not just kept in-memory for this one call) — otherwise every call
+      // after the stored access_token expires would silently re-derive a
+      // fresh one from refresh_token without ever updating what's stored,
+      // and the keychain's copy would drift stale forever. Wired before
+      // setCredentials()/use so it also covers a refresh triggered by the
+      // very first request this client makes.
+      auth.on("tokens", (tokens) => {
+        void secrets.set(GOOGLE_OAUTH_TOKEN_KEY, JSON.stringify(tokens));
+      });
       auth.setCredentials(token);
       const client = createPeopleClient(auth);
 
