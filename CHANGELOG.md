@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-12
+
+### Changed
+
+- **`google-oauth-flow` release finalization.** Applied the planned `minor` version bump (`0.3.0` → `0.4.0`) for the real Google OAuth consent flow.
+
+### Added
+
+- A real Google OAuth 2.0 "loopback IP address" consent flow (`src/lib/google-oauth-flow.ts`) — the current Google-required mechanism for a Desktop-app client, replacing the dead out-of-band flow. Google sync is now actually reachable by a real user: the wizard's Google-connect step completes a real sign-in instead of stopping at a placeholder, and a token refreshed during a routine sync is now persisted back to the keychain instead of silently re-derived every time.
+- A working Cancel button on the wizard's Google-connect step, genuinely tearing down the local OAuth listener instead of running out a 120-second timeout.
+- A "Reconnect Google" action in the shell's settings popover, for re-establishing a revoked/expired connection without rerunning the first-run wizard.
+
 ## [0.3.0] - 2026-08-12
 
 First tagged release.
