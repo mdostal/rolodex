@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { JSDOM } from "jsdom";
 import { createRolodexServer } from "./server.js";
 import { createInMemorySecretsAdapter } from "../lib/secrets-adapter.js";
+import { getSecretsBackendChoiceSync } from "./secrets-backend-config.js";
 
 let dir: string;
 let server: Server | undefined;
@@ -50,11 +51,22 @@ afterEach(async () => {
   else process.env.ROLODEX_DB = originalRolodexDb;
 });
 
-async function start(): Promise<string> {
+async function start(opts: { isPortunusAvailable?: () => Promise<boolean> } = {}): Promise<string> {
   server = createRolodexServer({
     homeDir: dir,
     secretsCapabilityFactory: () => createInMemorySecretsAdapter(),
     secrets: createInMemorySecretsAdapter(),
+    // Deliberately defaults to false, NOT the real isPortunusAvailable()
+    // probe: this file drives the wizard's real client-side JS in jsdom,
+    // which really calls GET /api/wizard/secrets-backends — leaving this
+    // undetermined would make every test below depend on whether the
+    // machine running the suite happens to have a real `portunus` binary on
+    // PATH. Every describe block in this file exercises the Portunus-absent
+    // ("no choice, Keychain-only, identical to before pfb-04") path unless
+    // it explicitly overrides this — the Portunus-detected choice UI has its
+    // own dedicated describe block further down with `isPortunusAvailable:
+    // async () => true`.
+    isPortunusAvailable: opts.isPortunusAvailable ?? (async () => false),
   });
   await new Promise<void>((resolve) => server!.listen(0, resolve));
   const address = server!.address();
@@ -83,6 +95,39 @@ async function loadWizard(baseUrl: string): Promise<JSDOM> {
   const script = dom.window.document.querySelector("script")!.textContent!;
   dom.window.eval(script);
   return dom;
+}
+
+/** Wraps dom.window.fetch so any request whose URL contains
+ * `urlSubstring` only resolves after an artificial `delayMs` delay, while
+ * every other request (the capability probe, live backend checks, etc.)
+ * passes straight through untouched via the real fetch loadWizard() wired
+ * up. Returns flags for whether the matching request has been issued and
+ * whether it has resolved, so a test can prove *ordering* — e.g. that
+ * navigate() genuinely happens only after a specific persist call
+ * completes — rather than merely observing eventual state once both have
+ * already finished. Polling eventual DOM state after goForward() resolves
+ * can't distinguish a real `await persist()` from a fire-and-forget call
+ * that just happens to be fast on localhost; widening the in-flight
+ * window here makes that distinction observable. */
+function delayFetch(dom: JSDOM, urlSubstring: string, delayMs: number): { hasStarted: () => boolean; hasResolved: () => boolean } {
+  const win = dom.window as unknown as { fetch: typeof fetch };
+  const realFetch = win.fetch;
+  let started = false;
+  let resolved = false;
+  win.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+    if (!url.includes(urlSubstring)) return realFetch(input, init);
+    started = true;
+    return new Promise<Response>((resolve, reject) => {
+      setTimeout(() => {
+        realFetch(input, init).then(
+          (res) => { resolved = true; resolve(res); },
+          (err) => { resolved = true; reject(err); },
+        );
+      }, delayMs);
+    });
+  }) as typeof fetch;
+  return { hasStarted: () => started, hasResolved: () => resolved };
 }
 
 function primaryBtn(dom: JSDOM): HTMLButtonElement {
@@ -293,5 +338,167 @@ describe("wizard navigation order after the pfb-03 reorder", () => {
     findButtonByLabel(dom, "Skip for now").click();
     await waitForScreen(dom, "finish");
     await goBack(dom, "google"); // finish's back -> google
+  });
+});
+
+// pfb-04: the Secrets screen's real Keychain/Portunus choice UI, gated on
+// GET /api/wizard/secrets-backends' `portunusAvailable` (itself backed by
+// isPortunusAvailable(), injected here — see start()'s own docstring on why
+// every OTHER describe block in this file pins this to `false`).
+describe("Secrets screen choice UI (pfb-04)", () => {
+  /** Drives the wizard from "welcome" through "database" and lands it on
+   * "secrets" with that screen's initial capability check resolved —
+   * shared setup for every test below, mirroring advanceToSecrets() but
+   * stopping one step earlier since each test needs to inspect the secrets
+   * screen's freshly-rendered DOM itself. */
+  async function advanceToDatabaseChecked(dom: JSDOM): Promise<void> {
+    expect(hashKey(dom)).toBe("welcome");
+    await goForward(dom, "database");
+    await waitFor(() => !primaryBtn(dom).disabled, "database screen's write-access check to resolve");
+  }
+
+  // NOT goForward(dom, "secrets") / waitForScreen(dom, "secrets") — those
+  // rely on the module-level SCREEN_H1 map, which is pinned to today's
+  // no-choice heading ("Checking secure storage") for the "secrets" key,
+  // since every OTHER describe block in this file exercises that path. When
+  // Portunus IS detected the screen's real rendered heading is "Choose your
+  // secure storage" instead, so this file's Portunus-detected tests wait on
+  // that heading directly rather than overloading SCREEN_H1 with a second,
+  // scenario-dependent meaning for the same key.
+  async function waitForSecretsChoiceScreen(dom: JSDOM): Promise<void> {
+    await waitFor(
+      () => hashKey(dom) === "secrets" && h1Text(dom).includes("Choose your secure storage"),
+      "screen to become #secrets with the Portunus-detected choice UI rendered",
+    );
+  }
+
+  it("Portunus NOT detected: the secrets screen is byte-identical to today — no visible choice, Keychain-only (the hard requirement)", async () => {
+    const baseUrl = await start(); // default: isPortunusAvailable resolves false
+    const dom = await loadWizard(baseUrl);
+    await advanceToDatabaseChecked(dom);
+    await goForward(dom, "secrets");
+    await waitFor(() => !primaryBtn(dom).disabled, "secrets screen's keychain check to resolve");
+
+    expect(h1Text(dom)).toBe("Checking secure storage");
+    expect(dom.window.document.getElementById("secrets-backend-choice")).toBeNull();
+    expect(dom.window.document.getElementById("secrets-backend-keychain")).toBeNull();
+    expect(dom.window.document.getElementById("secrets-backend-portunus")).toBeNull();
+    expect(dom.window.document.getElementById("secrets-status")?.textContent).toContain("macOS Keychain");
+  });
+
+  it("Portunus detected: a real choice is shown, defaulting to Keychain, with that backend's own live check result", async () => {
+    const baseUrl = await start({ isPortunusAvailable: async () => true });
+    const dom = await loadWizard(baseUrl);
+    await advanceToDatabaseChecked(dom);
+    primaryBtn(dom).click();
+    await waitForSecretsChoiceScreen(dom);
+    await waitFor(() => !primaryBtn(dom).disabled, "secrets screen's initial (Keychain) check to resolve");
+
+    expect(h1Text(dom)).toBe("Choose your secure storage");
+    const keychainRadio = dom.window.document.getElementById("secrets-backend-keychain") as HTMLInputElement | null;
+    const portunusRadio = dom.window.document.getElementById("secrets-backend-portunus") as HTMLInputElement | null;
+    expect(keychainRadio).toBeTruthy();
+    expect(portunusRadio).toBeTruthy();
+    expect(keychainRadio!.checked).toBe(true);
+    expect(portunusRadio!.checked).toBe(false);
+    expect(dom.window.document.getElementById("secrets-status")?.textContent).toContain("macOS Keychain");
+  });
+
+  it("selecting Portunus runs its own live, distinct capability check", async () => {
+    const baseUrl = await start({ isPortunusAvailable: async () => true });
+    const dom = await loadWizard(baseUrl);
+    await advanceToDatabaseChecked(dom);
+    primaryBtn(dom).click();
+    await waitForSecretsChoiceScreen(dom);
+    await waitFor(() => !primaryBtn(dom).disabled, "secrets screen's initial (Keychain) check to resolve");
+
+    const portunusRadio = dom.window.document.getElementById("secrets-backend-portunus") as HTMLInputElement;
+    portunusRadio.click();
+
+    await waitFor(
+      () => (dom.window.document.getElementById("secrets-status")?.textContent || "").includes("Portunus"),
+      "secrets-status to reflect the Portunus-specific check result",
+    );
+    await waitFor(() => !primaryBtn(dom).disabled, "Portunus check to resolve and re-enable Next");
+    expect(dom.window.document.getElementById("secrets-status")?.textContent).toContain("Portunus");
+  });
+
+  it("selecting Portunus, its check succeeding, and clicking Next persists the choice to wizard-config.json BEFORE navigating to google", async () => {
+    const baseUrl = await start({ isPortunusAvailable: async () => true });
+    const dom = await loadWizard(baseUrl);
+    await advanceToDatabaseChecked(dom);
+    primaryBtn(dom).click();
+    await waitForSecretsChoiceScreen(dom);
+    await waitFor(() => !primaryBtn(dom).disabled, "secrets screen's initial (Keychain) check to resolve");
+
+    const portunusRadio = dom.window.document.getElementById("secrets-backend-portunus") as HTMLInputElement;
+    portunusRadio.click();
+    await waitFor(() => !primaryBtn(dom).disabled, "Portunus check to resolve and re-enable Next");
+
+    // Nothing persisted yet — the choice only round-trips through the
+    // server when the user actually proceeds (Next), not merely on
+    // selection.
+    expect(getSecretsBackendChoiceSync(dir)).toBe("keychain");
+
+    // Merely asserting eventual state after goForward() resolves (which
+    // itself waits for the "google" screen to render) would still pass
+    // even if the real code fired navigate("google") first and persisted
+    // fire-and-forget after — both the persist POST and the
+    // navigation-triggered render are fast enough on localhost that a
+    // reversed ordering wouldn't visibly race. To actually prove the
+    // ordering the design brief calls out ("Persisted BEFORE
+    // navigating... starting the next time this server resolves
+    // secrets"), artificially widen the persist-choice request's
+    // in-flight window and assert the screen has NOT navigated while it
+    // is still pending — only once it resolves.
+    const persistGate = delayFetch(dom, "/api/wizard/secrets-backend-choice", 300);
+
+    primaryBtn(dom).click();
+
+    await waitFor(() => persistGate.hasStarted(), "persist-choice request to have been issued");
+
+    // Well under the 300ms artificial delay above — plenty of time for an
+    // (incorrect) navigate-first implementation to have already flipped
+    // the hash and rendered the google screen.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(persistGate.hasResolved()).toBe(false);
+    expect(hashKey(dom)).toBe("secrets");
+    expect(h1Text(dom)).toBe("Choose your secure storage");
+    expect(getSecretsBackendChoiceSync(dir)).toBe("keychain"); // still not written server-side either
+
+    await waitForScreen(dom, "google");
+
+    expect(persistGate.hasResolved()).toBe(true);
+    expect(getSecretsBackendChoiceSync(dir)).toBe("portunus");
+  });
+
+  it("selecting Keychain explicitly (the default) and proceeding persists 'keychain', not leaving it unset", async () => {
+    const baseUrl = await start({ isPortunusAvailable: async () => true });
+    const dom = await loadWizard(baseUrl);
+    await advanceToDatabaseChecked(dom);
+    primaryBtn(dom).click();
+    await waitForSecretsChoiceScreen(dom);
+    await waitFor(() => !primaryBtn(dom).disabled, "secrets screen's initial (Keychain) check to resolve");
+
+    await goForward(dom, "google");
+    expect(getSecretsBackendChoiceSync(dir)).toBe("keychain");
+  });
+
+  it("back from the choice screen still targets database, and the choice UI re-renders correctly on returning to secrets", async () => {
+    const baseUrl = await start({ isPortunusAvailable: async () => true });
+    const dom = await loadWizard(baseUrl);
+    await advanceToDatabaseChecked(dom);
+    primaryBtn(dom).click();
+    await waitForSecretsChoiceScreen(dom);
+    await waitFor(() => !primaryBtn(dom).disabled, "secrets screen's initial (Keychain) check to resolve");
+
+    await goBack(dom, "database");
+    await waitFor(() => !primaryBtn(dom).disabled, "database re-check to resolve");
+
+    primaryBtn(dom).click();
+    await waitForSecretsChoiceScreen(dom);
+    await waitFor(() => !primaryBtn(dom).disabled, "secrets screen's re-check to resolve");
+    expect(h1Text(dom)).toBe("Choose your secure storage");
+    expect(dom.window.document.getElementById("secrets-backend-keychain")).toBeTruthy();
   });
 });

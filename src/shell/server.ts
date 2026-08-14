@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Store } from "../lib/store.js";
 import type { Contact, Interaction } from "../lib/types.js";
-import { createSecretsAdapter, type CreateSecretsAdapterOptions, type SecretsAdapter } from "../lib/secrets-adapter.js";
+import { createSecretsAdapter, isPortunusAvailable as defaultIsPortunusAvailable, type CreateSecretsAdapterOptions, type SecretsAdapter } from "../lib/secrets-adapter.js";
 import { checkSecretsCapability } from "../lib/secrets-check.js";
 import { applyPullToStore, createGoogleSync } from "../lib/google-sync.js";
 import { connectGoogleAccount as defaultConnectGoogleAccount, type ConnectGoogleAccountOptions } from "../lib/google-oauth-flow.js";
@@ -18,6 +18,11 @@ import {
   resolveDbPath,
   setDbPathOverride,
 } from "./db-location.js";
+import {
+  getSecretsBackendChoiceSync,
+  setSecretsBackendChoice,
+  type SecretsBackendChoice,
+} from "./secrets-backend-config.js";
 
 /**
  * Desktop shell, chosen (saf-01) as: a local Node HTTP server hosting `Store`
@@ -78,6 +83,16 @@ export interface RolodexServerOptions {
    * separately from `secrets` so tests can make the persisted-state adapter
    * and the probe behave differently without touching a real keychain. */
   secretsCapabilityFactory?: (opts?: CreateSecretsAdapterOptions) => SecretsAdapter;
+  /** Factory used to construct the persistent `secrets` adapter itself (only
+   * when `opts.secrets` isn't given) — defaults to the real
+   * createSecretsAdapter. Distinct from `secretsCapabilityFactory` (which is
+   * for the wizard's fresh-per-call capability probe, see above): this one
+   * backs the SAME long-lived `secrets` instance `googleSync` and every
+   * other route below is constructed from. Injectable so tests can verify
+   * exactly which `backend` this server resolved (via
+   * getSecretsBackendChoiceSync(homeDir)) and passed into it, without a real
+   * keychain or Portunus install. */
+  secretsAdapterFactory?: (opts?: CreateSecretsAdapterOptions) => SecretsAdapter;
   /** Home directory used to resolve the default DB path and the wizard's
    * local (non-secret) config file. Defaults to process.env.HOME. Tests
    * override this to a temp dir instead of touching a real ~/.local/share. */
@@ -88,6 +103,12 @@ export interface RolodexServerOptions {
    * Defaults to the real `connectGoogleAccount`. Injectable so tests can
    * substitute a fake and never open a real browser tab or talk to Google. */
   connectGoogleAccount?: (opts: ConnectGoogleAccountOptions) => Promise<void>;
+  /** Probes whether the real `portunus` CLI is available (src/lib/secrets-
+   * adapter.ts's isPortunusAvailable), used only by the wizard's Secrets
+   * screen to decide whether to show a Keychain/Portunus choice at all.
+   * Defaults to the real probe. Injectable so tests can simulate "Portunus
+   * is installed" without a real binary on the test machine. */
+  isPortunusAvailable?: () => Promise<boolean>;
 }
 
 /** Thrown by readJsonBody() when the request body isn't valid JSON — a
@@ -132,12 +153,24 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
   const wizardHtmlPath = opts.wizardHtmlPath ?? path.join(HERE, "wizard.html");
   const assetsDir = path.join(HERE, "assets");
   const homeDir = opts.homeDir;
-  const secrets = opts.secrets ?? createSecretsAdapter();
+  // Backend choice (keychain vs. portunus) is resolved via a SYNCHRONOUS
+  // local-file read (getSecretsBackendChoiceSync) at this exact call site —
+  // deliberately, not an async/lazy adapter — so `secrets` below is still a
+  // concrete, already-resolved SecretsAdapter the moment createGoogleSync()
+  // is constructed from it two lines down. See secrets-backend-config.ts's
+  // top-of-file docstring for the full rationale (grill finding F3): an
+  // earlier "make secrets async/lazy like Store" proposal was checked
+  // against the real code and found architecturally wrong, since — unlike
+  // Store — `secrets` has an eager synchronous consumer (`googleSync`)
+  // immediately after it right here.
+  const secretsAdapterFactory = opts.secretsAdapterFactory ?? createSecretsAdapter;
+  const secrets = opts.secrets ?? secretsAdapterFactory({ backend: getSecretsBackendChoiceSync(homeDir) });
   const secretsCapabilityFactory = opts.secretsCapabilityFactory ?? createSecretsAdapter;
   // Shares this server's `secrets` adapter so a one-shot sync reads the same
   // OAuth client credentials the wizard's Google-connect step wrote.
   const googleSync = createGoogleSync({ secrets });
   const connectGoogleAccount = opts.connectGoogleAccount ?? defaultConnectGoogleAccount;
+  const isPortunusAvailable = opts.isPortunusAvailable ?? (() => defaultIsPortunusAvailable());
 
   let store: Store | undefined = opts.store;
   // Once true, wizard completion can never revert within a process's
@@ -290,6 +323,43 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
 
     if (req.method === "POST" && segs.length === 2 && segs[0] === "google" && segs[1] === "skip") {
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    // GET /api/wizard/secrets-backends — tells the wizard's Secrets screen
+    // whether Portunus is available on this machine at all, so it knows
+    // whether to render a real Keychain/Portunus choice (per this story's
+    // hard requirement: no visible choice, Keychain-only, when Portunus
+    // isn't detected). A lightweight `portunus --version` probe
+    // (isPortunusAvailable), NOT the round-trip capability check that
+    // POST .../secrets-check performs — those stay separate routes/concerns:
+    // this one only answers "does the choice UI exist at all", the other
+    // answers "does whichever backend is currently selected actually work".
+    if (req.method === "GET" && segs.length === 1 && segs[0] === "secrets-backends") {
+      sendJson(res, 200, { portunusAvailable: await isPortunusAvailable() });
+      return;
+    }
+
+    // POST /api/wizard/secrets-backend-choice — persists the user's pick
+    // from the Secrets screen's Keychain/Portunus choice (only reachable
+    // when GET .../secrets-backends reported Portunus as available) via
+    // setSecretsBackendChoice(), BEFORE the wizard is allowed to navigate on
+    // to "google" — see wizard.html's renderSecrets(). Does NOT reconstruct
+    // this server's own long-lived `secrets` adapter (that was already
+    // resolved once, synchronously, at construction time above) — the
+    // effect of this choice on THIS process is limited to whatever this
+    // route itself does with `backend` afterward (nothing, currently); it
+    // takes effect for real the next time the server process starts, which
+    // for a first-run wizard is the very next launch after setup completes.
+    if (req.method === "POST" && segs.length === 1 && segs[0] === "secrets-backend-choice") {
+      const body = (await readJsonBody(req)) as { backend?: unknown };
+      if (body.backend !== "keychain" && body.backend !== "portunus") {
+        sendJson(res, 400, { error: 'backend must be "keychain" or "portunus"' });
+        return;
+      }
+      const backend: SecretsBackendChoice = body.backend;
+      await setSecretsBackendChoice(backend, homeDir);
+      sendJson(res, 200, { ok: true, backend });
       return;
     }
 
