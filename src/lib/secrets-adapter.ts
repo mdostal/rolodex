@@ -605,6 +605,14 @@ export function createInMemorySecretsAdapter(): SecretsAdapter {
 
 export interface CreateSecretsAdapterOptions {
   /**
+   * Which real backend to construct. Defaults to `"keychain"` when omitted
+   * — every existing caller that doesn't pass this must see byte-identical
+   * behavior to before this option existed (platform check, fallback
+   * wiring, warning text, everything). `"portunus"` selects the Portunus
+   * CLI backend (see createPortunusSecretsAdapter() above) instead.
+   */
+  backend?: "keychain" | "portunus";
+  /**
    * Called at most once, if the real backend throws on its very first call
    * and this adapter permanently swaps over to an in-memory store for the
    * rest of the process. Exists so a caller that cares about the
@@ -623,8 +631,18 @@ export interface CreateSecretsAdapterOptions {
  * adapter permanently swaps over to an in-memory fake for the rest of the
  * process instead of crashing the app. Warns once, on the switch, and
  * invokes `onFallback` (if given) with the triggering error.
+ *
+ * `backendLabel`/`classifyError` are supplied by the caller so the warning
+ * text and the classified cause it embeds always name and describe whichever
+ * real backend actually failed (keychain vs. Portunus), never a hardcoded
+ * one — see createSecretsAdapter() below.
  */
-function withInMemoryFallback(real: SecretsAdapter, onFallback?: (err: unknown) => void): SecretsAdapter {
+function withInMemoryFallback(
+  real: SecretsAdapter,
+  backendLabel: string,
+  classifyError: (err: unknown) => string,
+  onFallback?: (err: unknown) => void,
+): SecretsAdapter {
   let active: SecretsAdapter = real;
   let fellBack = false;
 
@@ -636,13 +654,13 @@ function withInMemoryFallback(real: SecretsAdapter, onFallback?: (err: unknown) 
       // Deliberately NOT `err.message`/`err instanceof Error ? err.message :
       // ...` here: a raw execFile error's `.message` (and `.cmd`) can embed
       // full argv, which for set() includes the plaintext secret value
-      // itself (see sanitizeSetError() above). classifyKeychainError()
-      // returns a pattern-classified, human-safe summary instead — never
-      // the raw error text — so this can't leak a secret to the console/log
-      // on a keychain write failure.
+      // itself (see sanitizeSetError() above). classifyError() returns a
+      // pattern-classified, human-safe summary instead — never the raw
+      // error text — so this can't leak a secret to the console/log on a
+      // real-backend write failure.
       console.warn(
-        `[secrets-adapter] real (keychain) backend failed on first use — falling back to an ` +
-          `in-memory store for this process. Secrets will NOT persist across restarts. Cause: ${classifyKeychainError(err)}`,
+        `[secrets-adapter] real (${backendLabel}) backend failed on first use — falling back to an ` +
+          `in-memory store for this process. Secrets will NOT persist across restarts. Cause: ${classifyError(err)}`,
       );
       active = createInMemorySecretsAdapter();
       fellBack = true;
@@ -659,12 +677,21 @@ function withInMemoryFallback(real: SecretsAdapter, onFallback?: (err: unknown) 
 }
 
 /**
- * Factory — real (OS keychain) by default, falling back to the in-memory
- * fake automatically (with a console.warn) if the real backend isn't usable.
- * Non-macOS platforms skip straight to the fake since the real backend here
- * is Darwin-only.
+ * Factory — real backend by default (OS keychain, `opts.backend` omitted or
+ * `"keychain"`), falling back to the in-memory fake automatically (with a
+ * console.warn) if the real backend isn't usable. Non-macOS platforms skip
+ * straight to the fake for the keychain backend since that real backend is
+ * Darwin-only.
+ *
+ * `opts.backend === "portunus"` selects the Portunus CLI backend instead —
+ * not platform-restricted (Portunus is a plain CLI, not an OS-native
+ * keystore) — wrapped in the same in-memory-fallback safety net.
  */
 export function createSecretsAdapter(opts?: CreateSecretsAdapterOptions): SecretsAdapter {
+  const backend = opts?.backend ?? "keychain";
+  if (backend === "portunus") {
+    return withInMemoryFallback(createPortunusSecretsAdapter(), "portunus", classifyPortunusError, opts?.onFallback);
+  }
   if (process.platform !== "darwin") {
     console.warn(
       "[secrets-adapter] no keychain backend for this platform " +
@@ -672,5 +699,5 @@ export function createSecretsAdapter(opts?: CreateSecretsAdapterOptions): Secret
     );
     return createInMemorySecretsAdapter();
   }
-  return withInMemoryFallback(createKeychainSecretsAdapter(), opts?.onFallback);
+  return withInMemoryFallback(createKeychainSecretsAdapter(), "keychain", classifyKeychainError, opts?.onFallback);
 }

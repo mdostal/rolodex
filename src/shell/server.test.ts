@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRolodexServer, type RolodexServerOptions } from "./server.js";
 import { createInMemorySecretsAdapter } from "../lib/secrets-adapter.js";
-import type { SecretsAdapter } from "../lib/secrets-adapter.js";
+import type { CreateSecretsAdapterOptions, SecretsAdapter } from "../lib/secrets-adapter.js";
 import { Store } from "../lib/store.js";
 
 let dir: string;
@@ -462,6 +462,74 @@ describe("POST /api/wizard/secrets-check", () => {
       // "no backend on this platform" message, not the simulated EACCES.
       expect(body).toMatchObject({ ok: false, backend: "none" });
       expect((body as { error?: string }).error).toContain("No secure keychain");
+    }
+  });
+
+  // This story's addition: the route now reads `backend` out of the POST
+  // body and threads it through to checkSecretsCapability(). "portunus" is
+  // deliberately used for most of these (rather than "keychain") because
+  // checkSecretsCapability() only applies the non-Darwin "no secure
+  // keychain" short-circuit to the keychain backend — a Portunus probe runs
+  // the real factory/round-trip logic on every platform the suite happens
+  // to run on, so these assertions don't need to branch on
+  // process.platform the way the keychain-probing tests above do.
+  it("passes body.backend through to the capability factory, and the response reflects the Portunus-specific label", async () => {
+    let seenBackend: unknown;
+    const factory = (opts?: CreateSecretsAdapterOptions) => {
+      seenBackend = opts?.backend;
+      return createInMemorySecretsAdapter();
+    };
+    const { baseUrl } = await start({ secretsCapabilityFactory: factory });
+    const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check", { backend: "portunus" });
+    expect(seenBackend).toBe("portunus");
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ ok: true, backend: "Portunus" });
+  });
+
+  it("a failing probe against the portunus backend (via body.backend) returns the Portunus label and Portunus-specific error text, never keychain vocabulary", async () => {
+    const failingFactory = () => {
+      const failing: SecretsAdapter = {
+        async get() { return undefined; },
+        async set() { throw new Error("portunus: unknown reference {{secret:x}}"); },
+        async delete() {},
+      };
+      return failing;
+    };
+    const { baseUrl } = await start({ secretsCapabilityFactory: failingFactory });
+    const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check", { backend: "portunus" });
+    expect(status).toBe(422);
+    expect(body).toMatchObject({ ok: false, backend: "Portunus" });
+    const err = (body as { error?: string }).error ?? "";
+    expect(err.toLowerCase()).not.toContain("keychain");
+    expect(err).toBe("No matching Portunus reference was found.");
+  });
+
+  it("omitting backend from the request body defaults the factory call to \"keychain\" — byte-identical to before this parameter existed", async () => {
+    let seenBackend: unknown = "(factory never called)";
+    const factory = (opts?: CreateSecretsAdapterOptions) => {
+      seenBackend = opts?.backend;
+      return createInMemorySecretsAdapter();
+    };
+    const { baseUrl } = await start({ secretsCapabilityFactory: factory });
+    await postJson(baseUrl + "/api/wizard/secrets-check");
+    if (process.platform === "darwin") {
+      expect(seenBackend).toBe("keychain");
+    } else {
+      // Keychain + non-Darwin short-circuits before ever calling the
+      // factory — see this describe block's own top-of-block comment.
+      expect(seenBackend).toBe("(factory never called)");
+    }
+  });
+
+  it("an unrecognized body.backend value falls back to \"keychain\" rather than crashing", async () => {
+    const { baseUrl } = await start({ secretsCapabilityFactory: () => createInMemorySecretsAdapter() });
+    const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check", { backend: "not-a-real-backend" });
+    if (process.platform === "darwin") {
+      expect(status).toBe(200);
+      expect(body).toMatchObject({ ok: true, backend: "macOS Keychain" });
+    } else {
+      expect(status).toBe(422);
+      expect(body).toMatchObject({ ok: false, backend: "none" });
     }
   });
 });

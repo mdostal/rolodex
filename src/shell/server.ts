@@ -294,7 +294,14 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
     }
 
     if (req.method === "POST" && segs.length === 1 && segs[0] === "secrets-check") {
-      const result = await checkSecretsCapability(secretsCapabilityFactory);
+      // Optional body: `{ backend: "keychain" | "portunus" }`, so the wizard
+      // UI can request a probe of whichever backend it currently has
+      // selected instead of always the default. Absent/malformed/unknown
+      // `backend` all fall back to "keychain" — checkSecretsCapability()'s
+      // own default and today's exact (pre-this-parameter) behavior.
+      const body = (await readJsonBody(req)) as { backend?: unknown };
+      const backend = body.backend === "portunus" ? "portunus" : "keychain";
+      const result = await checkSecretsCapability(secretsCapabilityFactory, backend);
       sendJson(res, result.ok ? 200 : 422, result);
       return;
     }

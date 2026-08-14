@@ -20,6 +20,7 @@ import {
   classifyPortunusError,
   createInMemorySecretsAdapter,
   createPortunusSecretsAdapter,
+  createSecretsAdapter,
   isPortunusAvailable,
   type PortunusRunner,
   type PortunusRunOptions,
@@ -121,6 +122,108 @@ describe.skipIf(process.platform !== "darwin")("keychain backend (live)", () => 
     const value = "deadbeef";
     await adapter.set(KEY, value);
     expect(await adapter.get(KEY)).toBe(value);
+  });
+
+  // Regression guard for CreateSecretsAdapterOptions gaining `backend`:
+  // passing "keychain" explicitly must behave identically to the pre-story
+  // default (omitting the option entirely, exercised by every test above).
+  it("passing { backend: \"keychain\" } explicitly round-trips identically to the default", async () => {
+    const { createSecretsAdapter } = await import("./secrets-adapter.js");
+    const adapter = createSecretsAdapter({ backend: "keychain" });
+    const value = "explicit-keychain-backend-value";
+    await adapter.set(KEY, value);
+    expect(await adapter.get(KEY)).toBe(value);
+  });
+});
+
+// Covers createSecretsAdapter()'s `backend` dispatch and withInMemoryFallback's
+// per-backend warning text (this story's requirement: the console.warn on
+// fallback must name whichever real backend actually failed, "keychain" or
+// "portunus", never a hardcoded "keychain"). Deterministic and safe on any
+// platform/machine (including one with a real `portunus` CLI dogfooded and
+// installed, or a real macOS keychain available): temporarily emptying
+// PATH guarantees execFile can't find `security`/`portunus` on PATH, so
+// both backends fail with a real, genuine ENOENT — without ever reaching a
+// real keychain item or a real Portunus vault. Restores PATH (and PATH-
+// dependent env only) in `finally` even on assertion failure.
+describe("createSecretsAdapter() backend dispatch / fallback warning text", () => {
+  async function withEmptyPath<T>(run: () => Promise<T>): Promise<T> {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      return await run();
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  }
+
+  it.skipIf(process.platform !== "darwin")(
+    "keychain: falls back to in-memory and warns naming \"keychain\", not \"portunus\", when the real backend is unreachable",
+    async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await withEmptyPath(async () => {
+          const adapter = createSecretsAdapter({ backend: "keychain" });
+          const key = `__dispatch-test-keychain-${Date.now()}__`;
+          await adapter.set(key, "value"); // must resolve (fallback), not throw
+          expect(await adapter.get(key)).toBe("value"); // now served by the in-memory fallback
+        });
+        const warnedText = warnSpy.mock.calls.map((c) => String(c[0])).join("\n");
+        expect(warnedText).toContain("real (keychain) backend failed");
+        expect(warnedText.toLowerCase()).not.toContain("portunus");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    },
+  );
+
+  it("portunus: dispatches to the Portunus backend, falls back to in-memory, and warns naming \"portunus\", not \"keychain\", when the real backend is unreachable — not platform-restricted", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let fallbackErr: unknown;
+    try {
+      await withEmptyPath(async () => {
+        const adapter = createSecretsAdapter({
+          backend: "portunus",
+          onFallback: (err) => { fallbackErr = err; },
+        });
+        const key = `__dispatch-test-portunus-${Date.now()}__`;
+        await adapter.set(key, "value"); // must resolve (fallback), not throw
+        expect(await adapter.get(key)).toBe("value"); // now served by the in-memory fallback
+      });
+      const warnedText = warnSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(warnedText).toContain("real (portunus) backend failed");
+      expect(warnedText.toLowerCase()).not.toContain("keychain");
+      // The classified cause embedded in the warning must come from
+      // classifyPortunusError() — asserted by construction (not by
+      // hardcoding its exact text, which depends on precisely how execFile
+      // reports a missing "portunus" binary on this machine) by checking the
+      // warning embeds classifyPortunusError()'s own output for the actual
+      // captured cause, never classifyKeychainError()'s.
+      expect(fallbackErr).toBeInstanceOf(Error);
+      expect(warnedText).toContain(classifyPortunusError(fallbackErr));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("onFallback fires with the raw cause for the portunus dispatch path too (not only keychain), and it's genuinely Portunus-related", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let fallbackErr: unknown;
+    try {
+      await withEmptyPath(async () => {
+        const adapter = createSecretsAdapter({
+          backend: "portunus",
+          onFallback: (err) => { fallbackErr = err; },
+        });
+        await adapter.set(`__dispatch-test-onfallback-${Date.now()}__`, "value");
+      });
+      expect(fallbackErr).toBeInstanceOf(Error);
+      expect((fallbackErr as Error).message.toLowerCase()).toContain("portunus");
+      expect(classifyPortunusError(fallbackErr).toLowerCase()).not.toContain("keychain");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
