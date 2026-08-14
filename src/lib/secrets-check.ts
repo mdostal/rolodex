@@ -73,23 +73,32 @@ function errorText(err: unknown): string {
  * direct child of `security` itself, killing `security` unblocks this
  * Promise but the dialog could still be left on screen. Confirmed here is
  * only that the child process is torn down.
+ *
+ * Exported so secrets-adapter.ts's isPortunusAvailable() can reuse this
+ * exact value/mechanism for its own `portunus --version` probe instead of
+ * reinventing a weaker one — this codebase already has direct, documented
+ * experience with a CLI hanging on an interactive prompt instead of failing
+ * fast (see above), and there's no reason to assume Portunus is immune.
  */
-const PROBE_STEP_TIMEOUT_MS = 5000;
+export const PROBE_STEP_TIMEOUT_MS = 5000;
 
 class SecretsCheckTimeoutError extends Error {}
 
 /** Runs `run(signal)`, racing it against a `ms`-millisecond timer. On
  * timeout, aborts `signal` — which a SecretsAdapter backed by execFile (see
- * secrets-adapter.ts) uses to terminate the underlying `security` child
- * process, not just abandon the Promise waiting on it — before rejecting
- * with SecretsCheckTimeoutError. (That's confirmed for the child process
- * itself; whether it also dismisses any macOS auth dialog the process
- * spawned is not independently verified — see PROBE_STEP_TIMEOUT_MS's
- * docstring.) The abort's own eventual rejection is still awaited
- * internally (via the .then below) so it can't become an unhandled
- * rejection; it's simply superseded since the timeout has already settled
- * this Promise. */
-function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+ * secrets-adapter.ts) uses to terminate the underlying child process, not
+ * just abandon the Promise waiting on it — before rejecting with
+ * SecretsCheckTimeoutError. (That's confirmed for the child process itself;
+ * whether it also dismisses any macOS auth dialog the process spawned is
+ * not independently verified — see PROBE_STEP_TIMEOUT_MS's docstring.) The
+ * abort's own eventual rejection is still awaited internally (via the .then
+ * below) so it can't become an unhandled rejection; it's simply superseded
+ * since the timeout has already settled this Promise.
+ *
+ * Exported so secrets-adapter.ts's isPortunusAvailable() reuses this same
+ * proven mechanism rather than reinventing a weaker one (see
+ * PROBE_STEP_TIMEOUT_MS's docstring). */
+export function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
   const controller = new AbortController();
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
