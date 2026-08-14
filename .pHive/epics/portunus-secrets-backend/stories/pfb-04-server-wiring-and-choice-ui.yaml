@@ -1,0 +1,90 @@
+id: pfb-04-server-wiring-and-choice-ui
+epic: portunus-secrets-backend
+title: Wire backend choice persistence and add the wizard choice UI
+status: pending
+complexity: high
+methodology: classic
+depends_on: [pfb-01-core-portunus-adapter, pfb-02-backend-aware-capability-check, pfb-03-wizard-screen-reorder]
+
+description: |
+  Final integration story. Adds src/shell/secrets-backend-config.ts (new
+  file, mirrors src/shell/db-location.ts's shape exactly: homeDir-
+  parameterized, reads/writes wizard-config.json) with a SYNCHRONOUS
+  getSecretsBackendChoiceSync(homeDir?) (fs.readFileSync, not fs/promises
+  — a deliberate architecture decision, not an oversight: an earlier draft
+  of this epic's design proposed making the secrets adapter's construction
+  async/lazy "like Store," which a grill pass found was based on a false
+  analogy — Store has no eager synchronous consumer at construction time,
+  but secrets does (googleSync is built synchronously from it on the very
+  next lines of server.ts). The synchronous-read approach avoids that
+  entire cascade). server.ts's existing call site
+  (`const secrets = opts.secrets ?? createSecretsAdapter();`) is updated
+  to pass `{ backend: getSecretsBackendChoiceSync(homeDir) }` — the call
+  site itself does not move or become async.
+
+  On the wizard's relocated "secrets" screen (now positioned by pfb-03,
+  before "google"): if isPortunusAvailable() (from pfb-01) detects
+  Portunus, show a real choice (Keychain / Portunus) with a live
+  capability-check result for whichever is selected (using pfb-02's
+  backend-aware checkSecretsCapability route). If Portunus isn't detected,
+  the screen behaves exactly as it does today — Keychain-only, no visible
+  choice, zero change for a user without Portunus installed. The selected
+  choice is persisted via setSecretsBackendChoice() before the wizard
+  proceeds to "google", so the Google-connect screen's secrets.set() calls
+  already use the right backend.
+
+acceptance_criteria:
+  - "Given Portunus is not detected on the machine, when the wizard reaches the secrets screen, then it looks and behaves identically to today's screen — no visible choice, Keychain-only"
+  - "Given Portunus IS detected, when the wizard reaches the secrets screen, then a real choice between Keychain and Portunus is shown, each with its own live capability-check result"
+  - "Given the user selects Portunus and the check succeeds, when they proceed, then the choice is persisted to wizard-config.json before navigating to 'google', and the subsequent Google-connect screen's secrets.set() calls are verified (via a real or injected check) to use the Portunus backend"
+  - "Given no wizard-config.json exists yet (fresh install) or it exists but has no secretsBackendChoice field, when getSecretsBackendChoiceSync runs, then it returns 'keychain' (today's exact default) without throwing"
+  - "Given wizard-config.json is corrupt or unreadable, when getSecretsBackendChoiceSync runs, then it returns 'keychain' rather than crashing server construction — same fail-safe convention as db-location.ts's existing config reader"
+  - "Given a fresh checkout of this repo with no code changes to server.ts's construction ordering beyond the one-line backend option, when npm test runs, then the existing google-sync/server test suite passes unmodified, confirming googleSync's construction timing genuinely did not need to change"
+
+steps:
+  - id: implement
+    description: Add secrets-backend-config.ts, wire the synchronous backend resolution into server.ts's existing createSecretsAdapter() call site, and build the wizard's choice UI on the relocated secrets screen
+    agent: developer
+  - id: test
+    description: Extend server.test.ts and wizard-flow tests covering every acceptance criterion, including the fail-safe defaults and the confirmation that googleSync's construction wasn't disturbed
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review specifically for whether the synchronous-read approach genuinely avoided touching googleSync's construction timing as claimed, and that the Portunus-absent path is truly a no-op change for existing users
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/shell/db-location.ts
+      purpose: "The exact shape secrets-backend-config.ts mirrors (homeDir-parameterized, wizard-config.json, fail-safe defaults on read errors) — this story's new file follows this pattern precisely, just synchronous instead of async"
+    - path: src/shell/server.ts
+      purpose: "Line ~135's existing createSecretsAdapter() call site — this story changes what's passed in, not where or how it's called"
+
+files_to_modify:
+  - file: src/shell/secrets-backend-config.ts
+    change: "new file — getSecretsBackendChoiceSync/setSecretsBackendChoice, mirroring db-location.ts"
+  - file: src/shell/server.ts
+    change: "pass { backend: getSecretsBackendChoiceSync(homeDir) } into the existing createSecretsAdapter() call"
+  - file: src/shell/wizard.html
+    change: "add the Keychain/Portunus choice UI to the (already-relocated by pfb-03) secrets screen"
+
+design_decisions:
+  - decision: "Backend choice resolved via a synchronous file read at the existing construction call site, not an async/lazy adapter"
+    rationale: "Grill finding F3: the original 'mirrors lazy Store' proposal was checked against real code and found false — secrets has a synchronous consumer (googleSync) that Store doesn't. A tiny local JSON read at process-construction time is a non-issue for blocking startup; this is simpler than the rejected alternative, not just a workaround for it."
+
+risks:
+  - severity: low
+    description: "Final integration story depends on all three prior stories being correct — a bug in any of them surfaces here first in practice"
+    mitigation: "Acceptance criteria explicitly re-verify that googleSync's construction wasn't disturbed and that the no-Portunus-detected path is a true no-op, catching integration-level regressions from earlier stories"
+
+references:
+  - path: .pHive/epics/portunus-secrets-backend/docs/design-discussion.md
+    relevant_excerpt: |
+      §3's full resolution of grill finding F3 — the architecture
+      correction this story implements.

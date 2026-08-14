@@ -1,0 +1,116 @@
+id: pfb-01-core-portunus-adapter
+epic: portunus-secrets-backend
+title: Real Portunus SecretsAdapter backend
+status: pending
+complexity: high
+methodology: classic
+depends_on: []
+
+description: |
+  Adds createPortunusSecretsAdapter(), isPortunusAvailable(), and
+  classifyPortunusError() to src/lib/secrets-adapter.ts, implementing the
+  SecretsAdapter interface against the real Portunus CLI (confirmed real
+  and dogfoodable — cloned, 357/357 tests passing, personally exercised
+  drop/state/resolve end to end). Portunus has NO "get secret by key ->
+  string" API by design: get() must run `portunus resolve
+  "{{secret:rolodex.<key>}}"`, read the printed tempfile path, read that
+  file, and always delete it (try/finally) — with path provenance
+  validated (absolute, under the OS temp dir, a regular file not a
+  symlink) before trusting it, not just format-checked. set() is a
+  two-step write: `portunus drop rolodex.<key> rolodex.<key> --stdin`
+  (value via stdin, never argv) then `portunus state rolodex.<key>
+  enabled` (required before the value is resolvable) — throws without
+  rolling back if the second call fails. delete() is `portunus reg rm
+  rolodex.<key>`. isPortunusAvailable() probes `portunus --version` (or
+  the real equivalent, confirmed during research) using the SAME
+  AbortSignal-based timeout mechanism already proven in
+  src/lib/secrets-check.ts's withTimeout()/PROBE_STEP_TIMEOUT_MS — this
+  codebase already has direct experience with a CLI hanging on an
+  interactive prompt instead of failing fast; do not reinvent a weaker
+  mechanism. classifyPortunusError() is a Portunus-specific error
+  classifier, parallel to but separate from the existing
+  classifyKeychainError() — do not make one generic classifier try to
+  cover both vocabularies. sanitizePortunusError() strips execFile
+  argv/.cmd from thrown errors before they can reach a log sink, parallel
+  to the existing sanitizeSetError().
+
+  This design went through a full adversarial grill pass (12 findings) and
+  two rounds of collaborative review, one of which caught a real numeric
+  error in an earlier draft. Several real behavioral questions were
+  DELIBERATELY left unresolved in the design doc and pushed into this
+  story's acceptance criteria as REQUIRED empirical checks against the
+  real, installed portunus CLI (confirmed present on this machine:
+  `portunus 0.14.0`) — not something to assume an answer for and move on.
+
+acceptance_criteria:
+  - "Given a real value written via set(), when get() is called for that key, then it returns the exact original value, and the tempfile portunus printed a path to no longer exists on disk afterward"
+  - "Given get() throws partway through (e.g. the file read fails after the path is obtained), when that happens, then the tempfile is still deleted — verified by a test that forces the read to throw and then asserts the file is gone"
+  - "Given a printed 'path' from portunus resolve that is NOT absolute, NOT under the OS temp directory, or IS a symlink, when get() receives it, then get() throws a clear error and never opens that path — three separate test cases, one per condition"
+  - "Given set()'s second call (state enabled) fails after drop succeeded, when that happens, then set() throws and does NOT attempt any rollback drop call"
+  - "REQUIRED EMPIRICAL CHECK (not satisfied by a fake/mock): retry set() for the same key after a real or simulated state-enable failure against the actual installed portunus CLI, and confirm the retry succeeds and results in a resolvable secret — document the actual observed behavior in the PR description, not just 'assumed safe'"
+  - "REQUIRED EMPIRICAL CHECK: run delete() against a key that was never created, against the real portunus CLI, and confirm/document whether `portunus reg rm` exits cleanly (matching this codebase's established 'absent = success' idempotency convention) or errors — implement delete() to normalize either way to the idempotent contract every other SecretsAdapter method already guarantees"
+  - "REQUIRED EMPIRICAL CHECK: run a real dotted, multi-segment key shape (e.g. 'google.oauth.client', matching rolodex's actual real key names) through the full drop/state-enable/resolve/reg-rm round trip against the real CLI, and confirm it works identically to a simple placeholder key — document what sm_name actually means in Portunus's own model based on what you find, don't guess"
+  - "REQUIRED EMPIRICAL CHECK: attempt to trigger a Portunus failure path (malformed input, wrong permissions, etc.) and confirm its stderr output never echoes a stdin-piped secret value back — if it does, sanitizePortunusError() must strip it, and this must be covered by a test"
+  - "REQUIRED EMPIRICAL CHECK: confirm portunus --version (or whichever real subcommand isPortunusAvailable() ends up using) returns promptly and does not hang waiting on any interactive prompt, against the real installed binary"
+  - "Given isPortunusAvailable() is called when the portunus binary is absent (simulate via PATH manipulation or a fake execFile), when that happens, then it returns false and never throws"
+  - "Given every execFile call in this module, when opts.signal is passed to get/set/delete, then it propagates through to the underlying child process the same way the existing Keychain backend already does"
+
+steps:
+  - id: research
+    description: Confirm the exact real portunus CLI subcommands/output shapes needed (resolve, drop, state, reg rm, --version-or-equivalent) against the actual installed binary before writing any code — the design deliberately left several specifics for this step to nail down empirically, not to assume
+    agent: researcher
+  - id: implement
+    description: Build createPortunusSecretsAdapter/isPortunusAvailable/classifyPortunusError/sanitizePortunusError per the design, incorporating whatever research confirms about the real CLI's exact behavior
+    agent: developer
+    depends_on: [research]
+  - id: test
+    description: Write vitest tests for every acceptance criterion above using fake execFile injection (mirroring the existing Keychain adapter test convention) — no real portunus CLI dependency in the automated suite. Separately and explicitly run the REQUIRED EMPIRICAL CHECK items against the real installed CLI and document findings in the PR description
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Adversarially review for the specific risks this story exists to close — tempfile leak on error paths, path provenance/TOCTOU, argv/stderr secret leakage, and whether every REQUIRED EMPIRICAL CHECK was actually run (not just asserted) against the real CLI
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/lib/secrets-adapter.ts
+      purpose: "Existing Keychain backend pattern to mirror structurally (execFile argv arrays, sanitizeSetError); this story adds the Portunus backend alongside it in the same file"
+    - path: src/lib/secrets-check.ts
+      purpose: "withTimeout()/PROBE_STEP_TIMEOUT_MS — the proven AbortSignal-based timeout mechanism isPortunusAvailable() must reuse/mirror, not reinvent"
+
+files_to_modify:
+  - file: src/lib/secrets-adapter.ts
+    change: "add createPortunusSecretsAdapter, isPortunusAvailable, classifyPortunusError, sanitizePortunusError"
+  - file: src/lib/secrets-adapter.test.ts
+    change: "add tests per acceptance criteria"
+
+design_decisions:
+  - decision: "get() validates tempfile path provenance (absolute + under os.tmpdir() + regular file via lstat, not stat) before reading, not just format"
+    rationale: "Grill finding F10: a printed 'looks like a path' string isn't proof of provenance — a buggy or malicious process could point rolodex at reading/deleting an arbitrary file it has access to. TOCTOU-aware: symlink check specifically closes the swap-between-print-and-read risk."
+  - decision: "set()'s failure mode (drop succeeds, state-enable fails) throws without rolling back"
+    rationale: "A rollback call is itself a new failure surface. A dropped-but-disabled entry is inert, not actively harmful — documented accepted behavior, not a silent gap. Whether a RETRY behaves safely is a required empirical check, not assumed."
+  - decision: "isPortunusAvailable() reuses the exact timeout/abort mechanism from secrets-check.ts rather than a plain execFile timeout option"
+    rationale: "This codebase already has direct, documented experience (PROBE_STEP_TIMEOUT_MS's own docstring) with a CLI hanging on an interactive prompt instead of failing fast. Reusing the proven mechanism instead of a vaguer 'or equivalent' is a grill-flagged correction (F12)."
+
+risks:
+  - severity: medium
+    description: "First shell-out-to-a-different-external-program backend in this codebase, with a materially different write/read contract than Keychain — several real behavioral questions were explicitly deferred to this story's required empirical checks rather than resolved in the design doc"
+    mitigation: "Acceptance criteria above name each deferred question explicitly and require documented, real-CLI verification — not satisfied by a mock/fake alone"
+
+references:
+  - path: .pHive/epics/portunus-secrets-backend/docs/design-discussion.md
+    relevant_excerpt: |
+      §3 — full createPortunusSecretsAdapter() design, all grill/researcher/
+      tpm revisions baked in inline, including a real numeric correction
+      caught during collaborative review (see design-discussion.md's own
+      note on this).
+  - path: .pHive/epics/portunus-secrets-backend/docs/grill-record.md
+    relevant_excerpt: |
+      12 findings (F1-F12) and their resolutions — this story's acceptance
+      criteria trace directly to F6/F7/F8/F9/F10/F11/F12's resolutions.

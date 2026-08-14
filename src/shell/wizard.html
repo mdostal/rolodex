@@ -158,6 +158,18 @@
     details#troubleshooting summary { cursor: pointer; color: var(--accent); }
     details#troubleshooting ul { padding-left: 20px; line-height: 1.6; }
 
+    /* Only rendered when Portunus is detected (renderSecrets()) — a no-
+       Portunus install never sees this markup at all. */
+    .secrets-backend-choice { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 18px; }
+    .secrets-backend-choice label {
+      display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+      border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+    }
+    .secrets-backend-choice label:has(input:checked) { border-color: var(--accent); background: var(--accent-bg); }
+    .secrets-backend-choice input[type="radio"] { margin-top: 3px; flex: 0 0 auto; }
+    .secrets-backend-choice .choice-title { font-weight: 600; }
+    .secrets-backend-choice .choice-detail { color: var(--muted); font-size: 0.85rem; }
+
     .summary-list { list-style: none; margin: 0 0 8px; padding: 0; }
     .summary-list li { padding: 10px 0; border-bottom: 1px solid var(--border); }
     .summary-list li:last-child { border-bottom: none; }
@@ -221,8 +233,8 @@
     const STEPS = [
       { key: "welcome", label: "Welcome" },
       { key: "database", label: "Database" },
-      { key: "google", label: "Google" },
       { key: "secrets", label: "Secrets" },
+      { key: "google", label: "Google" },
       { key: "finish", label: "Finish" },
     ];
 
@@ -413,7 +425,7 @@
           primaryEnabled: lastWritable,
           primaryOnClick: () => {
             reachedIndex = Math.max(reachedIndex, 2);
-            navigate("google");
+            navigate("secrets");
           },
         });
       }
@@ -504,8 +516,8 @@
           // nothing server-side that has to happen for a skip to be valid.
           console.warn("wizard: /api/wizard/google/skip failed, skipping locally anyway", err);
         }
-        reachedIndex = Math.max(reachedIndex, 3);
-        navigate("secrets");
+        reachedIndex = Math.max(reachedIndex, 4);
+        navigate("finish");
       }
 
       async function onConnect() {
@@ -518,7 +530,7 @@
           return;
         }
         setFooter({
-          backOnClick: () => navigate("database"),
+          backOnClick: () => navigate("secrets"),
           extraButtons: [{ label: "Skip for now", disabled: true, onClick: onSkip }],
           primaryLabel: "Connecting…",
           primaryEnabled: false,
@@ -563,7 +575,7 @@
         }
 
         setFooter({
-          backOnClick: () => { cancel(); navigate("database"); },
+          backOnClick: () => { cancel(); navigate("secrets"); },
           extraButtons: [{ label: "Cancel", onClick: cancel }],
           primaryLabel: "Connecting…",
           primaryEnabled: false,
@@ -573,8 +585,8 @@
         try {
           await api("/api/wizard/google/connect", { method: "POST", signal: controller.signal });
           showStatus("success", "&#10003; Google account connected.");
-          reachedIndex = Math.max(reachedIndex, 3);
-          setTimeout(() => navigate("secrets"), 700);
+          reachedIndex = Math.max(reachedIndex, 4);
+          setTimeout(() => navigate("finish"), 700);
         } catch (err) {
           if (err && err.name === "AbortError") {
             // Clean, retryable state — not an error banner.
@@ -592,7 +604,7 @@
 
       function wireFooter() {
         setFooter({
-          backOnClick: () => navigate("database"),
+          backOnClick: () => navigate("secrets"),
           extraButtons: [{ label: "Skip for now", onClick: onSkip }],
           primaryLabel: "Connect & Continue",
           primaryEnabled: true,
@@ -603,7 +615,31 @@
     }
 
     // ---- Screen 4: Secrets check ------------------------------------------
+    // Two genuinely different code paths, not one path with a toggled-off
+    // element: when Portunus isn't detected, renderSecretsNoChoice() below
+    // is byte-identical (markup + requests + behavior) to this screen before
+    // pfb-04 — a hard requirement, since that's the path every existing/most
+    // users hit. Only when isPortunusAvailable() (probed via GET
+    // /api/wizard/secrets-backends) reports true does renderSecretsWithChoice()
+    // run instead, adding a real Keychain/Portunus choice.
     async function renderSecrets() {
+      let portunusAvailable = false;
+      try {
+        const avail = await api("/api/wizard/secrets-backends");
+        portunusAvailable = !!(avail && avail.portunusAvailable);
+      } catch (err) {
+        // Fails safe to the no-choice path — a broken probe must never block
+        // the whole screen, and "no choice, Keychain-only" is the safe,
+        // today's-behavior default every existing user already gets.
+        console.warn("wizard: /api/wizard/secrets-backends failed, defaulting to Keychain-only", err);
+        portunusAvailable = false;
+      }
+      if (portunusAvailable) await renderSecretsWithChoice();
+      else await renderSecretsNoChoice();
+    }
+
+    // ---- Screen 4a: Secrets check, no Portunus detected (today's screen) --
+    async function renderSecretsNoChoice() {
       content.innerHTML =
         "<h1>Checking secure storage</h1>" +
         '<p class="subtext">Rolodex stores credentials in your OS keychain, never in a plain file. This confirms it actually works before you finish.</p>' +
@@ -647,12 +683,12 @@
 
       function updatePrimary() {
         setFooter({
-          backOnClick: () => navigate("google"),
+          backOnClick: () => navigate("database"),
           primaryLabel: "Next",
           primaryEnabled: !!(lastResult && lastResult.ok),
           primaryOnClick: () => {
-            reachedIndex = Math.max(reachedIndex, 4);
-            navigate("finish");
+            reachedIndex = Math.max(reachedIndex, 3);
+            navigate("google");
           },
         });
       }
@@ -692,6 +728,168 @@
       await runCheck();
     }
 
+    // ---- Screen 4b: Secrets check, Portunus detected -> real choice -------
+    const BACKEND_CHOICE_LABEL = { keychain: "macOS Keychain", portunus: "Portunus" };
+    const BACKEND_TROUBLESHOOTING = {
+      keychain: [
+        "<strong>Keychain locked:</strong> unlock your login keychain (Keychain Access app, or just log in again) and retry.",
+        "<strong>Permission denied:</strong> check macOS System Settings &rarr; Privacy &amp; Security for anything blocking Rolodex from keychain access.",
+        "<strong>No keychain available:</strong> this session (e.g. headless/SSH) has no secure keychain daemon — there is no env-var fallback for credentials, by design.",
+      ],
+      portunus: [
+        "<strong>Not installed:</strong> make sure the <code>portunus</code> CLI is installed and on your PATH, then Retry.",
+        "<strong>Reference not enabled:</strong> a Portunus entry can exist but still be <code>state=dropped</code> (not injectable) — run <code>portunus state &lt;name&gt; enabled</code>.",
+        "<strong>Permission denied:</strong> rolodex needs permission to run Portunus and access its vault.",
+      ],
+    };
+
+    async function renderSecretsWithChoice() {
+      content.innerHTML =
+        "<h1>Choose your secure storage</h1>" +
+        '<p class="subtext">Rolodex stores credentials in a secure backend, never in a plain file. Portunus was detected on this machine — pick which backend to use, then confirm it actually works.</p>' +
+        '<fieldset class="secrets-backend-choice" id="secrets-backend-choice">' +
+        "<legend class=\"sr-only\">Secure storage backend</legend>" +
+        '<label>' +
+        '<input type="radio" name="secrets-backend" id="secrets-backend-keychain" value="keychain" checked />' +
+        '<span><span class="choice-title">macOS Keychain</span><br /><span class="choice-detail">The default — built into macOS, no extra setup.</span></span>' +
+        "</label>" +
+        '<label>' +
+        '<input type="radio" name="secrets-backend" id="secrets-backend-portunus" value="portunus" />' +
+        '<span><span class="choice-title">Portunus</span><br /><span class="choice-detail">Use the Portunus CLI already installed on this machine instead.</span></span>' +
+        "</label>" +
+        "</fieldset>" +
+        '<div class="status-line checking" id="secrets-status" aria-live="polite"><span class="spinner" aria-hidden="true"></span> Checking access…</div>' +
+        '<div id="secrets-detail"></div>' +
+        '<div class="secrets-actions" id="secrets-actions" hidden>' +
+        '<button type="button" id="secrets-retry">Retry</button>' +
+        '<button type="button" id="secrets-copy">Copy error details</button>' +
+        "</div>" +
+        '<details id="troubleshooting" hidden>' +
+        "<summary>Troubleshooting guide</summary>" +
+        '<ul id="troubleshooting-list"></ul>' +
+        "</details>";
+
+      let lastResult = null;
+      let selectedBackend = "keychain";
+      let persistError = "";
+
+      function selectedLabel() {
+        return BACKEND_CHOICE_LABEL[selectedBackend] || selectedBackend;
+      }
+
+      function paint(result) {
+        lastResult = result;
+        const status = document.getElementById("secrets-status");
+        const actions = document.getElementById("secrets-actions");
+        const trouble = document.getElementById("troubleshooting");
+        const list = document.getElementById("troubleshooting-list");
+        list.innerHTML = (BACKEND_TROUBLESHOOTING[selectedBackend] || [])
+          .map((item) => "<li>" + item + "</li>")
+          .join("");
+        if (result.ok) {
+          status.className = "status-line ok";
+          status.innerHTML = "&#10003; " + escapeHtml(selectedLabel()) + " access confirmed — Using: " + escapeHtml(result.backend);
+          actions.hidden = true;
+          trouble.hidden = true;
+        } else {
+          status.className = "status-line error";
+          status.innerHTML = "&#10007; Couldn't confirm " + escapeHtml(selectedLabel()) + " access";
+          document.getElementById("secrets-detail").innerHTML =
+            '<p class="field-error">' + escapeHtml(result.error || "Unknown error.") + "</p>";
+          actions.hidden = false;
+          trouble.hidden = false;
+        }
+        updatePrimary();
+      }
+
+      function updatePrimary() {
+        setFooter({
+          backOnClick: () => navigate("database"),
+          primaryLabel: "Next",
+          primaryEnabled: !!(lastResult && lastResult.ok),
+          primaryOnClick: onNext,
+        });
+      }
+
+      async function onNext() {
+        persistError = "";
+        setFooter({
+          backOnClick: () => navigate("database"),
+          primaryLabel: "Saving…",
+          primaryEnabled: false,
+          primaryOnClick: () => {},
+        });
+        try {
+          // Persisted BEFORE navigating on to "google" — the subsequent
+          // Google-connect screen's secrets.set() calls must use whichever
+          // backend was actually selected here, starting the next time this
+          // server resolves `secrets` (see secrets-backend-config.ts).
+          await api("/api/wizard/secrets-backend-choice", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ backend: selectedBackend }),
+          });
+        } catch (err) {
+          persistError = err.message || "Couldn't save your choice.";
+          document.getElementById("secrets-detail").innerHTML =
+            '<p class="field-error">' + escapeHtml(persistError) + "</p>";
+          updatePrimary();
+          return;
+        }
+        reachedIndex = Math.max(reachedIndex, 3);
+        navigate("google");
+      }
+
+      updatePrimary();
+
+      async function runCheck(backend) {
+        document.getElementById("secrets-detail").innerHTML = "";
+        const status = document.getElementById("secrets-status");
+        status.className = "status-line checking";
+        status.innerHTML = '<span class="spinner" aria-hidden="true"></span> Checking ' + escapeHtml(BACKEND_CHOICE_LABEL[backend] || backend) + ' access…';
+        document.getElementById("secrets-actions").hidden = true;
+        document.getElementById("troubleshooting").hidden = true;
+        try {
+          const result = await api("/api/wizard/secrets-check", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ backend }),
+          });
+          // A stale response for a backend the user has since switched away
+          // from must not clobber the currently-selected backend's status.
+          if (backend === selectedBackend) paint(result);
+        } catch (err) {
+          if (backend === selectedBackend) paint(err.body || { ok: false, backend: "unknown", error: err.message });
+        }
+      }
+
+      document.querySelectorAll('input[name="secrets-backend"]').forEach((input) => {
+        input.addEventListener("change", () => {
+          if (!input.checked) return;
+          selectedBackend = input.value;
+          runCheck(selectedBackend);
+        });
+      });
+
+      document.getElementById("secrets-retry").addEventListener("click", () => runCheck(selectedBackend));
+      document.getElementById("secrets-copy").addEventListener("click", async () => {
+        const text = lastResult ? JSON.stringify(lastResult, null, 2) : "";
+        try {
+          await navigator.clipboard.writeText(text);
+          const btn = document.getElementById("secrets-copy");
+          const original = btn.textContent;
+          btn.textContent = "Copied!";
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        } catch {
+          // Clipboard API can be unavailable (permissions/non-secure
+          // context); the error details are already visible on-screen as
+          // plain text, so this is a nice-to-have, not the only way to see them.
+        }
+      });
+
+      await runCheck(selectedBackend);
+    }
+
     // ---- Screen 5: Finish ---------------------------------------------
     async function renderFinish() {
       content.innerHTML =
@@ -728,7 +926,7 @@
         const errorEl = document.getElementById("finish-error");
         errorEl.innerHTML = "";
         setFooter({
-          backOnClick: () => navigate("secrets"),
+          backOnClick: () => navigate("google"),
           primaryLabel: "Opening…",
           primaryEnabled: false,
           primaryOnClick: () => {},
@@ -748,7 +946,7 @@
 
       function wireFinishFooter() {
         setFooter({
-          backOnClick: () => navigate("secrets"),
+          backOnClick: () => navigate("google"),
           primaryLabel: "Open Rolodex →",
           primaryEnabled: true,
           primaryOnClick: onOpenClick,

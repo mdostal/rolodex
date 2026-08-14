@@ -1,0 +1,72 @@
+id: pfb-02-backend-aware-capability-check
+epic: portunus-secrets-backend
+title: Make the secrets capability check backend-aware
+status: pending
+complexity: medium
+methodology: classic
+depends_on: [pfb-01-core-portunus-adapter]
+
+description: |
+  src/lib/secrets-check.ts's checkSecretsCapability(factory) and
+  SecretsCheckResult.backend are currently hardcoded to keychain-specific
+  text and logic (classifyKeychainError() called unconditionally,
+  "macOS Keychain" hardcoded in every branch). This story makes the whole
+  path backend-aware: checkSecretsCapability(factory, backend?) accepts
+  which backend to probe, CreateSecretsAdapterOptions gains
+  backend?: "keychain" | "portunus" (default "keychain", preserving
+  today's exact behavior when omitted), and the result's backend/error
+  text dispatches to classifyPortunusError() (from pfb-01) when probing
+  Portunus, never mixing keychain vocabulary into a Portunus failure or
+  vice versa. Also thread a { backend } field through the wizard's
+  capability-check server route so the UI can show a live check result for
+  whichever option is currently selected before it's persisted.
+
+acceptance_criteria:
+  - "Given checkSecretsCapability is called with backend: 'keychain' (or omitted), when it runs, then behavior is byte-identical to today — same result shape, same classifyKeychainError() usage"
+  - "Given checkSecretsCapability is called with backend: 'portunus', when the probe fails, then the result's error text comes from classifyPortunusError(), never classifyKeychainError(), and SecretsCheckResult.backend reads a Portunus-specific label, never 'macOS Keychain'"
+  - "Given withInMemoryFallback's console.warn fires for a Portunus backend failure, when that happens, then the warning text names Portunus, not 'keychain' — no hardcoded backend name leaking into a warning for the wrong backend"
+  - "Given the wizard's capability-check server route receives { backend: 'portunus' } in its request body, when that happens, then it calls checkSecretsCapability with that backend, not always defaulting to keychain"
+
+steps:
+  - id: implement
+    description: Add the backend parameter through checkSecretsCapability, CreateSecretsAdapterOptions, and the wizard route, dispatching to classifyPortunusError/classifyKeychainError correctly
+    agent: developer
+  - id: test
+    description: Extend secrets-check.test.ts and server.test.ts covering the acceptance criteria above, confirming zero behavior change for the default/keychain path
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Review that no keychain-specific text/logic leaks into a Portunus code path or vice versa, and that the default (omitted backend) path is genuinely unchanged
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/lib/secrets-check.ts
+      purpose: "checkSecretsCapability(factory) and its hardcoded backend-label/error-classification logic this story parameterizes"
+    - path: src/shell/server.ts
+      purpose: "the /api/wizard/secrets-check route (search for checkSecretsCapability) that needs to thread a backend choice through from the request body"
+
+files_to_modify:
+  - file: src/lib/secrets-check.ts
+    change: "checkSecretsCapability gains a backend parameter; dispatch to classifyPortunusError vs classifyKeychainError and the right backend label accordingly"
+  - file: src/lib/secrets-adapter.ts
+    change: "CreateSecretsAdapterOptions gains backend?: 'keychain' | 'portunus'; withInMemoryFallback's warning text becomes backend-aware"
+  - file: src/shell/server.ts
+    change: "capability-check route reads { backend } from the request body and passes it through"
+
+risks:
+  - severity: low
+    description: "Mechanical parameterization of already-well-tested code, not new logic"
+    mitigation: "Acceptance criteria require byte-identical default-path behavior, catching any accidental regression"
+
+references:
+  - path: .pHive/epics/portunus-secrets-backend/docs/design-discussion.md
+    relevant_excerpt: |
+      §3's resolution of grill findings F2 and F5 — the concrete plumbing
+      gap this story closes.
