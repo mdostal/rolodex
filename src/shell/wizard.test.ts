@@ -155,7 +155,12 @@ const SCREEN_H1: Record<string, string> = {
   finish: "You're all set.",
 };
 
-async function waitFor(fn: () => boolean, label: string, timeoutMs = 4000): Promise<void> {
+// 10s, not 4s: the secrets screen now makes two sequential HTTP round trips
+// (GET /api/wizard/secrets-backends, then POST /api/wizard/secrets-check)
+// where it previously made one — on a resource-constrained CI runner
+// running the full suite, that's enough added latency to occasionally
+// exceed a tight timeout even though nothing is actually hung.
+async function waitFor(fn: () => boolean, label: string, timeoutMs = 10000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (fn()) return;

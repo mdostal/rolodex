@@ -367,16 +367,42 @@ describe("Portunus SecretsAdapter", () => {
   // were. This constructs that exact sibling directory for real and proves
   // get() still rejects a path inside it.
   it("get() rejects a printed path under a real sibling directory whose name merely starts with the temp dir's name, and leaves it untouched", async () => {
-    const siblingDir = `${os.tmpdir()}-evil-sibling`;
+    // Reproducing the real "/tmp-evil-sibling vs /tmp" collision requires a
+    // true sibling of the OS temp dir itself — i.e. write access to the temp
+    // dir's own PARENT directory. On macOS that parent is some writable
+    // per-user path (e.g. /var/folders/xx/yyyy/), but on a stock Linux CI
+    // runner os.tmpdir() is exactly "/tmp", whose parent is "/" — not
+    // writable by a non-root user. Rather than assume the real OS tmpdir's
+    // parent is writable (it isn't, universally), this test fabricates its
+    // own tmpdir-and-parent pair, both nested under a scratch directory this
+    // process definitely CAN write to (the real os.tmpdir() itself is
+    // guaranteed writable everywhere, by definition — that's what makes it
+    // "the" tmp dir), and points TMPDIR at the fake one for the duration of
+    // the call. Node's os.tmpdir() reads process.env.TMPDIR dynamically on
+    // POSIX (not cached at process start), so the code under test's own
+    // internal os.tmpdir() call genuinely sees the fake dir, and the
+    // fabricated sibling is a true sibling of it — same vulnerability class,
+    // portable to any CI environment.
+    const scratchParent = await fs.mkdtemp(path.join(os.tmpdir(), "rolodex-sibling-test-"));
+    cleanupPaths.push(scratchParent);
+    const fakeTmpDir = path.join(scratchParent, "faketmp");
+    const siblingDir = path.join(scratchParent, "faketmp-evil-sibling");
+    await fs.mkdir(fakeTmpDir, { recursive: true });
     await fs.mkdir(siblingDir, { recursive: true });
-    cleanupPaths.push(siblingDir);
     const siblingFile = path.join(siblingDir, "somefile");
     await fs.writeFile(siblingFile, "should-never-be-read-sibling-dir", { mode: 0o600 });
 
     const { run } = fakeRun(async () => ({ stdout: `${siblingFile}\n`, stderr: "" }));
     const adapter = createPortunusSecretsAdapter({ run });
 
-    await expect(adapter.get("mykey")).rejects.toThrow(/outside the OS temp directory/i);
+    const originalTmpdir = process.env.TMPDIR;
+    process.env.TMPDIR = fakeTmpDir;
+    try {
+      await expect(adapter.get("mykey")).rejects.toThrow(/outside the OS temp directory/i);
+    } finally {
+      if (originalTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = originalTmpdir;
+    }
     expect(await fs.readFile(siblingFile, "utf8")).toBe("should-never-be-read-sibling-dir");
   });
 
