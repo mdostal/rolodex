@@ -114,6 +114,13 @@
   .card-frame .chrome span { width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
   .card-frame img { display: block; width: 100%; height: auto; }
 
+  section.stats { padding: 0 0 88px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  @media (max-width: 700px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stat-cell { background: var(--surface); padding: 22px 18px; text-align: center; }
+  .stat-cell .num { display: block; font-family: var(--font-mono); font-size: clamp(1.3rem, 3vw, 1.7rem); font-weight: 600; color: var(--brass); line-height: 1.1; margin-bottom: 6px; }
+  .stat-cell .label { font-size: 0.82rem; color: var(--ink-soft); }
+
   section.features { padding: 88px 0; }
   .section-head { max-width: 60ch; margin-bottom: 48px; }
   .section-head .eyebrow { margin-bottom: 12px; }
@@ -157,6 +164,13 @@
   .tool-list div { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
   .tool-list strong { color: var(--brass); }
 
+  .tech-chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0 0; }
+  .tech-chips span {
+    font-family: var(--font-mono); font-size: 0.82rem; color: var(--ink);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px;
+  }
+
   section.start { padding: 88px 0; }
   pre {
     background: var(--ink); color: var(--bg); border-radius: 10px; padding: 24px 26px;
@@ -167,8 +181,11 @@
   pre .comment { color: #8A9A8C; }
   pre .prompt { color: var(--brass); }
 
-  footer.site { border-top: 1px solid var(--border); padding: 40px 0 56px; }
-  .footer-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; }
+  footer.site { border-top: 1px solid var(--border); padding: 56px 0; }
+  .footer-cta { text-align: center; margin-bottom: 48px; }
+  .footer-cta h2 { margin-bottom: 10px; }
+  .footer-cta p { color: var(--ink-soft); margin: 0 0 26px; }
+  .footer-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; padding-top: 32px; border-top: 1px solid var(--border); }
   .footer-row p { margin: 0; color: var(--ink-soft); font-size: 0.9rem; }
   .footer-links { display: flex; gap: 20px; font-size: 0.9rem; }
   .footer-links a { text-decoration: none; }
@@ -210,6 +227,17 @@
       <div class="card-frame">
         <div class="chrome"><span></span><span></span><span></span></div>
         <img src="assets/screenshot-list.png" alt="rolodex contacts list, showing four contacts with verdict and next-step columns" loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <section class="stats">
+    <div class="wrap">
+      <div class="stat-grid">
+        <div class="stat-cell"><span class="num">5</span><span class="label">MCP tools</span></div>
+        <div class="stat-cell"><span class="num">169</span><span class="label">tests passing</span></div>
+        <div class="stat-cell"><span class="num">127.0.0.1</span><span class="label">only — never on the network</span></div>
+        <div class="stat-cell"><span class="num">0</span><span class="label">accounts required to start</span></div>
       </div>
     </div>
   </section>
@@ -322,17 +350,33 @@
 <span class="comment"># run the app</span>
 <span class="prompt">$</span> npm run shell
 <span class="comment"># → http://127.0.0.1:PORT, first-run wizard walks you through the rest</span></pre>
+      <div class="tech-chips">
+        <span>TypeScript</span>
+        <span>Node.js 22+</span>
+        <span>node:sqlite (FTS5)</span>
+        <span>@modelcontextprotocol/sdk</span>
+        <span>googleapis</span>
+        <span>zod</span>
+        <span>no framework, no bundler</span>
+      </div>
     </div>
   </section>
 </main>
 
 <footer class="site">
-  <div class="wrap footer-row">
-    <p>MIT licensed. Built by Mathew Dostal.</p>
-    <div class="footer-links">
-      <a href="https://github.com/mdostal/rolodex/blob/main/LICENSE">License</a>
-      <a href="https://github.com/mdostal/rolodex/blob/main/CHANGELOG.md">Changelog</a>
-      <a href="https://github.com/mdostal/rolodex/releases/tag/v0.3.0">v0.3.0</a>
+  <div class="wrap">
+    <div class="footer-cta">
+      <h2>Own your rolodex.</h2>
+      <p>Clone it, run it, and it's yours — no account required.</p>
+      <a class="btn btn-primary" href="https://github.com/mdostal/rolodex/releases/latest">Get rolodex</a>
+    </div>
+    <div class="footer-row">
+      <p>MIT licensed. Built by Mathew Dostal.</p>
+      <div class="footer-links">
+        <a href="https://github.com/mdostal/rolodex/blob/main/LICENSE">License</a>
+        <a href="https://github.com/mdostal/rolodex/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/mdostal/rolodex/releases/latest">Latest release</a>
+      </div>
     </div>
   </div>
 </footer>
