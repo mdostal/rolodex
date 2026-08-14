@@ -63,13 +63,36 @@ describe("checkSecretsCapability()", () => {
     }
   });
 
-  it("reports ok:false with the 'no keychain' message on a non-darwin platform, without touching the factory", async () => {
-    const factory = vi.fn();
+  it("reports ok:false with the 'no keychain' message on a non-darwin platform, using the real default factory (production path, no injection)", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     try {
-      const result = await checkSecretsCapability(factory as unknown as () => SecretsAdapter);
+      // No factory argument — this is the real createSecretsAdapter default,
+      // matching how server.ts actually calls this in production
+      // (`opts.secretsCapabilityFactory ?? createSecretsAdapter`). The
+      // short-circuit below only ever applies to this real, unconfigured
+      // path.
+      const result = await checkSecretsCapability();
       expect(result).toEqual({ ok: false, backend: "none", error: "No secure keychain is available in this session." });
-      expect(factory).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("does NOT apply the non-darwin 'no keychain' short-circuit when a custom factory is explicitly injected — dependency injection must not be defeated by the host platform", async () => {
+    // Regression test for a real CI bug: every wizard.test.ts test hung
+    // because this exact short-circuit fired unconditionally on GitHub's
+    // Linux runner, even though the wizard's test harness explicitly
+    // injects createInMemorySecretsAdapter() (a platform-independent fake)
+    // specifically so its tests don't depend on the host's real keychain
+    // support at all. A test that substitutes its own factory must get that
+    // factory's real behavior, not a platform-gated stand-in answer.
+    const adapter = createInMemorySecretsAdapter();
+    const factory = vi.fn(() => adapter);
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      const result = await checkSecretsCapability(factory);
+      expect(result).toEqual({ ok: true, backend: "macOS Keychain" });
+      expect(factory).toHaveBeenCalled();
     } finally {
       vi.restoreAllMocks();
     }

@@ -420,26 +420,24 @@ describe("Settings popover 'Reconnect Google' entry point", () => {
 
 // checkSecretsCapability() (src/lib/secrets-check.ts) short-circuits to
 // `{ ok: false, backend: "none", error: "No secure keychain is available in
-// this session." }` on any non-Darwin platform BEFORE it ever calls the
-// factory it was given — deliberately, and pinned by its own unit test
-// (src/lib/secrets-check.test.ts: "...without touching the factory"). That
-// means these HTTP-level tests can't actually reach an injected fake
-// adapter's "success"/"failure" outcome except on macOS: on Linux (where CI
-// runs) every one of these requests gets the platform short-circuit
-// response regardless of which secretsCapabilityFactory was passed to
-// start(). Assert the outcome that's actually true for whichever platform
-// the suite happens to run on, rather than hardcoding the macOS-only path.
+// this session." }` on a non-Darwin platform ONLY when using the real,
+// unconfigured default factory (i.e. genuine production usage with no
+// injection) — see secrets-check.ts's own comment on this. Every test below
+// explicitly injects its own secretsCapabilityFactory (or relies on
+// start()'s own default injection of createInMemorySecretsAdapter()), so
+// the platform short-circuit never applies to any of them — behavior is
+// deterministic regardless of which platform the suite happens to run on.
+// (An earlier version of this file's tests branched on process.platform
+// here, working around a real bug where the short-circuit fired even for
+// injected factories, defeating dependency injection on non-Darwin CI —
+// fixed in secrets-check.ts; these tests now assert the corrected,
+// platform-independent behavior directly.)
 describe("POST /api/wizard/secrets-check", () => {
-  it("reflects a successful probe (200, ok:true) when a real backend is available on this platform", async () => {
+  it("reflects a successful probe (200, ok:true) against the injected backend", async () => {
     const { baseUrl } = await start({ secretsCapabilityFactory: () => createInMemorySecretsAdapter() });
     const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check");
-    if (process.platform === "darwin") {
-      expect(status).toBe(200);
-      expect(body).toMatchObject({ ok: true, backend: "macOS Keychain" });
-    } else {
-      expect(status).toBe(422);
-      expect(body).toMatchObject({ ok: false, backend: "none" });
-    }
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ ok: true, backend: "macOS Keychain" });
   });
 
   it("reflects a failing probe (422, ok:false, with an error message) — real, not simulated success", async () => {
@@ -454,16 +452,8 @@ describe("POST /api/wizard/secrets-check", () => {
     const { baseUrl } = await start({ secretsCapabilityFactory: failingFactory });
     const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check");
     expect(status).toBe(422);
-    if (process.platform === "darwin") {
-      expect(body).toMatchObject({ ok: false, backend: "macOS Keychain" });
-      expect((body as { error?: string }).error).toContain("permission");
-    } else {
-      // The injected failing factory is never reached — the platform
-      // short-circuit answers first — so the surfaced error is the generic
-      // "no backend on this platform" message, not the simulated EACCES.
-      expect(body).toMatchObject({ ok: false, backend: "none" });
-      expect((body as { error?: string }).error).toContain("No secure keychain");
-    }
+    expect(body).toMatchObject({ ok: false, backend: "macOS Keychain" });
+    expect((body as { error?: string }).error).toContain("permission");
   });
 
   // This story's addition: the route now reads `backend` out of the POST
@@ -513,25 +503,14 @@ describe("POST /api/wizard/secrets-check", () => {
     };
     const { baseUrl } = await start({ secretsCapabilityFactory: factory });
     await postJson(baseUrl + "/api/wizard/secrets-check");
-    if (process.platform === "darwin") {
-      expect(seenBackend).toBe("keychain");
-    } else {
-      // Keychain + non-Darwin short-circuits before ever calling the
-      // factory — see this describe block's own top-of-block comment.
-      expect(seenBackend).toBe("(factory never called)");
-    }
+    expect(seenBackend).toBe("keychain");
   });
 
   it("an unrecognized body.backend value falls back to \"keychain\" rather than crashing", async () => {
     const { baseUrl } = await start({ secretsCapabilityFactory: () => createInMemorySecretsAdapter() });
     const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check", { backend: "not-a-real-backend" });
-    if (process.platform === "darwin") {
-      expect(status).toBe(200);
-      expect(body).toMatchObject({ ok: true, backend: "macOS Keychain" });
-    } else {
-      expect(status).toBe(422);
-      expect(body).toMatchObject({ ok: false, backend: "none" });
-    }
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ ok: true, backend: "macOS Keychain" });
   });
 });
 
@@ -768,12 +747,11 @@ describe("GET /api/wizard/summary", () => {
       dbPath: `${dir}/.local/share/rolodex/rolodex.db`,
       googleConfigured: true,
     });
+    // start()'s own default injects createInMemorySecretsAdapter() (see this
+    // file's start() helper), so this is deterministic regardless of
+    // platform — no real Darwin-only keychain involved.
     const secrets = (body as { secrets: { ok: boolean; backend: string } }).secrets;
-    if (process.platform === "darwin") {
-      expect(secrets).toMatchObject({ ok: true, backend: "macOS Keychain" });
-    } else {
-      expect(secrets).toMatchObject({ ok: false, backend: "none" });
-    }
+    expect(secrets).toMatchObject({ ok: true, backend: "macOS Keychain" });
   });
 });
 

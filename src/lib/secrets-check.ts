@@ -194,7 +194,18 @@ export async function checkSecretsCapability(
   const backendLabel = BACKEND_LABELS[backend];
   const classifyError = BACKEND_CLASSIFIERS[backend];
 
-  if (backend === "keychain" && process.platform !== "darwin") {
+  // Only short-circuits when `factory` is genuinely the real, default
+  // createSecretsAdapter — i.e. this is a real production call, not a test
+  // that injected its own factory (e.g. an in-memory fake). Gating on
+  // platform regardless of what factory was passed in would defeat
+  // dependency injection outright: a test that explicitly substitutes a
+  // platform-independent fake shouldn't have its result silently forced to
+  // "unavailable" just because the CI runner happens to be Linux. Found via
+  // a real CI failure (every wizard.test.ts test hung waiting for a check
+  // that always resolved to ok:false on GitHub's ubuntu-latest runner,
+  // despite explicitly injecting createInMemorySecretsAdapter()) — this
+  // gate previously applied unconditionally, predating the Portunus epic.
+  if (backend === "keychain" && factory === createSecretsAdapter && process.platform !== "darwin") {
     return {
       ok: false,
       backend: "none",
