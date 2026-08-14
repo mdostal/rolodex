@@ -1,0 +1,35 @@
+name: portunus-secrets-backend
+title: Real Portunus SecretsAdapter backend + install-time secrets-backend choice
+target_codebase: /Users/mdostal/Documents/work/rolodex
+methodology: classic
+version_bump: minor
+sidecar_retention: committed
+
+git_flow:
+  base_branch: dev
+  branch_strategy: per-epic
+
+planning_team:
+  matched_tags: []
+  roster: [researcher, technical-writer, tpm]
+  per_tag_reasoning: {}
+  confidence: matched
+  gate_decisions: {}
+
+stories:
+  - id: pfb-01-core-portunus-adapter
+    title: Real Portunus SecretsAdapter backend
+    complexity: high
+    depends_on: []
+  - id: pfb-02-backend-aware-capability-check
+    title: Make the secrets capability check backend-aware
+    complexity: medium
+    depends_on: [pfb-01-core-portunus-adapter]
+  - id: pfb-03-wizard-screen-reorder
+    title: Reorder the wizard so secrets check runs before Google-connect
+    complexity: medium
+    depends_on: []
+  - id: pfb-04-server-wiring-and-choice-ui
+    title: Wire backend choice persistence and add the wizard choice UI
+    complexity: high
+    depends_on: [pfb-01-core-portunus-adapter, pfb-02-backend-aware-capability-check, pfb-03-wizard-screen-reorder]
