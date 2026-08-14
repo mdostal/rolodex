@@ -26,11 +26,23 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { JSDOM } from "jsdom";
 import { createRolodexServer } from "./server.js";
 import { createInMemorySecretsAdapter } from "../lib/secrets-adapter.js";
 import { getSecretsBackendChoiceSync } from "./secrets-backend-config.js";
+
+// vitest's own default per-test timeout (5s) was the actual binding
+// constraint on CI, not the waitFor() helper's own internal polling budget
+// below — a bumped internal budget is meaningless if vitest kills the test
+// before that budget is ever reached. The secrets screen now makes two
+// sequential HTTP round trips (Portunus detection, then the capability
+// check) where it previously made one, which is enough added latency to
+// occasionally exceed 5s on a resource-constrained CI runner during a full
+// suite run, without anything actually being hung — confirmed by CI
+// reporting "Test timed out in 5000ms" specifically, not a waitFor()
+// message, on every failing test in this file.
+vi.setConfig({ testTimeout: 20000 });
 
 let dir: string;
 let server: Server | undefined;
