@@ -153,7 +153,7 @@ export function createRolodexMcpServer(
 
   server.tool(
     "rolodex_upsert",
-    "Add or update a contact (partner/network). Provide any known fields.",
+    "Add or update a contact. Only pass fields you actually know — never invent a role, org, or email. If unsure whether this is a new contact or an edit to an existing one, call rolodex_search first rather than guessing.",
     {
       id: z.string().optional(),
       name: z.string(),
@@ -177,7 +177,7 @@ export function createRolodexMcpServer(
 
   server.tool(
     "rolodex_search",
-    "Full-text search contacts by name/org/what-they-do/angle/tags.",
+    "Full-text search contacts by name/org/what-they-do/angle/tags. Call this before rolodex_upsert whenever you're not certain a contact is new, to avoid creating a duplicate. No results means no results — never invent a plausible-sounding match.",
     { query: z.string(), verdict: z.enum(["strong", "watch", "referral-only", "pass", "none"]).optional(), limit: z.number().optional() },
     searchHandler,
   );
@@ -189,7 +189,7 @@ export function createRolodexMcpServer(
 
   server.tool(
     "rolodex_followups",
-    "List contacts with a next step set that have gone cold (no recent interaction).",
+    "List contacts with an open next step that have gone cold — no interaction within the owner's configured follow-up window. Use this to answer \"who should I reach out to.\"",
     { withinDays: z.number().optional() },
     followupsHandler,
   );
@@ -208,7 +208,7 @@ export function createRolodexMcpServer(
 
   server.tool(
     "rolodex_log_interaction",
-    "Log a touch (call/email/meeting/note) against a contact.",
+    "Log a real touch (call/email/dm/meeting/note) against a contact. Only log something the user describes as having actually happened — not something merely planned or discussed.",
     { contactId: z.string(), note: z.string(), at: z.string().optional(), channel: z.enum(["call", "email", "dm", "meeting", "other"]).optional() },
     logInteractionHandler,
   );
@@ -235,7 +235,7 @@ export function createRolodexMcpServer(
 
   server.tool(
     "rolodex_sync_google",
-    "Two-way sync with the owner's Google Contacts (People API). Verdict/angle/next-step stay local.",
+    "ONE-WAY pull from the owner's Google Contacts (People API) into the local store — this is not two-way sync. Verdict/angle/next-step are local-only and are never overwritten by a pull. The 'push' direction is not implemented: passing direction:'push' returns an error rather than pushing anything to Google, and direction:'both' only performs the pull half.",
     { direction: z.enum(["pull", "push", "both"]).default("both") },
     syncHandler,
   );

@@ -60,19 +60,38 @@ the full touch history per contact.
 ## MCP server (secondary integration surface)
 `src/mcp/server.ts` is a stdio MCP server exposing `rolodex_upsert`,
 `rolodex_search`, `rolodex_followups`, `rolodex_log_interaction`, and
-`rolodex_sync_google` — add it to any agent host (Claude, your own agent
-swarm) and the agent has a real rolodex it can read, search, and update.
-Every tool is wired to the same `Store`/`GoogleSync` logic the standalone
-app uses — verdict/angle/next-step still stay local-only through a sync,
-and `rolodex_sync_google`'s `push` direction returns a clear
-not-implemented error rather than a silent no-op (two-way sync is still a
-planned follow-up). This remains a secondary integration surface, not the
-primary way to use rolodex — the standalone app is that. Run it with
-`npm run dev`.
+`rolodex_sync_google` — add it to **any MCP-compatible agent host** (Claude
+Desktop, Claude Code, or your own harness — this is the standard
+`@modelcontextprotocol/sdk` stdio transport, nothing Claude-specific) and
+the agent has a real rolodex it can read, search, and update. Every tool's
+own description carries the guardrails an agent needs (search before
+creating, never fabricate a match, `push` isn't implemented) directly in
+the MCP protocol response — not tucked away in a Claude-specific file — so
+this works the same regardless of which host is calling it. Every tool is
+wired to the same `Store`/`GoogleSync` logic the standalone app uses —
+verdict/angle/next-step stay local-only through a sync, and
+`rolodex_sync_google`'s `push` direction returns a clear not-implemented
+error rather than a silent no-op (two-way sync is still a planned
+follow-up). This remains a secondary integration surface, not the primary
+way to use rolodex — the standalone app is that.
 
-If you use Claude Code, `.claude/skills/rolodex/SKILL.md` teaches an agent
-how to use these tools well (when to search before upserting, what never
-to fabricate, how to handle the still-unimplemented push direction).
+Run it directly with `npm run dev`, or point any MCP host's config at it:
+
+```json
+{
+  "mcpServers": {
+    "rolodex": {
+      "command": "node",
+      "args": ["--experimental-sqlite", "/path/to/rolodex/dist/mcp/server.js"],
+      "env": { "ROLODEX_DB": "/path/to/your/rolodex.db" }
+    }
+  }
+}
+```
+
+If your host supports Claude Code-style skills,
+`.claude/skills/rolodex/SKILL.md` adds a bit more depth on top of the tool
+descriptions above — but nothing here depends on it.
 
 ## Development
 ```sh
