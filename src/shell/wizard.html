@@ -221,8 +221,8 @@
     const STEPS = [
       { key: "welcome", label: "Welcome" },
       { key: "database", label: "Database" },
-      { key: "google", label: "Google" },
       { key: "secrets", label: "Secrets" },
+      { key: "google", label: "Google" },
       { key: "finish", label: "Finish" },
     ];
 
@@ -413,7 +413,7 @@
           primaryEnabled: lastWritable,
           primaryOnClick: () => {
             reachedIndex = Math.max(reachedIndex, 2);
-            navigate("google");
+            navigate("secrets");
           },
         });
       }
@@ -504,8 +504,8 @@
           // nothing server-side that has to happen for a skip to be valid.
           console.warn("wizard: /api/wizard/google/skip failed, skipping locally anyway", err);
         }
-        reachedIndex = Math.max(reachedIndex, 3);
-        navigate("secrets");
+        reachedIndex = Math.max(reachedIndex, 4);
+        navigate("finish");
       }
 
       async function onConnect() {
@@ -518,7 +518,7 @@
           return;
         }
         setFooter({
-          backOnClick: () => navigate("database"),
+          backOnClick: () => navigate("secrets"),
           extraButtons: [{ label: "Skip for now", disabled: true, onClick: onSkip }],
           primaryLabel: "Connecting…",
           primaryEnabled: false,
@@ -563,7 +563,7 @@
         }
 
         setFooter({
-          backOnClick: () => { cancel(); navigate("database"); },
+          backOnClick: () => { cancel(); navigate("secrets"); },
           extraButtons: [{ label: "Cancel", onClick: cancel }],
           primaryLabel: "Connecting…",
           primaryEnabled: false,
@@ -573,8 +573,8 @@
         try {
           await api("/api/wizard/google/connect", { method: "POST", signal: controller.signal });
           showStatus("success", "&#10003; Google account connected.");
-          reachedIndex = Math.max(reachedIndex, 3);
-          setTimeout(() => navigate("secrets"), 700);
+          reachedIndex = Math.max(reachedIndex, 4);
+          setTimeout(() => navigate("finish"), 700);
         } catch (err) {
           if (err && err.name === "AbortError") {
             // Clean, retryable state — not an error banner.
@@ -592,7 +592,7 @@
 
       function wireFooter() {
         setFooter({
-          backOnClick: () => navigate("database"),
+          backOnClick: () => navigate("secrets"),
           extraButtons: [{ label: "Skip for now", onClick: onSkip }],
           primaryLabel: "Connect & Continue",
           primaryEnabled: true,
@@ -647,12 +647,12 @@
 
       function updatePrimary() {
         setFooter({
-          backOnClick: () => navigate("google"),
+          backOnClick: () => navigate("database"),
           primaryLabel: "Next",
           primaryEnabled: !!(lastResult && lastResult.ok),
           primaryOnClick: () => {
-            reachedIndex = Math.max(reachedIndex, 4);
-            navigate("finish");
+            reachedIndex = Math.max(reachedIndex, 3);
+            navigate("google");
           },
         });
       }
@@ -728,7 +728,7 @@
         const errorEl = document.getElementById("finish-error");
         errorEl.innerHTML = "";
         setFooter({
-          backOnClick: () => navigate("secrets"),
+          backOnClick: () => navigate("google"),
           primaryLabel: "Opening…",
           primaryEnabled: false,
           primaryOnClick: () => {},
@@ -748,7 +748,7 @@
 
       function wireFinishFooter() {
         setFooter({
-          backOnClick: () => navigate("secrets"),
+          backOnClick: () => navigate("google"),
           primaryLabel: "Open Rolodex →",
           primaryEnabled: true,
           primaryOnClick: onOpenClick,
