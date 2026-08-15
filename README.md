@@ -1,5 +1,12 @@
 # rolodex
 
+<!-- shared:tagline -->
+> A local-first contact manager with an MCP server. Free & open source.
+<!-- /shared:tagline -->
+<!-- shared:byline -->
+Built by [Mathew Dostal](https://mdostal.com) — fractional CTO, Dostal Technology.
+<!-- /shared:byline -->
+
 **Your relationship rolodex, as a standalone app you run locally.** Own your
 contacts (local SQLite), sync them with your Google Contacts, and keep track
 of who you met, the verdict, and the next step — searchable, with a logged
@@ -113,6 +120,7 @@ A future Pantheon plugin tie-in exists only as a dormant, unwired stub —
 see [`docs/PANTHEON.md`](docs/PANTHEON.md). Rolodex has zero Pantheon
 dependency today and always will be usable standalone.
 
+<!-- shared:support -->
 ## Support this project
 
 Free and open source, always. A few ways to help — or just say hi:
@@ -125,6 +133,6 @@ Free and open source, always. A few ways to help — or just say hi:
 - **What we're building at Firefly Events** — event discovery, 8,000+ events/day from 7+ sources → [ff.events](https://ff.events)
 
 Always up for a conversation if any of it's useful to you.
-
+<!-- /shared:support -->
 ## License
 MIT © 2026 Mathew Dostal

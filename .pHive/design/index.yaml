@@ -1,5 +1,26 @@
-updated_at: "2026-08-12T00:00:00Z"
+updated_at: "2026-08-14T00:00:00Z"
 briefs:
+  - topic: "app-icon"
+    surface_kind: "component"
+    brief_path: ".pHive/design/app-icon/brief.md"
+    wireframe_path: ".pHive/design/app-icon/renditions/contact-sheet.png"
+    export_paths:
+      - ".pHive/design/app-icon/renditions/candidate-1.png"
+      - ".pHive/design/app-icon/renditions/candidate-2.png"
+      - ".pHive/design/app-icon/renditions/candidate-3.png"
+      - ".pHive/design/app-icon/renditions/candidate-4.png"
+      - ".pHive/design/app-icon/renditions/candidate-5.png"
+      - ".pHive/design/app-icon/renditions/candidate-6.png"
+      - ".pHive/design/app-icon/renditions/candidate-7.png"
+      - ".pHive/design/app-icon/renditions/candidate-8.png"
+      - ".pHive/design/app-icon/renditions/candidate-9.png"
+      - ".pHive/design/app-icon/renditions/candidate-10.png"
+      - ".pHive/design/app-icon/renditions/selected-master-1024.png"
+    rendered_review: "https://claude.ai/code/artifact/9aa84cd7-0897-4dc1-b255-d03a96677ad0"
+    selected_rendition: 6
+    source: "standalone"
+    created_at: "2026-08-14T00:00:00Z"
+    linked_story: []
   - topic: "followups-toggle-and-settings"
     surface_kind: "component"
     brief_path: ".pHive/design/followups-toggle-and-settings/brief.md"
