@@ -1017,6 +1017,96 @@ describe("GET/PUT /api/settings/follow-up", () => {
   });
 });
 
+describe("GET/PUT /api/settings/appearance", () => {
+  it("GET returns 409 before the wizard is complete", async () => {
+    const { baseUrl } = await start();
+    const { status } = await getJson(baseUrl + "/api/settings/appearance");
+    expect(status).toBe(409);
+  });
+
+  it("GET returns the lazily-seeded default/6 defaults on a fresh store", async () => {
+    const { baseUrl } = await startReady();
+    const { status, body } = await getJson(baseUrl + "/api/settings/appearance");
+    expect(status).toBe(200);
+    expect(body).toEqual({ theme: "default", iconId: 6 });
+  });
+
+  it("PUT persists a new config and GET reflects it afterward", async () => {
+    const { baseUrl } = await startReady();
+    const put = await putJson(baseUrl + "/api/settings/appearance", { theme: "brass", iconId: 3 });
+    expect(put.status).toBe(200);
+    expect(put.body).toEqual({ theme: "brass", iconId: 3 });
+
+    const get = await getJson(baseUrl + "/api/settings/appearance");
+    expect(get.body).toEqual({ theme: "brass", iconId: 3 });
+  });
+
+  it("PUT rejects invalid theme/iconId values with 400 and does not persist them", async () => {
+    const { baseUrl } = await startReady();
+
+    const cases: unknown[] = [
+      { theme: "sepia", iconId: 3 },
+      { theme: "brass", iconId: 0 },
+      { theme: "brass", iconId: 11 },
+      { theme: "brass", iconId: 1.5 },
+      { theme: "brass", iconId: "3" },
+      { theme: "brass" },
+      {},
+    ];
+    for (const payload of cases) {
+      const { status, body } = await putJson(baseUrl + "/api/settings/appearance", payload);
+      expect(status).toBe(400);
+      expect((body as { error?: string }).error).toBeTruthy();
+    }
+
+    const get = await getJson(baseUrl + "/api/settings/appearance");
+    expect(get.body).toEqual({ theme: "default", iconId: 6 });
+  });
+
+  it("PUT with malformed JSON returns 400, not 500", async () => {
+    const { baseUrl } = await startReady();
+    const { status } = await postRawBody(baseUrl + "/api/settings/appearance", "PUT", "{not valid json");
+    expect(status).toBe(400);
+  });
+});
+
+describe("GET / — appearance injection", () => {
+  it("serves the default theme/icon (no data-theme attribute, favicon.ico links) with no settings row", async () => {
+    const { baseUrl } = await startReady();
+    const res = await fetch(baseUrl + "/");
+    const html = await res.text();
+    // The CSS itself legitimately contains the literal substring
+    // data-theme="brass" as an attribute-selector — assert on the actual
+    // <html> opening tag, not a bare substring match.
+    expect(html).toContain('<html lang="en">');
+    expect(html).not.toContain('<html lang="en" data-theme="brass">');
+    expect(html).toContain("/assets/icon-c6.ico");
+    expect(html).toContain("/assets/icon-c6-32.png");
+    expect(html).toContain("/assets/icon-c6-16.png");
+    expect(html).toContain("/assets/icon-c6-180.png");
+  });
+
+  it("injects data-theme and the selected icon's asset paths once appearance is saved", async () => {
+    const { baseUrl } = await startReady();
+    await putJson(baseUrl + "/api/settings/appearance", { theme: "brass", iconId: 4 });
+
+    const res = await fetch(baseUrl + "/");
+    const html = await res.text();
+    expect(html).toContain('<html lang="en" data-theme="brass">');
+    expect(html).toContain("/assets/icon-c4.ico");
+    expect(html).toContain("/assets/icon-c4-32.png");
+    expect(html).toContain("/assets/icon-c4-16.png");
+    expect(html).toContain("/assets/icon-c4-180.png");
+  });
+
+  it("does not inject appearance into wizard.html before setup is complete", async () => {
+    const { baseUrl } = await start();
+    const res = await fetch(baseUrl + "/");
+    const html = await res.text();
+    expect(html).not.toContain('<html lang="en" data-theme="brass">');
+  });
+});
+
 describe("GET /api/contacts/needs-follow-up", () => {
   it("returns 409 before the wizard is complete", async () => {
     const { baseUrl } = await start();

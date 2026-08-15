@@ -9,6 +9,22 @@ const FOLLOW_UP_CONFIG_KEY = "followUp.config";
 /** Defaults getFollowUpConfig() lazily seeds when no settings row exists yet. */
 const FOLLOW_UP_DEFAULTS = { windowDays: 30, graceDays: 14 } as const;
 
+/** Settings-table key for the appearance config (theme/iconId), JSON-encoded
+ * as a single row — same pattern as FOLLOW_UP_CONFIG_KEY. */
+const APPEARANCE_CONFIG_KEY = "appearance.config";
+
+/** Defaults getAppearance() lazily seeds when no settings row exists yet.
+ * iconId 6 / theme "default" is what's actually shipped today (candidate 6,
+ * the plain blue/gray palette) — this is a no-op default, not a new look. */
+const APPEARANCE_DEFAULTS: AppearanceConfig = { theme: "default", iconId: 6 };
+
+export type AppearanceTheme = "default" | "brass";
+
+export interface AppearanceConfig {
+  theme: AppearanceTheme;
+  iconId: number;
+}
+
 /**
  * Owns-your-data store. SQLite with an FTS5 full-text index so search is real
  * (name/org/what/angle/tags), not a LIKE scan. The DB path defaults to a
@@ -237,6 +253,24 @@ export class Store {
 
   setFollowUpConfig(cfg: { windowDays: number; graceDays: number }): void {
     this.setSetting(FOLLOW_UP_CONFIG_KEY, JSON.stringify(cfg));
+  }
+
+  /** Appearance config (theme/iconId), stored as one JSON-encoded settings
+   * row under APPEARANCE_CONFIG_KEY. Lazily seeds APPEARANCE_DEFAULTS on
+   * first read, same as getFollowUpConfig(). Validation of theme/iconId
+   * values is the caller's responsibility (server.ts's route), matching how
+   * setFollowUpConfig() also persists whatever it's given unchecked. */
+  getAppearance(): AppearanceConfig {
+    const raw = this.getSetting(APPEARANCE_CONFIG_KEY, "");
+    if (!raw) {
+      this.setAppearance(APPEARANCE_DEFAULTS);
+      return { ...APPEARANCE_DEFAULTS };
+    }
+    return JSON.parse(raw) as AppearanceConfig;
+  }
+
+  setAppearance(cfg: AppearanceConfig): void {
+    this.setSetting(APPEARANCE_CONFIG_KEY, JSON.stringify(cfg));
   }
 
   /**

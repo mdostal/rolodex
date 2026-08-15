@@ -252,6 +252,25 @@ describe("Store.getFollowUpConfig() / Store.setFollowUpConfig()", () => {
   });
 });
 
+describe("Store.getAppearance() / Store.setAppearance()", () => {
+  it("lazily seeds and returns the default/6 defaults when no settings row exists yet", () => {
+    const store = new Store(dbPath);
+    expect(store.getAppearance()).toEqual({ theme: "default", iconId: 6 });
+
+    const reopened = new Store(dbPath);
+    expect(reopened.getAppearance()).toEqual({ theme: "default", iconId: 6 });
+  });
+
+  it("setAppearance persists and a subsequent get reflects it", () => {
+    const store = new Store(dbPath);
+    store.setAppearance({ theme: "brass", iconId: 3 });
+    expect(store.getAppearance()).toEqual({ theme: "brass", iconId: 3 });
+
+    const reopened = new Store(dbPath);
+    expect(reopened.getAppearance()).toEqual({ theme: "brass", iconId: 3 });
+  });
+});
+
 describe("Store.getSetting() / Store.setSetting()", () => {
   it("returns the fallback when no row exists", () => {
     const store = new Store(dbPath);
