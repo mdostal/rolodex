@@ -43,7 +43,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "NODE_OPTIONS=--experimental-sqlite tsx src/mcp/server.ts",
     "shell": "NODE_OPTIONS=--experimental-sqlite tsx src/shell/server.ts",
-    "shell:build": "tsc -p tsconfig.json && cp src/shell/index.html dist/shell/index.html && cp src/shell/wizard.html dist/shell/wizard.html && mkdir -p dist/shell/assets && cp src/shell/assets/favicon.svg dist/shell/assets/favicon.svg",
+    "shell:build": "tsc -p tsconfig.json && cp src/shell/index.html dist/shell/index.html && cp src/shell/wizard.html dist/shell/wizard.html && mkdir -p dist/shell/assets && cp src/shell/assets/favicon.ico src/shell/assets/favicon-16.png src/shell/assets/favicon-32.png src/shell/assets/apple-touch-icon.png src/shell/assets/icon-512.png src/shell/assets/icon-1024.png dist/shell/assets/",
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--experimental-sqlite vitest run"
   },
