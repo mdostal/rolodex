@@ -26,6 +26,50 @@
       --ok-fg: #1e7b34;
       --row-hover: #f4f5f8;
       --chip-bg: #eef0f4;
+      --accent-fg: #fff;
+    }
+    /* Brass theme — colors only, no font changes (kept to the system-font
+       stack so this stays a fully local/offline app). Tokens are taken
+       verbatim from the app-icon-picker artifact, whose dark half the owner
+       specifically liked: a light paper palette here, and a deep-green/
+       brass-gold palette under prefers-color-scheme:dark below. This is one
+       theme-aware theme, not two separate selectable themes. --accent-fg is
+       the one token with no equivalent in that artifact — plain white
+       button text fails contrast against the lighter dark-mode gold, so it
+       flips to a dark ink there instead. */
+    :root[data-theme="brass"] {
+      --border: #c7c2ac;
+      --muted: #55605a;
+      --bg: #e8eae3;
+      --fg: #1c2420;
+      --accent: #92651e;
+      --accent-bg: rgba(146, 101, 30, 0.12);
+      --row-hover: #dee1d6;
+      --chip-bg: #f4f5ef;
+      --accent-fg: #f4f5ef;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root[data-theme="brass"] {
+        --border: #3a483e;
+        --muted: #a6b0a7;
+        --bg: #1a211d;
+        --fg: #e9eae3;
+        --accent: #d19b4c;
+        --accent-bg: rgba(209, 155, 76, 0.16);
+        --row-hover: #29342c;
+        --chip-bg: #212b24;
+        --accent-fg: #1a211d;
+      }
+      /* .verdict-* are bare text color on the page background, not pills
+         with their own background box — their light-mode colors (dark
+         green/amber/blue) read fine on a light page but go near-invisible
+         against brass dark mode's near-black --bg, so they get lightened
+         variants here. --danger/--ok-* (used only inside self-contained
+         colored boxes, e.g. the error banner) don't have this problem —
+         those boxes carry their own background regardless of page theme. */
+      :root[data-theme="brass"] .verdict-strong { color: #3fae62; }
+      :root[data-theme="brass"] .verdict-watch { color: #d1a13f; }
+      :root[data-theme="brass"] .verdict-referral-only { color: #6f9aef; }
     }
     * { box-sizing: border-box; }
     body {
@@ -57,7 +101,7 @@
       border-radius: 6px;
       border: 1px solid var(--border);
       background: var(--accent);
-      color: #fff;
+      color: var(--accent-fg);
       padding: 8px 14px;
       min-height: 32px;
       cursor: pointer;
@@ -213,6 +257,16 @@
       font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em;
       color: var(--muted); margin: 0 0 8px;
     }
+    .theme-toggle { display: flex; gap: 8px; }
+    .theme-toggle .theme-option { flex: 1; padding: 6px 10px; }
+    .theme-toggle .theme-option[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+    .icon-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+    .icon-option {
+      padding: 4px; background: transparent; border: 2px solid transparent; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center; min-height: 0;
+    }
+    .icon-option img { display: block; border-radius: 4px; }
+    .icon-option[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-bg); }
     /* Reconnect Google status line — mirrors wizard.html's own
        .status-line/.spinner pattern (same UX, adapted to fit inline in a
        popover section instead of a full wizard step). */
@@ -370,6 +424,13 @@
     const getFollowUpSettings = () => api("/api/settings/follow-up");
     const putFollowUpSettings = (payload) =>
       api("/api/settings/follow-up", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    const getAppearanceSettings = () => api("/api/settings/appearance");
+    const putAppearanceSettings = (payload) =>
+      api("/api/settings/appearance", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
@@ -802,6 +863,67 @@
         );
       }
 
+      // The Appearance section — a theme toggle plus a 10-thumbnail grid over
+      // the app-icon candidates preserved at .pHive/design/app-icon/renditions/
+      // (see that epic's brief for how they were generated). Selecting either
+      // control PUTs the full {theme, iconId} pair (server.ts's route wants
+      // both together, matching what GET / injects on every load) and applies
+      // immediately client-side via applyAppearance() below — the server-side
+      // injection in GET / is what makes a plain reload/reopen correct too,
+      // this is just for not needing one.
+      const ICON_CANDIDATE_COUNT = 10;
+      function appearanceSectionHtml(theme, iconId) {
+        const themeButtons = ["default", "brass"]
+          .map(
+            (t) =>
+              '<button type="button" class="secondary theme-option" data-theme-option="' + t + '" ' +
+              'aria-pressed="' + (t === theme) + '">' + (t === "default" ? "Default" : "Brass") + "</button>",
+          )
+          .join("");
+        const iconButtons = Array.from({ length: ICON_CANDIDATE_COUNT }, (_, i) => i + 1)
+          .map(
+            (n) =>
+              '<button type="button" class="icon-option" data-icon-id="' + n + '" ' +
+              'aria-pressed="' + (n === iconId) + '" aria-label="Icon option ' + n + '">' +
+              '<img src="/assets/icon-c' + n + '-32.png" alt="" width="32" height="32" /></button>',
+          )
+          .join("");
+        return (
+          '<div class="log-interaction-form" id="appearance-section">' +
+          '<h3 class="settings-section-title">Appearance</h3>' +
+          '<div class="form-error-banner" id="appearance-error" hidden></div>' +
+          '<div class="form-field">' +
+          '<label id="appearance-theme-label">Theme</label>' +
+          '<div class="theme-toggle" role="group" aria-labelledby="appearance-theme-label">' + themeButtons + "</div>" +
+          "</div>" +
+          '<div class="form-field">' +
+          '<label id="appearance-icon-label">App icon</label>' +
+          '<div class="icon-grid" role="group" aria-labelledby="appearance-icon-label">' + iconButtons + "</div>" +
+          "</div>" +
+          "</div>"
+        );
+      }
+
+      // Rewrites the <head> favicon links and the <html> data-theme attribute
+      // in place — the same values GET / would inject on a fresh load, just
+      // applied without one. Browsers cache favicons aggressively, so a tab
+      // that's already open may not visibly repaint until its next
+      // navigation/reload; that's a known browser limitation, not a bug here.
+      function applyAppearance(theme, iconId) {
+        if (theme === "brass") document.documentElement.setAttribute("data-theme", "brass");
+        else document.documentElement.removeAttribute("data-theme");
+        const linkSwaps = [
+          ['link[rel="icon"][sizes="any"]', "/assets/icon-c" + iconId + ".ico"],
+          ['link[rel="icon"][sizes="32x32"]', "/assets/icon-c" + iconId + "-32.png"],
+          ['link[rel="icon"][sizes="16x16"]', "/assets/icon-c" + iconId + "-16.png"],
+          ['link[rel="apple-touch-icon"]', "/assets/icon-c" + iconId + "-180.png"],
+        ];
+        for (const [selector, href] of linkSwaps) {
+          const el = document.querySelector(selector);
+          if (el) el.setAttribute("href", href);
+        }
+      }
+
       function wireSettingsPanel() {
         const anchor = document.getElementById("settings-anchor");
         const toggleBtn = document.getElementById("settings-toggle");
@@ -978,12 +1100,63 @@
           setGoogleActionsIdle();
         }
 
+        // Tracks the panel's current appearance selection so a save PUTs the
+        // full {theme, iconId} pair even though theme and icon are two
+        // separate button groups — the server route (and GET /'s injection)
+        // always wants both together.
+        function wireAppearanceSection(theme, iconId) {
+          let current = { theme, iconId };
+          const errorBanner = document.getElementById("appearance-error");
+
+          function setPressedState() {
+            document.querySelectorAll(".theme-option").forEach((btn) => {
+              btn.setAttribute("aria-pressed", String(btn.dataset.themeOption === current.theme));
+            });
+            document.querySelectorAll(".icon-option").forEach((btn) => {
+              btn.setAttribute("aria-pressed", String(Number(btn.dataset.iconId) === current.iconId));
+            });
+          }
+
+          async function save(next) {
+            const prev = current;
+            current = next;
+            setPressedState();
+            applyAppearance(current.theme, current.iconId);
+            try {
+              await putAppearanceSettings(current);
+              errorBanner.hidden = true;
+            } catch (err) {
+              // Revert on failure — the popover stays open with the prior
+              // selection restored, matching the follow-up form's
+              // keep-panel-open-with-error behavior on save failure.
+              current = prev;
+              setPressedState();
+              applyAppearance(current.theme, current.iconId);
+              errorBanner.hidden = false;
+              errorBanner.textContent = "Couldn't save: " + err.message;
+            }
+          }
+
+          document.querySelectorAll(".theme-option").forEach((btn) => {
+            btn.addEventListener("click", () => save({ theme: btn.dataset.themeOption, iconId: current.iconId }));
+          });
+          document.querySelectorAll(".icon-option").forEach((btn) => {
+            btn.addEventListener("click", () => save({ theme: current.theme, iconId: Number(btn.dataset.iconId) }));
+          });
+        }
+
         async function openPanel() {
           panelOpen = true;
           toggleBtn.setAttribute("aria-expanded", "true");
           let current = { windowDays: 30, graceDays: 14 };
+          let appearance = { theme: "default", iconId: 6 };
           try {
             current = await getFollowUpSettings();
+          } catch (err) {
+            console.error(err);
+          }
+          try {
+            appearance = await getAppearanceSettings();
           } catch (err) {
             console.error(err);
           }
@@ -991,9 +1164,11 @@
             '<div class="settings-panel" id="settings-panel">' +
             '<h3 class="settings-section-title">Follow-up settings</h3>' +
             settingsFormHtml(current.windowDays, current.graceDays) +
+            appearanceSectionHtml(appearance.theme, appearance.iconId) +
             googleSectionHtml() +
             "</div>";
           wireForm();
+          wireAppearanceSection(appearance.theme, appearance.iconId);
           wireGoogleSection();
           document.getElementById("settings-window").focus();
           document.addEventListener("mousedown", onDocumentMousedown);

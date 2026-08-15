@@ -513,6 +513,38 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
         }
       }
 
+      // GET/PUT /api/settings/appearance — persisted {theme, iconId}, read by
+      // GET / to server-side-inject the active theme attribute and favicon
+      // links into index.html on every request (see below). Same
+      // wizard-completion gate and validate-then-persist shape as
+      // /api/settings/follow-up above.
+      if (parts[0] === "api" && parts[1] === "settings" && parts.length === 3 && parts[2] === "appearance") {
+        if (!(await isWizardCompleted())) {
+          sendJson(res, 409, { error: "setup not complete" });
+          return;
+        }
+        const s = await getStore();
+
+        if (req.method === "GET") {
+          sendJson(res, 200, s.getAppearance());
+          return;
+        }
+
+        if (req.method === "PUT") {
+          const body = (await readJsonBody(req)) as { theme?: unknown; iconId?: unknown };
+          const isValidTheme = (v: unknown): v is "default" | "brass" => v === "default" || v === "brass";
+          const isValidIconId = (v: unknown): v is number =>
+            typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 10;
+          if (!isValidTheme(body.theme) || !isValidIconId(body.iconId)) {
+            sendJson(res, 400, { error: "theme must be 'default' or 'brass', iconId must be an integer 1-10" });
+            return;
+          }
+          s.setAppearance({ theme: body.theme, iconId: body.iconId });
+          sendJson(res, 200, s.getAppearance());
+          return;
+        }
+      }
+
       if (parts[0] === "api" && parts[1] === "contacts") {
         // Main app routes are only meaningful once setup has resolved a real
         // DB location — refuse rather than silently constructing Store
@@ -698,8 +730,27 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
       }
 
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-        const htmlPath = (await isWizardCompleted()) ? indexHtmlPath : wizardHtmlPath;
-        const html = await readFile(htmlPath, "utf8");
+        const completed = await isWizardCompleted();
+        const htmlPath = completed ? indexHtmlPath : wizardHtmlPath;
+        let html = await readFile(htmlPath, "utf8");
+        // index.html is read fresh off disk on every request (no caching),
+        // so the active appearance settings are injected here rather than
+        // hydrated client-side — no flash-of-wrong-theme/icon is possible.
+        // wizard.html never gets this treatment: appearance settings live in
+        // the settings table, which doesn't exist meaningfully before the
+        // wizard itself has run.
+        if (completed) {
+          const s = await getStore();
+          const { theme, iconId } = s.getAppearance();
+          if (theme === "brass") {
+            html = html.replace('<html lang="en">', '<html lang="en" data-theme="brass">');
+          }
+          html = html
+            .replace("/assets/favicon.ico", `/assets/icon-c${iconId}.ico`)
+            .replace("/assets/favicon-32.png", `/assets/icon-c${iconId}-32.png`)
+            .replace("/assets/favicon-16.png", `/assets/icon-c${iconId}-16.png`)
+            .replace("/assets/apple-touch-icon.png", `/assets/icon-c${iconId}-180.png`);
+        }
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(html);
         return;
