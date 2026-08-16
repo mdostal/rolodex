@@ -110,7 +110,26 @@ export interface RolodexServerOptions {
    * Defaults to the real probe. Injectable so tests can simulate "Portunus
    * is installed" without a real binary on the test machine. */
   isPortunusAvailable?: () => Promise<boolean>;
+  /** Native launch-at-login control — only meaningful when this server is
+   * booted inside the Electron app (src/electron/main.ts), which injects
+   * the real implementation backed by Electron's app.setLoginItemSettings/
+   * getLoginItemSettings. There is no OS concept of "autostart" for a plain
+   * `npm run shell` dev server, so the default below reports unsupported
+   * rather than pretending a toggle exists. Kept as a plain get/set pair
+   * (not a class) so this file — a `Store`-adjacent HTTP layer — never
+   * imports `electron` itself; only src/electron/main.ts does. */
+  autostart?: {
+    isSupported: boolean;
+    getEnabled: () => boolean;
+    setEnabled: (enabled: boolean) => void;
+  };
 }
+
+const UNSUPPORTED_AUTOSTART = {
+  isSupported: false,
+  getEnabled: () => false,
+  setEnabled: () => {},
+};
 
 /** Thrown by readJsonBody() when the request body isn't valid JSON — a
  * distinct type so the top-level request handler can tell "client sent a
@@ -153,6 +172,7 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
   const indexHtmlPath = opts.indexHtmlPath ?? path.join(HERE, "index.html");
   const wizardHtmlPath = opts.wizardHtmlPath ?? path.join(HERE, "wizard.html");
   const assetsDir = path.join(HERE, "assets");
+  const autostart = opts.autostart ?? UNSUPPORTED_AUTOSTART;
   const homeDir = opts.homeDir;
   // Backend choice (keychain vs. portunus) is resolved via a SYNCHRONOUS
   // local-file read (getSecretsBackendChoiceSync) at this exact call site —
@@ -510,6 +530,34 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
           }
           s.setFollowUpConfig({ windowDays: body.windowDays, graceDays: body.graceDays });
           sendJson(res, 200, s.getFollowUpConfig());
+          return;
+        }
+      }
+
+      // GET/PUT /api/settings/autostart — native launch-at-login, backed by
+      // Electron's app.setLoginItemSettings when running inside the app
+      // (see the `autostart` RolodexServerOptions doc comment above). Not
+      // wizard-gated (touches no Store data at all) and not persisted here
+      // — Electron's own login-item registration IS the persisted state,
+      // there's nothing else to remember.
+      if (parts[0] === "api" && parts[1] === "settings" && parts.length === 3 && parts[2] === "autostart") {
+        if (req.method === "GET") {
+          sendJson(res, 200, { supported: autostart.isSupported, enabled: autostart.getEnabled() });
+          return;
+        }
+
+        if (req.method === "PUT") {
+          if (!autostart.isSupported) {
+            sendJson(res, 501, { error: "autostart is only available in the packaged app" });
+            return;
+          }
+          const body = (await readJsonBody(req)) as { enabled?: unknown };
+          if (typeof body.enabled !== "boolean") {
+            sendJson(res, 400, { error: "enabled must be a boolean" });
+            return;
+          }
+          autostart.setEnabled(body.enabled);
+          sendJson(res, 200, { supported: true, enabled: autostart.getEnabled() });
           return;
         }
       }

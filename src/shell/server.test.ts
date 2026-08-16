@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRolodexServer, type RolodexServerOptions } from "./server.js";
 import { createInMemorySecretsAdapter } from "../lib/secrets-adapter.js";
 import type { CreateSecretsAdapterOptions, SecretsAdapter } from "../lib/secrets-adapter.js";
@@ -1013,6 +1013,86 @@ describe("GET/PUT /api/settings/follow-up", () => {
   it("PUT with malformed JSON returns 400, not 500", async () => {
     const { baseUrl } = await startReady();
     const { status } = await postRawBody(baseUrl + "/api/settings/follow-up", "PUT", "{not valid json");
+    expect(status).toBe(400);
+  });
+});
+
+describe("GET/PUT /api/settings/autostart", () => {
+  it("GET reports unsupported by default (no autostart option injected), even before the wizard is complete", async () => {
+    const { baseUrl } = await start();
+    const { status, body } = await getJson(baseUrl + "/api/settings/autostart");
+    expect(status).toBe(200);
+    expect(body).toEqual({ supported: false, enabled: false });
+  });
+
+  it("PUT returns 501 when unsupported and does not call any setter", async () => {
+    const { baseUrl } = await start();
+    const { status, body } = await putJson(baseUrl + "/api/settings/autostart", { enabled: true });
+    expect(status).toBe(501);
+    expect((body as { error?: string }).error).toBeTruthy();
+  });
+
+  it("GET/PUT reflect an injected autostart controller (the Electron-main-process shape)", async () => {
+    let enabled = false;
+    const setEnabled = vi.fn((v: boolean) => {
+      enabled = v;
+    });
+    server = createRolodexServer({
+      homeDir: dir,
+      secretsCapabilityFactory: () => createInMemorySecretsAdapter(),
+      autostart: { isSupported: true, getEnabled: () => enabled, setEnabled },
+    });
+    await new Promise<void>((resolve) => server!.listen(0, resolve));
+    const address = server!.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const before = await getJson(baseUrl + "/api/settings/autostart");
+    expect(before.body).toEqual({ supported: true, enabled: false });
+
+    const put = await putJson(baseUrl + "/api/settings/autostart", { enabled: true });
+    expect(put.status).toBe(200);
+    expect(put.body).toEqual({ supported: true, enabled: true });
+    expect(setEnabled).toHaveBeenCalledWith(true);
+
+    const after = await getJson(baseUrl + "/api/settings/autostart");
+    expect(after.body).toEqual({ supported: true, enabled: true });
+  });
+
+  it("PUT rejects a non-boolean enabled with 400", async () => {
+    server = createRolodexServer({
+      homeDir: dir,
+      secretsCapabilityFactory: () => createInMemorySecretsAdapter(),
+      autostart: { isSupported: true, getEnabled: () => false, setEnabled: () => {} },
+    });
+    await new Promise<void>((resolve) => server!.listen(0, resolve));
+    const address = server!.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const { status, body } = await putJson(baseUrl + "/api/settings/autostart", { enabled: "yes" });
+    expect(status).toBe(400);
+    expect((body as { error?: string }).error).toBeTruthy();
+  });
+
+  it("PUT with malformed JSON on an unsupported server still returns 501, not 400 or 500 — isSupported is checked before the body is even read", async () => {
+    const { baseUrl } = await start();
+    const { status } = await postRawBody(baseUrl + "/api/settings/autostart", "PUT", "{not valid json");
+    expect(status).toBe(501);
+  });
+
+  it("PUT with malformed JSON on a supported server returns 400, not 500", async () => {
+    server = createRolodexServer({
+      homeDir: dir,
+      secretsCapabilityFactory: () => createInMemorySecretsAdapter(),
+      autostart: { isSupported: true, getEnabled: () => false, setEnabled: () => {} },
+    });
+    await new Promise<void>((resolve) => server!.listen(0, resolve));
+    const address = server!.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const { status } = await postRawBody(baseUrl + "/api/settings/autostart", "PUT", "{not valid json");
     expect(status).toBe(400);
   });
 });
