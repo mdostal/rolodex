@@ -19,7 +19,33 @@ and next step, search it, and see who's gone cold. Because it syncs
 with Google Contacts on *your* credentials, it also reaches your Gmail
 contacts without anyone else holding your token.
 
-## Run it
+## Download the app
+
+rolodex packages as a real installable desktop app (Electron) for macOS,
+Windows, and Linux, via [GitHub Releases](https://github.com/mdostal/rolodex/releases)
+— grab the `.dmg` / `.exe` / `.AppImage`/`.deb` for your platform once a
+release has been cut.
+
+**Builds are currently unsigned.** That means:
+- **macOS:** Gatekeeper will say the app is from an "unidentified
+  developer." Right-click the app → **Open** (once) instead of
+  double-clicking, and it'll launch normally from then on.
+- **Windows:** SmartScreen will show "Windows protected your PC." Click
+  **More info** → **Run anyway**.
+
+This is a known, deliberate tradeoff for now (see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s "Remaining gaps") — not a
+bug, and not a sign anything's wrong with the download.
+
+Prefer to build it yourself instead of trusting a binary? Same repo, same
+code:
+```sh
+npm install
+npm run electron          # runs the app from source (same code the packaged build ships)
+npm run electron:package  # builds an installable .dmg/.exe/.AppImage locally, unsigned
+```
+
+## Run it (dev server, no app install)
 ```sh
 npm install
 npm run shell
@@ -57,6 +83,9 @@ decision, not a gap.
   or file.
 - **Search + interaction logging** — find a contact by name/org/what-they-do/
   angle/tags, and log calls/emails/meetings against them.
+- **Launch at login** — the packaged app (not the dev server) has a native
+  "start at login" toggle in Settings, backed by the OS's own login-item
+  mechanism, not a launchd/systemd script bolted on from outside.
 
 ### Relationship model
 Each contact carries: `org`, `role`, how you `met` them, `what` they do, the
@@ -130,9 +159,13 @@ npm run build        # compile to dist/
 server, setup wizard, contact CRUD, search, interaction logging, a real
 Google Contacts connect-and-pull flow, and a "who's gone cold" follow-up
 view all work end to end. The MCP server's tool bodies are wired to that
-same real logic. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the
-full architecture and the list of remaining gaps (Google push/two-way sync,
-enrichment-on-add).
+same real logic, and a plain CLI (`rolodex <command>`) wraps the same
+handlers for non-MCP tooling. The app also packages as a real installable
+Electron desktop app for macOS/Windows/Linux (unsigned for now), with a
+tag-triggered CI workflow publishing releases. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture
+and the list of remaining gaps (Google push/two-way sync, enrichment-on-add
+as a built-in feature, code signing/notarization, an auto-updater).
 
 A future Pantheon plugin tie-in exists only as a dormant, unwired stub —
 see [`docs/PANTHEON.md`](docs/PANTHEON.md). Rolodex has zero Pantheon

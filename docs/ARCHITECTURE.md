@@ -39,6 +39,15 @@ isn't the primary way to use rolodex.
   `RolodexMcpHandlers` the MCP server registers, not a separate
   implementation. JSON in, JSON out, same `ROLODEX_DB` env var as the other
   two surfaces.
+- A packaged desktop app (`src/electron/main.ts`, the `electron-packaging`
+  epic) — installable/downloadable builds for macOS (dmg), Windows (NSIS),
+  and Linux (AppImage + deb), unsigned for now, published to GitHub
+  Releases on a `v*` tag push. Electron's main process boots
+  `src/shell/server.ts` in-process (unmodified — see "Desktop shell + local
+  server" below) and points a `BrowserWindow` at its loopback URL; no
+  preload script, no IPC bridge — the web UI is unaware it's inside
+  Electron. A native launch-at-login toggle lives in Settings, backed by
+  `app.setLoginItemSettings`.
 - Search (FTS5-backed, with a LIKE-scan fallback) and interaction logging,
   reachable from the UI and the HTTP API.
 - No login, no logout, no in-app access control of any kind. See below.
@@ -55,7 +64,7 @@ repo self-contradictory for new contributors — hence this rewrite.
 ## Layers
 | Layer | Lives where | Contains |
 |---|---|---|
-| **Core (generic OSS)** | this repo, `src/` | types, SQLite store + FTS, SecretsAdapter, Google-sync adapter, desktop shell/server, wizard + UI, MCP server/tools, CLI |
+| **Core (generic OSS)** | this repo, `src/` | types, SQLite store + FTS, SecretsAdapter, Google-sync adapter, desktop shell/server, wizard + UI, MCP server/tools, CLI, Electron packaging |
 | **Your layer** | OS keychain + `~/.local/share/rolodex/` (outside the repo, gitignored) | resolved `ROLODEX_DB` path, your Google OAuth client credentials/token, your data |
 
 The core knows nothing about any specific user. Adding your credentials or
@@ -70,13 +79,17 @@ tracked in source.
 ## Desktop shell + local server (`src/shell/server.ts`)
 
 Chosen shape (saf-01): a local Node HTTP server hosting `Store` in-process,
-with an ordinary browser tab as the UI — not Electron, not Tauri. `Store`
-already runs as ordinary Node (it needs `node:sqlite`), so an ordinary Node
-process serving it needs no IPC bridge, no renderer sandboxing story, and no
-native-module rebuild risk. Electron/Tauri remain reasonable future upgrades
-if a truly native window (tray icon, offline-from-`file://`) is ever
-required; nothing here forecloses that since `Store` itself is untouched by
-this choice.
+with an ordinary browser tab as the UI. `Store` already runs as ordinary
+Node (it needs `node:sqlite`), so an ordinary Node process serving it needs
+no IPC bridge, no renderer sandboxing story, and no native-module rebuild
+risk. This file itself stays framework-agnostic — it's still exactly what
+`npm run shell` runs today, unmodified.
+
+The packaged desktop app (below) is Electron precisely *because* of this
+shape: Electron's main process IS Node, so it imports and boots this exact
+server in-process with zero changes here, no sidecar, no IPC. See
+"Packaged desktop app" below for the full reasoning (including why not
+Tauri) and what's actually built.
 
 Run it with `npm run shell`. It:
 - Binds to **127.0.0.1 only** — never `0.0.0.0`/all interfaces. This server
@@ -117,6 +130,74 @@ resulting token — and every later silent refresh — to `SecretsAdapter` (key
 immediately rather than waiting out its 120s timeout. The same flow is
 reachable again later from Settings ("Reconnect Google") if a connection is
 ever revoked or expires, without rerunning the whole wizard.
+
+## Packaged desktop app (`src/electron/main.ts`, `electron-packaging` epic)
+
+Installable/downloadable builds — macOS (dmg), Windows (NSIS), Linux
+(AppImage + deb) — as a real alternative to `npm run shell`, not a
+replacement for it. Electron, not Tauri: Tauri's Rust core cannot reach
+`node:sqlite` directly and would need `src/shell/server.ts` bundled and
+spawned as a separate sidecar process; Electron's main process IS Node, so
+`main.ts` imports and boots that exact server in-process instead — no
+sidecar, no IPC bridge, no preload script. The web UI (`index.html`/
+`wizard.html`) is unaware it's running inside Electron at all; `main.ts` is
+the only file in this repo that imports `electron`.
+
+**Electron 43.4.0, verified not assumed.** `node:sqlite` is a Node *core*
+module, not an npm native addon, so the usual `asarUnpack` fix for native
+deps doesn't apply to it — what actually matters is which Node version
+Electron bundles (see the Node-version caveat below). Electron 43.4.0
+bundles Node 24.18.1, confirmed via `ELECTRON_RUN_AS_NODE=1 electron -e
+'...'` and a real `DatabaseSync` write/read inside the actual Electron
+binary before this version was committed to.
+
+Two platform-specific behaviors from the dev-server phase are handled at
+the Electron call site, not by changing their source: `server.ts`'s own
+"open the OS browser" step is suppressed (`ROLODEX_NO_OPEN=1`, the window
+replaces it), and the real Google OAuth consent screen's browser-open is
+redirected to Electron's own `shell.openExternal` via
+`connectGoogleAccount`'s already-injectable `openBrowser` option — which
+also fixes Windows/Linux for free, since the default opener
+(`google-oauth-flow.ts`) is Darwin-`open`-only and silently no-ops
+elsewhere.
+
+**Native launch-at-login**, not an external launchd/systemd/registry
+script: `GET/PUT /api/settings/autostart` on the shell server, backed by an
+injectable `{isSupported, getEnabled, setEnabled}` pair on
+`RolodexServerOptions` (same DI shape as `connectGoogleAccount`). Reports
+unsupported outside the packaged app (a plain dev server has no OS concept
+of autostart); `main.ts` injects the real implementation via
+`app.setLoginItemSettings`/`getLoginItemSettings`. A toggle in the Settings
+popover only renders when the route reports it's supported.
+
+**Packaging (`package.json`'s `build` key, electron-builder):** targets
+macOS dmg, Windows NSIS, Linux AppImage + deb. Icons committed under
+`build/` (generated from the app-icon epic's 1024px master via `iconutil`/
+PIL). **Explicitly unsigned** — `mac.identity: null`, set deliberately
+after discovering electron-builder auto-signs with whatever Apple
+Development identity it finds in the local keychain otherwise, which would
+silently differ between a local dev build and CI (which has no such
+identity) and contradict the "unsigned for now" decision. `asar: true`
+needs no `asarUnpack`, per the `node:sqlite` note above.
+
+**Release publishing (`.github/workflows/release.yml`):** new, tag-
+triggered (`v*`) — there was no release automation before this (version
+bumps and `git tag` have been fully manual). A 3-runner matrix
+(macos-latest/windows-latest/ubuntu-latest) each builds and publishes its
+own native target via `electron-builder --publish always`, no
+cross-compiling. electron-builder derives the expected tag from
+`package.json`'s version by default, matching the existing manual-tag
+convention — cutting a release is still "bump the version, tag `vX.Y.Z`,"
+this workflow just does the packaging + upload that didn't exist.
+
+**Verified for real**, beyond typecheck/tests: launched the actual
+asar-packaged, unsigned `.app` binary (not `electron .` dev mode) against a
+scratch `$HOME` and confirmed its in-process server booted and served the
+real wizard UI; round-tripped the autostart toggle through the real
+`app.setLoginItemSettings` call. Windows/Linux targets are configured but
+not build-verified on this (macOS) development machine — real per-platform
+verification happens the first time the release workflow actually runs on
+a pushed tag, one native CI runner per OS.
 
 ## Store (`src/lib/store.ts`)
 SQLite (`node:sqlite`, WAL) with an **FTS5** virtual table over
@@ -296,8 +377,24 @@ Done (across `standalone-app-foundation`, `followups-view`,
       handlers, for non-MCP tooling/scripts.
 - [x] Search (UI + API) and interaction logging (UI + API).
 - [x] Docs rewrite (this file + README.md) and CI.
+- [x] A packaged, installable Electron desktop app for macOS/Windows/Linux
+      (unsigned), native launch-at-login, and a tag-triggered CI release
+      workflow publishing to GitHub Releases (`electron-packaging` epic) —
+      see "Packaged desktop app" above.
 
 Remaining gaps:
+- [ ] Code signing / notarization — explicitly deferred as part of the
+      `electron-packaging` epic's confirmed scope, not an oversight.
+      Unsigned installs show a Gatekeeper "unidentified developer" warning
+      on macOS (right-click → Open works around it) and a Windows
+      SmartScreen equivalent.
+- [ ] An auto-updater for the packaged app — a real product decision on its
+      own, not decided as part of `electron-packaging`.
+- [ ] Real per-platform verification of the Windows/Linux packaged builds —
+      configured and CI-wired, but only the macOS build has actually been
+      launched and smoke-tested so far (no cross-build tooling on the
+      development machine); this resolves the first time the release
+      workflow runs on a real pushed tag.
 - [ ] Google `push()` / full two-way sync — pull-only today; the OAuth
       exchange itself is real, `push()` remains an explicit stub.
 - [ ] Enrichment-on-add as a *product feature* (a built-in public-info
@@ -314,10 +411,6 @@ Remaining gaps:
       first run, re-running the wizard).
 - [ ] Portunus (or any second) `SecretsAdapter` backend — interface is open,
       only one real implementation ships.
-- [ ] Cross-platform packaging/distribution — developed and verified on
-      macOS only so far (the OAuth flow's browser-opening step degrades to a
-      logged URL + manual open on non-Darwin, but is otherwise untested
-      there).
 - [ ] Full at-rest database encryption — see "Single-user, no in-app login"
       above; not planned as an in-app feature.
 - [ ] Comprehensive loading/error/toast state coverage across the Contact UI
