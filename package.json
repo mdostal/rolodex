@@ -5,6 +5,7 @@
   "license": "MIT",
   "description": "Open-source relationship rolodex you run locally as a standalone app: own your contacts (SQLite), sync with Google Contacts, and search/log through a real UI. MCP is a secondary integration surface, letting your AI agents read, search, and update the same rolodex.",
   "type": "module",
+  "main": "dist/electron/main.js",
   "bin": {
     "rolodex-mcp": "dist/mcp/server.js",
     "rolodex": "dist/cli/index.js"
@@ -46,6 +47,7 @@
     "cli": "NODE_OPTIONS=--experimental-sqlite tsx src/cli/index.ts",
     "shell": "NODE_OPTIONS=--experimental-sqlite tsx src/shell/server.ts",
     "shell:build": "tsc -p tsconfig.json && cp src/shell/index.html dist/shell/index.html && cp src/shell/wizard.html dist/shell/wizard.html && mkdir -p dist/shell/assets && cp -r src/shell/assets/. dist/shell/assets/",
+    "electron": "npm run shell:build && electron .",
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--experimental-sqlite vitest run"
   },
@@ -57,6 +59,7 @@
   "devDependencies": {
     "@types/jsdom": "^30.0.0",
     "@types/node": "^22.0.0",
+    "electron": "^43.4.0",
     "jsdom": "^28.1.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
