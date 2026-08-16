@@ -257,6 +257,7 @@
       font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em;
       color: var(--muted); margin: 0 0 8px;
     }
+    .checkbox-field { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; cursor: pointer; }
     .theme-toggle { display: flex; gap: 8px; }
     .theme-toggle .theme-option { flex: 1; padding: 6px 10px; }
     .theme-toggle .theme-option[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
@@ -424,6 +425,13 @@
     const getFollowUpSettings = () => api("/api/settings/follow-up");
     const putFollowUpSettings = (payload) =>
       api("/api/settings/follow-up", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    const getAutostartSettings = () => api("/api/settings/autostart");
+    const putAutostartSettings = (payload) =>
+      api("/api/settings/autostart", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
@@ -853,6 +861,25 @@
       // so there is exactly one place that creates that button and attaches
       // its listener, rather than this template and wireGoogleSection() both
       // doing it.
+      // The Autostart section — only ever rendered when GET /api/settings/
+      // autostart reports supported:true, i.e. running inside the packaged
+      // Electron app (src/electron/main.ts injects the real
+      // app.setLoginItemSettings-backed implementation; a plain `npm run
+      // shell` dev server has no OS concept of "autostart" at all, so there
+      // is nothing useful to show there — omitted entirely rather than
+      // shown disabled).
+      function autostartSectionHtml(enabled) {
+        return (
+          '<div class="log-interaction-form" id="autostart-section">' +
+          '<h3 class="settings-section-title">Startup</h3>' +
+          '<label class="checkbox-field">' +
+          '<input type="checkbox" id="autostart-toggle"' + (enabled ? " checked" : "") + " />" +
+          " Start rolodex at login" +
+          "</label>" +
+          "</div>"
+        );
+      }
+
       function googleSectionHtml() {
         return (
           '<div class="log-interaction-form" id="google-section">' +
@@ -1100,6 +1127,26 @@
           setGoogleActionsIdle();
         }
 
+        function wireAutostartSection() {
+          const toggle = document.getElementById("autostart-toggle");
+          if (!toggle) return;
+          toggle.addEventListener("change", async () => {
+            const desired = toggle.checked;
+            toggle.disabled = true;
+            try {
+              await putAutostartSettings({ enabled: desired });
+            } catch (err) {
+              // Revert the checkbox on failure rather than showing a
+              // checked/unchecked state that doesn't match what's actually
+              // registered with the OS.
+              toggle.checked = !desired;
+              console.error(err);
+            } finally {
+              toggle.disabled = false;
+            }
+          });
+        }
+
         // Tracks the panel's current appearance selection so a save PUTs the
         // full {theme, iconId} pair even though theme and icon are two
         // separate button groups — the server route (and GET /'s injection)
@@ -1150,6 +1197,7 @@
           toggleBtn.setAttribute("aria-expanded", "true");
           let current = { windowDays: 30, graceDays: 14 };
           let appearance = { theme: "default", iconId: 6 };
+          let autostart = { supported: false, enabled: false };
           try {
             current = await getFollowUpSettings();
           } catch (err) {
@@ -1160,14 +1208,21 @@
           } catch (err) {
             console.error(err);
           }
+          try {
+            autostart = await getAutostartSettings();
+          } catch (err) {
+            console.error(err);
+          }
           wrap.innerHTML =
             '<div class="settings-panel" id="settings-panel">' +
             '<h3 class="settings-section-title">Follow-up settings</h3>' +
             settingsFormHtml(current.windowDays, current.graceDays) +
             appearanceSectionHtml(appearance.theme, appearance.iconId) +
+            (autostart.supported ? autostartSectionHtml(autostart.enabled) : "") +
             googleSectionHtml() +
             "</div>";
           wireForm();
+          if (autostart.supported) wireAutostartSection();
           wireAppearanceSection(appearance.theme, appearance.iconId);
           wireGoogleSection();
           document.getElementById("settings-window").focus();

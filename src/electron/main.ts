@@ -46,6 +46,11 @@ async function boot(): Promise<void> {
   const server = createRolodexServer({
     connectGoogleAccount: (opts) =>
       realConnectGoogleAccount({ ...opts, openBrowser: (url) => void shell.openExternal(url) }),
+    autostart: {
+      isSupported: true,
+      getEnabled: () => app.getLoginItemSettings().openAtLogin,
+      setEnabled: (enabled) => app.setLoginItemSettings({ openAtLogin: enabled }),
+    },
   });
   await new Promise<void>((resolve) => server.listen(PORT, resolve));
   createWindow();
