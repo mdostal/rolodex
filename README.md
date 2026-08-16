@@ -100,6 +100,24 @@ If your host supports Claude Code-style skills,
 `.claude/skills/rolodex/SKILL.md` adds a bit more depth on top of the tool
 descriptions above — but nothing here depends on it.
 
+## CLI (third integration surface, for non-MCP tooling)
+
+`rolodex <command>` (`src/cli/index.ts`) is a plain, scriptable command for
+harnesses/scripts that shell out instead of speaking MCP — same
+`Store`/`GoogleSync` logic as the app and the MCP server (it's a thin argv
+wrapper around the exact same handlers `src/mcp/server.ts` registers, not a
+separate implementation), same `ROLODEX_DB` env var, JSON on stdout,
+`{"error": "..."}` on stderr with a non-zero exit code on failure:
+
+```sh
+rolodex upsert --name "Ezra Cohen" --org "Fieldnote Labs" --role Founder --verdict strong
+rolodex search "Fieldnote"
+rolodex log <contactId> "Had a work call, liked him a lot." --channel call
+rolodex followups
+rolodex sync-google --direction pull
+rolodex --help
+```
+
 ## Development
 ```sh
 npm run typecheck   # tsc --noEmit

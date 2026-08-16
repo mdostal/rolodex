@@ -48,6 +48,33 @@ a match; if you don't have real data, say so:
   for two-way sync or to push local edits back to Google, say plainly
   that isn't supported yet — don't imply it happened.
 
+## Deep-diving/pre-filling a contact from a web search
+
+The user may hand you very little on purpose — e.g. "I had a work call,
+liked Ezra Cohen, [company]" — and expect you to go research the rest
+before filing it, not just log the bare mention. That's fine: use your own
+web-search tool to look the person/company up. This is enrichment, not
+fabrication, as long as it's grounded in a real search — the line to hold
+is what happens with what you find:
+
+1. Search first, `rolodex_search` too (don't duplicate an existing
+   contact).
+2. Propose what you found back to the user before writing it —
+   role/org/what-they-do/angle from a web search are *candidates*, not
+   facts to silently commit. A one-line "found: VP Eng at Acme, previously
+   at Foo — want me to add that?" is enough; don't demand a full review
+   cycle for something low-stakes.
+3. Only `rolodex_upsert` after that confirmation (or immediately, if the
+   user's framing already implied "go ahead and fill it in" — use
+   judgment, don't manufacture friction for its own sake).
+4. `verdict` is never set from a search — that's the user's own read on the
+   relationship, stated or implied by them ("liked Ezra Cohen" → verdict
+   candidate `strong`, from what *they* said, not from anything found
+   online).
+5. Keep what came from the user and what came from search distinguishable
+   in how you talk about it back to them, even though the stored record
+   itself doesn't tag provenance per-field.
+
 ## Non-negotiable
 
 - Never fabricate a contact, an id, or a field value. A `rolodex_search`
