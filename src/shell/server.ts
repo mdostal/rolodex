@@ -29,17 +29,23 @@ import {
  * Desktop shell, chosen (saf-01) as: a local Node HTTP server hosting `Store`
  * in-process, with a plain browser tab as the UI.
  *
- * Why not Electron or Tauri: Store already runs as ordinary Node, so an
- * ordinary Node process serving it needs no IPC bridge, no renderer
- * sandboxing story, and no native-module rebuild risk — Electron's
- * contextIsolation/preload wiring and Tauri's Node sidecar (it can't reach
- * node:sqlite from Rust directly) both solve problems this shell doesn't
- * have. A browser tab is a genuinely real window against the real SQLite
- * file, not a fake/mocked stand-in — this story's whole point is proving
- * that, as thinly as possible. Electron remains a reasonable future upgrade
- * if a truly native window (tray icon, native menus, offline-from-file://)
- * is ever required; nothing here forecloses it since Store itself is
- * untouched by this choice.
+ * This file itself stays framework-agnostic on purpose: Store runs as
+ * ordinary Node, so an ordinary Node process serving it needs no IPC
+ * bridge, no renderer sandboxing story, and no native-module rebuild risk —
+ * a plain browser tab is a genuinely real window against the real SQLite
+ * file, not a fake/mocked stand-in. That's still true, and still exactly
+ * how `npm run shell` runs today.
+ *
+ * The packaged desktop app (src/electron/main.ts, the electron-packaging
+ * epic) is Electron, not Tauri, precisely BECAUSE of the shape above:
+ * Electron's main process IS Node, so it imports and boots this exact
+ * server in-process with zero changes here — no sidecar, no IPC. Tauri's
+ * Rust core can't reach node:sqlite directly and would need this server
+ * spawned as a separate bundled sidecar process instead; real added
+ * complexity for zero benefit given this file already runs as plain Node.
+ * main.ts is the only file that imports `electron` at all — this module
+ * neither knows nor cares whether its caller is a browser tab or an
+ * Electron BrowserWindow.
  *
  * First-run setup wizard (saf-04): this server no longer opens the SQLite
  * file at import time. Until the wizard's Finish screen calls
