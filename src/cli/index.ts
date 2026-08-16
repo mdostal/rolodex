@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createRolodexMcpServer, type RolodexMcpHandlers } from "../mcp/server.js";
 
@@ -209,7 +210,13 @@ export async function run(
   }
 }
 
-const isMainModule = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+// realpathSync matters here: a global install (`npm link`, `npm i -g`) runs
+// this file through a symlinked bin — process.argv[1] stays the symlink
+// path while import.meta.url is always the resolved real file, so a plain
+// string comparison silently fails (isMainModule false, the CLI does
+// nothing, exit 0) the moment this isn't invoked by its literal dist path.
+const isMainModule =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
 
 if (isMainModule) {
   const { handlers } = createRolodexMcpServer();
