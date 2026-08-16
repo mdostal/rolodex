@@ -1,6 +1,6 @@
 ---
 name: rolodex
-description: Use when the user asks you to look up, add, or update a contact in their personal/professional network, search their rolodex, find who they need to follow up with (who's gone cold), log an interaction (call/email/meeting/note), or sync from Google Contacts. Backed by rolodex's own local SQLite store via the rolodex-mcp server, not general knowledge or assumptions about who's in the user's network.
+description: Use when the user asks you to look up, add, or update a contact in their personal/professional network, search their rolodex, find who they need to follow up with (who's gone cold), log an interaction (call/email/meeting/note), or sync from Google Contacts — including when they paste in raw call/meeting notes or a transcript and want everyone mentioned filed. Backed by rolodex's own local SQLite store via the rolodex-mcp server, not general knowledge or assumptions about who's in the user's network.
 ---
 
 # rolodex
@@ -47,6 +47,29 @@ a match; if you don't have real data, say so:
   Contacts into rolodex. `direction: "push"` is not implemented. If asked
   for two-way sync or to push local edits back to Google, say plainly
   that isn't supported yet — don't imply it happened.
+
+## Call notes / meeting transcripts with multiple people
+
+When the user pastes in raw notes or a transcript from a call and wants
+"everyone" filed, work it person by person rather than one big guess:
+
+1. Identify each distinct person actually named in the notes — not every
+   noun that sounds like it could be one.
+2. For each person: `rolodex_search` first. If they're already in the
+   rolodex, `rolodex_upsert` only the fields the notes actually update
+   (don't clobber existing `angle`/`verdict`/`nextStep` with blanks just
+   because this call didn't mention them). If they're new, `rolodex_upsert`
+   with whatever the notes actually established (org/role/what/angle) —
+   leave fields out entirely if the notes don't say, rather than guessing.
+3. `rolodex_log_interaction` per person for what was actually discussed
+   with them specifically — not one identical note copy-pasted across
+   everyone on the call. `channel` is usually `"call"` or `"meeting"`.
+4. If the notes mention a next step for someone, set their `nextStep` via
+   the same `rolodex_upsert` call — but only what the notes actually say
+   the next step is, not an inferred one.
+5. Report back plainly what you filed: who's new vs. updated, and what got
+   logged for each — so the user can catch a misread name or a merge that
+   should've been a new contact instead.
 
 ## Deep-diving/pre-filling a contact from a web search
 
