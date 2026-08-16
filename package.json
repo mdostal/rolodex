@@ -48,8 +48,42 @@
     "shell": "NODE_OPTIONS=--experimental-sqlite tsx src/shell/server.ts",
     "shell:build": "tsc -p tsconfig.json && cp src/shell/index.html dist/shell/index.html && cp src/shell/wizard.html dist/shell/wizard.html && mkdir -p dist/shell/assets && cp -r src/shell/assets/. dist/shell/assets/",
     "electron": "npm run shell:build && electron .",
+    "electron:package": "npm run shell:build && electron-builder --publish=never",
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--experimental-sqlite vitest run"
+  },
+  "build": {
+    "appId": "com.mdostal.rolodex",
+    "productName": "rolodex",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.test.js",
+      "!dist/**/*.test.d.ts"
+    ],
+    "mac": {
+      "target": ["dmg"],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "identity": null
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon.ico"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "build/icon.png",
+      "category": "Office"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "mdostal",
+      "repo": "rolodex"
+    }
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -60,6 +94,7 @@
     "@types/jsdom": "^30.0.0",
     "@types/node": "^22.0.0",
     "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
     "jsdom": "^28.1.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
