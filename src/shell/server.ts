@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { mkdir, readFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -769,7 +770,14 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
   });
 }
 
-const isMainModule = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+// realpathSync matters here: a global/symlinked invocation would leave
+// process.argv[1] as the symlink path while import.meta.url is always the
+// resolved real file — see the identical fix in src/mcp/server.ts and
+// src/cli/index.ts. Not currently reachable via a `bin` entry, but this
+// keeps the pattern correct everywhere it appears rather than only where
+// npm link happened to expose the bug.
+const isMainModule =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
 
 if (isMainModule) {
   const PORT = Number(process.env.ROLODEX_SHELL_PORT ?? 4173);
