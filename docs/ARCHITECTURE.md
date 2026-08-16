@@ -34,6 +34,11 @@ isn't the primary way to use rolodex.
   across the merge.
 - All 5 MCP tools (`src/mcp/server.ts`) wired to that same real `Store`/
   `GoogleSync` logic.
+- A third, plain CLI surface (`src/cli/index.ts`, `rolodex <command>`) for
+  non-MCP tooling/scripts — a thin argv wrapper around the exact same
+  `RolodexMcpHandlers` the MCP server registers, not a separate
+  implementation. JSON in, JSON out, same `ROLODEX_DB` env var as the other
+  two surfaces.
 - Search (FTS5-backed, with a LIKE-scan fallback) and interaction logging,
   reachable from the UI and the HTTP API.
 - No login, no logout, no in-app access control of any kind. See below.
@@ -50,7 +55,7 @@ repo self-contradictory for new contributors — hence this rewrite.
 ## Layers
 | Layer | Lives where | Contains |
 |---|---|---|
-| **Core (generic OSS)** | this repo, `src/` | types, SQLite store + FTS, SecretsAdapter, Google-sync adapter, desktop shell/server, wizard + UI, MCP server/tools |
+| **Core (generic OSS)** | this repo, `src/` | types, SQLite store + FTS, SecretsAdapter, Google-sync adapter, desktop shell/server, wizard + UI, MCP server/tools, CLI |
 | **Your layer** | OS keychain + `~/.local/share/rolodex/` (outside the repo, gitignored) | resolved `ROLODEX_DB` path, your Google OAuth client credentials/token, your data |
 
 The core knows nothing about any specific user. Adding your credentials or
@@ -287,15 +292,23 @@ Done (across `standalone-app-foundation`, `followups-view`,
 - [x] One-shot Google Contacts pull, with local-only-fields-survive-sync
       guarantee, and a refreshed token now persisted back to the keychain.
 - [x] All 5 MCP tools wired to the same real `Store`/`GoogleSync` logic.
+- [x] A third plain CLI surface (`rolodex <command>`) wrapping the same
+      handlers, for non-MCP tooling/scripts.
 - [x] Search (UI + API) and interaction logging (UI + API).
 - [x] Docs rewrite (this file + README.md) and CI.
 
 Remaining gaps:
 - [ ] Google `push()` / full two-way sync — pull-only today; the OAuth
       exchange itself is real, `push()` remains an explicit stub.
-- [ ] Enrichment-on-add (public-info lookup to speed up capturing
-      org/role/what-they-do) — deferred; needs to reconcile with the
-      "no silent guesses" convention before it's designed.
+- [ ] Enrichment-on-add as a *product feature* (a built-in public-info
+      lookup) is still deferred. What exists today is a skill-level
+      reconciliation instead: `.claude/skills/rolodex/SKILL.md` tells an
+      agent it MAY use its own web-search tool to deep-dive a person/company
+      on request, but must always propose sourced fields back to the user
+      for confirmation before `rolodex_upsert` — the "no silent guesses"
+      convention holds because the write step still requires a human yes,
+      not because enrichment doesn't happen. No new Store/MCP/CLI code
+      backs this; it's agent behavior on top of the existing tools.
 - [ ] A dedicated settings/account screen beyond the current "Reconnect
       Google" + follow-up-window popover (e.g. changing `ROLODEX_DB` after
       first run, re-running the wizard).

@@ -6,7 +6,8 @@
   "description": "Open-source relationship rolodex you run locally as a standalone app: own your contacts (SQLite), sync with Google Contacts, and search/log through a real UI. MCP is a secondary integration surface, letting your AI agents read, search, and update the same rolodex.",
   "type": "module",
   "bin": {
-    "rolodex-mcp": "dist/mcp/server.js"
+    "rolodex-mcp": "dist/mcp/server.js",
+    "rolodex": "dist/cli/index.js"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -42,6 +43,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "NODE_OPTIONS=--experimental-sqlite tsx src/mcp/server.ts",
+    "cli": "NODE_OPTIONS=--experimental-sqlite tsx src/cli/index.ts",
     "shell": "NODE_OPTIONS=--experimental-sqlite tsx src/shell/server.ts",
     "shell:build": "tsc -p tsconfig.json && cp src/shell/index.html dist/shell/index.html && cp src/shell/wizard.html dist/shell/wizard.html && mkdir -p dist/shell/assets && cp -r src/shell/assets/. dist/shell/assets/",
     "typecheck": "tsc --noEmit",
