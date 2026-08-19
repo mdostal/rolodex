@@ -406,8 +406,8 @@ normal filesystem permissions.
 ## Build-out status
 
 Done (across `standalone-app-foundation`, `followups-view`,
-`mcp-tool-bodies`, `google-oauth-flow`, `electron-packaging`, and
-`google-two-way-sync`):
+`mcp-tool-bodies`, `google-oauth-flow`, `electron-packaging`,
+`google-two-way-sync`, and `settings-account-screen`):
 - [x] Desktop shell + local server, bound to loopback, real `Store` wired in.
 - [x] `Store` bodies: `list`, `upsert`, `get`, `setVerdict`, `setNextStep`,
       `logInteraction`, `listInteractions`, `search` (FTS5 + LIKE fallback),
@@ -445,6 +445,20 @@ Done (across `standalone-app-foundation`, `followups-view`,
       Electron app bound its server to all network interfaces instead of
       loopback-only, plus a missing single-instance lock and unhandled
       boot-error path in the same file.
+- [x] A dedicated Settings screen (`#/settings`, `settings-account-screen`
+      epic) — a real route in the shell's own client-side router, not a
+      separate served page, replacing the old gear-icon popover entirely.
+      Consolidates Follow-up window, Appearance, Autostart, and Google
+      account status/reconnect (migrated as-is), plus two genuinely new
+      sections: **Database location** and **Secrets backend** (Keychain vs
+      Portunus), both previously wizard-only and unreachable after first
+      run. Neither can take effect live — `Store`/`secrets` are memoized
+      for the server process's lifetime — so both show a persistent
+      "restart to apply" notice on a successful change instead of implying
+      anything happened immediately. The Google section also gained a real
+      three-state status check (Not configured / Client configured, not
+      signed in yet / Signed in), replacing a bare Reconnect button with no
+      status at all.
 
 Remaining gaps:
 - [ ] Code signing / notarization — explicitly deferred as part of the
@@ -468,9 +482,6 @@ Remaining gaps:
       convention holds because the write step still requires a human yes,
       not because enrichment doesn't happen. No new Store/MCP/CLI code
       backs this; it's agent behavior on top of the existing tools.
-- [ ] A dedicated settings/account screen beyond the current Follow-up/
-      Appearance/Google/Autostart popover sections (e.g. changing
-      `ROLODEX_DB` after first run, re-running the wizard).
 - [ ] Full at-rest database encryption — see "Single-user, no in-app login"
       above; not planned as an in-app feature.
 - [ ] Comprehensive loading/error/toast state coverage across the Contact UI
