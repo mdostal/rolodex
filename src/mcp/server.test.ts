@@ -144,6 +144,31 @@ describe("rolodex_log_interaction", () => {
   });
 });
 
+describe("rolodex_delete", () => {
+  it("deletes an existing contact", async () => {
+    const contact = parseResult(await handlers.rolodex_upsert({ name: "Ada Lovelace" })) as { id: string };
+
+    const result = await handlers.rolodex_delete({ contactId: contact.id });
+    const payload = parseResult(result) as { deleted: boolean; id: string; name: string };
+    expect(payload).toEqual({ deleted: true, id: contact.id, name: "Ada Lovelace" });
+    expect(store.get(contact.id)).toBeUndefined();
+  });
+
+  it("also deletes the contact's interaction history", async () => {
+    const contact = parseResult(await handlers.rolodex_upsert({ name: "Ada Lovelace" })) as { id: string };
+    await handlers.rolodex_log_interaction({ contactId: contact.id, note: "Called once" });
+
+    await handlers.rolodex_delete({ contactId: contact.id });
+
+    expect(store.listInteractions(contact.id)).toHaveLength(0);
+  });
+
+  it("returns isError for an unknown contact id, without throwing", async () => {
+    const result = await handlers.rolodex_delete({ contactId: "does-not-exist" });
+    expect(result.isError).toBe(true);
+  });
+});
+
 describe("rolodex_sync_google", () => {
   async function seededSecrets() {
     const secrets = createInMemorySecretsAdapter();

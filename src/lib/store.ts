@@ -155,6 +155,27 @@ export class Store {
     return row ? rowToContact(row) : undefined;
   }
 
+  /** Deletes a contact and its interaction history. Explicit interactions
+   * delete rather than relying on the schema's `ON DELETE CASCADE` — that
+   * constraint is inert unless `PRAGMA foreign_keys = ON` is set, which this
+   * class deliberately doesn't do (see the constructor's PRAGMA list); doing
+   * the delete explicitly here avoids a global FK-enforcement change just for
+   * this one method. Returns whether a contact was actually found and
+   * deleted, so callers (the DELETE route) can tell a real delete apart from
+   * a no-op on an already-gone/never-existed id. */
+  delete(id: string): boolean {
+    this.db.prepare("DELETE FROM interactions WHERE contactId = ?").run(id);
+    const info = this.db.prepare("DELETE FROM contacts WHERE id = ?").run(id);
+
+    try {
+      this.db.exec("INSERT INTO contacts_fts(contacts_fts) VALUES('rebuild')");
+    } catch (err) {
+      console.warn("rolodex: FTS reindex skipped (fts5 unavailable)", err);
+    }
+
+    return info.changes > 0;
+  }
+
   /**
    * Full-text across name/org/what/angle/tags. Tries FTS5 MATCH against
    * `contacts_fts` first (ranked via bm25); if that throws — fts5 unavailable

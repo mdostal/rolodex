@@ -47,6 +47,10 @@ Commands:
              One-way pull from Google Contacts (push is not implemented)
              --direction <pull|push|both>   defaults to both
 
+  delete <contactId>
+             Permanently delete a contact and its interaction history.
+             There is no undo. Errors if the contact doesn't exist.
+
 Every command prints its JSON result to stdout on success, or a JSON
 {"error": "..."} to stderr with a non-zero exit code on failure. Uses the
 same ROLODEX_DB env var as the standalone app and the MCP server — unset,
@@ -184,6 +188,13 @@ export async function run(
           throw new Error("--direction must be one of pull, push, both");
         }
         result = await handlers.rolodex_sync_google({ direction });
+        break;
+      }
+      case "delete": {
+        const { positionals } = parseArgs(rest);
+        const contactId = positionals[0];
+        if (!contactId) throw new Error("delete requires <contactId>, e.g. rolodex delete abc123");
+        result = await handlers.rolodex_delete({ contactId });
         break;
       }
       default:

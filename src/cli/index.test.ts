@@ -115,6 +115,33 @@ describe("rolodex log", () => {
   });
 });
 
+describe("rolodex delete", () => {
+  it("deletes an existing contact", async () => {
+    const { stdout: created } = await runCli(["upsert", "--name", "Ada Lovelace"]);
+    const id = JSON.parse(created).id;
+
+    const { code, stdout } = await runCli(["delete", id]);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ deleted: true, id, name: "Ada Lovelace" });
+
+    const { code: searchCode, stdout: searchOut } = await runCli(["search", "Ada"]);
+    expect(searchCode).toBe(0);
+    expect(JSON.parse(searchOut)).toEqual([]);
+  });
+
+  it("requires a contactId", async () => {
+    const { code, stderr } = await runCli(["delete"]);
+    expect(code).toBe(1);
+    expect(JSON.parse(stderr).error).toContain("delete requires");
+  });
+
+  it("errors for an unknown contactId", async () => {
+    const { code, stderr } = await runCli(["delete", "does-not-exist"]);
+    expect(code).toBe(1);
+    expect(JSON.parse(stderr).error).toContain("does-not-exist");
+  });
+});
+
 describe("unknown command / help", () => {
   it("exits 2 with a usage message on an unknown command", async () => {
     const { code, stderr } = await runCli(["frobnicate"]);

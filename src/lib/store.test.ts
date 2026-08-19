@@ -137,6 +137,52 @@ describe("Store.get()", () => {
   });
 });
 
+describe("Store.delete()", () => {
+  it("removes the contact and returns true", () => {
+    const store = new Store(dbPath);
+    const saved = store.upsert(baseContact({ name: "Ada Lovelace" }));
+    expect(store.delete(saved.id)).toBe(true);
+    expect(store.get(saved.id)).toBeUndefined();
+  });
+
+  it("returns false for an unknown id and does not throw", () => {
+    const store = new Store(dbPath);
+    expect(store.delete("does-not-exist")).toBe(false);
+  });
+
+  it("also removes the contact's interaction history", () => {
+    const store = new Store(dbPath);
+    const saved = store.upsert(baseContact({ name: "Ada Lovelace" }));
+    store.logInteraction({ id: "int-1", contactId: saved.id, at: new Date().toISOString(), note: "Called" });
+    expect(store.listInteractions(saved.id)).toHaveLength(1);
+
+    store.delete(saved.id);
+
+    expect(store.get(saved.id)).toBeUndefined();
+    expect(store.listInteractions(saved.id)).toHaveLength(0);
+  });
+
+  it("does not affect other contacts or their interactions", () => {
+    const store = new Store(dbPath);
+    const keep = store.upsert(baseContact({ name: "Grace Hopper" }));
+    const gone = store.upsert(baseContact({ name: "Ada Lovelace" }));
+    store.logInteraction({ id: "int-keep", contactId: keep.id, at: new Date().toISOString(), note: "Kept" });
+
+    store.delete(gone.id);
+
+    expect(store.get(keep.id)).toMatchObject({ name: "Grace Hopper" });
+    expect(store.listInteractions(keep.id)).toHaveLength(1);
+  });
+
+  it("a deleted contact no longer appears in search results", () => {
+    const store = new Store(dbPath);
+    const saved = store.upsert(baseContact({ name: "Ada Lovelace", org: "Analytical Engines" }));
+    store.delete(saved.id);
+    const results = store.search("Analytical");
+    expect(results.map((r) => r.contact.id)).not.toContain(saved.id);
+  });
+});
+
 describe("Store.setVerdict() / Store.setNextStep()", () => {
   it("setVerdict persists the new verdict", () => {
     const store = new Store(dbPath);

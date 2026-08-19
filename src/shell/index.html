@@ -107,6 +107,8 @@
       cursor: pointer;
     }
     button.secondary { background: transparent; color: var(--fg); }
+    button.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+    button.danger:hover { background: var(--danger); color: #fff; }
     button:disabled { background: #c9c9d1; border-color: #c9c9d1; cursor: not-allowed; }
     button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
       outline: 2px solid var(--accent); outline-offset: 2px;
@@ -401,6 +403,7 @@
     }
     const getContacts = () => api("/api/contacts");
     const getContact = (id) => api("/api/contacts/" + encodeURIComponent(id));
+    const deleteContact = (id) => api("/api/contacts/" + encodeURIComponent(id), { method: "DELETE" });
     const saveContact = (payload) =>
       api("/api/contacts", {
         method: "POST",
@@ -1258,7 +1261,7 @@
     async function renderDetail(id) {
       setTopbar({
         left: '<button class="back-link" id="back-link">&larr; Back to contacts</button>',
-        right: '<button id="edit-top">Edit</button>',
+        right: '<button class="danger secondary" id="delete-top">Delete</button><button id="edit-top">Edit</button>',
       });
       document.getElementById("back-link").addEventListener("click", () => navigate("#/"));
 
@@ -1282,6 +1285,18 @@
       document.getElementById("edit-top").addEventListener("click", () =>
         navigate("#/contact/" + encodeURIComponent(id) + "/edit"),
       );
+      document.getElementById("delete-top").addEventListener("click", async () => {
+        if (!confirm('Delete "' + contact.name + '" and their interaction history? This cannot be undone.')) return;
+        const btn = document.getElementById("delete-top");
+        btn.disabled = true;
+        try {
+          await deleteContact(id);
+          navigate("#/");
+        } catch (err) {
+          btn.disabled = false;
+          alert("Couldn't delete: " + err.message);
+        }
+      });
 
       const tags = contact.tags || [];
       content.innerHTML =
