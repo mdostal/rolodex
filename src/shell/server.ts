@@ -362,8 +362,13 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
     // POST .../secrets-check performs — those stay separate routes/concerns:
     // this one only answers "does the choice UI exist at all", the other
     // answers "does whichever backend is currently selected actually work".
+    // currentBackend (settings-account-screen epic) is the one other thing
+    // this response was missing for a non-wizard caller: the wizard itself
+    // never needed it (its choice screen always starts from the "keychain"
+    // default), but the Settings screen's Secrets-backend section needs to
+    // know which radio to actually show as selected.
     if (req.method === "GET" && segs.length === 1 && segs[0] === "secrets-backends") {
-      sendJson(res, 200, { portunusAvailable: await isPortunusAvailable() });
+      sendJson(res, 200, { portunusAvailable: await isPortunusAvailable(), currentBackend: getSecretsBackendChoiceSync(homeDir) });
       return;
     }
 
