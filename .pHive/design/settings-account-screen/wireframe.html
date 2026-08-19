@@ -1,0 +1,327 @@
+<title>rolodex Settings — wireframe</title>
+<style>
+  :root {
+    --border: #d9d9df;
+    --muted: #6b6b76;
+    --bg: #fff;
+    --surface: #fbfbfc;
+    --fg: #1b1b1f;
+    --accent: #2f5ed9;
+    --accent-bg: #eef2fd;
+    --danger: #b3261e;
+    --ok-bg: #e7f6ec;
+    --ok-fg: #1e7b34;
+    --warn-bg: #fdf3e2;
+    --warn-fg: #92651e;
+    --row-hover: #f4f5f8;
+    --chip-bg: #eef0f4;
+    --accent-fg: #fff;
+    --annot: #b3261e;
+    --annot-bg: #fdeceb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --border: #34343c;
+      --muted: #9a9aa4;
+      --bg: #131316;
+      --surface: #1a1a1f;
+      --fg: #edEDF0;
+      --accent: #7f9dfa;
+      --accent-bg: #1c2440;
+      --danger: #ff6b60;
+      --ok-bg: #123420;
+      --ok-fg: #57cf84;
+      --warn-bg: #3a2c11;
+      --warn-fg: #e0af5c;
+      --row-hover: #202027;
+      --chip-bg: #232329;
+      --accent-fg: #0d1020;
+      --annot: #ff8a80;
+      --annot-bg: #3a1613;
+    }
+  }
+  :root[data-theme="dark"] {
+    --border: #34343c;
+    --muted: #9a9aa4;
+    --bg: #131316;
+    --surface: #1a1a1f;
+    --fg: #edEDF0;
+    --accent: #7f9dfa;
+    --accent-bg: #1c2440;
+    --danger: #ff6b60;
+    --ok-bg: #123420;
+    --ok-fg: #57cf84;
+    --warn-bg: #3a2c11;
+    --warn-fg: #e0af5c;
+    --row-hover: #202027;
+    --chip-bg: #232329;
+    --accent-fg: #0d1020;
+    --annot: #ff8a80;
+    --annot-bg: #3a1613;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+  }
+  .topbar {
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar-left { display: flex; align-items: center; gap: 12px; }
+  .brand { font-weight: 600; font-size: 1rem; }
+  .back-link {
+    background: none; border: none; color: var(--accent); font: inherit; cursor: pointer;
+    padding: 6px 4px; border-radius: 6px; display: flex; align-items: center; gap: 4px;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 32px 100px; }
+  .page-header { margin-bottom: 24px; }
+  .page-header h1 { margin: 0 0 4px; font-size: 1.5rem; }
+  .page-header p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+  .banner {
+    display: flex; align-items: flex-start; gap: 8px;
+    background: var(--annot-bg); color: var(--annot);
+    border: 1px dashed var(--annot);
+    border-radius: 8px; padding: 10px 14px; margin-bottom: 24px;
+    font-size: 0.82rem; line-height: 1.4;
+  }
+  .banner b { font-weight: 600; }
+
+  section.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+  }
+  section.card h2 {
+    margin: 0 0 4px;
+    font-size: 1rem;
+  }
+  section.card .desc {
+    margin: 0 0 16px;
+    color: var(--muted);
+    font-size: 0.85rem;
+    max-width: 52ch;
+  }
+  .field-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .field-row:last-child { margin-bottom: 0; }
+  label.inline { font-size: 0.85rem; color: var(--fg); white-space: nowrap; }
+  input[type="number"], input[type="text"] {
+    font: inherit;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    background: var(--bg);
+    color: var(--fg);
+    width: 72px;
+  }
+  input[type="text"].wide { width: 100%; max-width: 360px; }
+  button {
+    font: inherit;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--accent);
+    color: var(--accent-fg);
+    padding: 8px 14px;
+    min-height: 32px;
+    cursor: pointer;
+  }
+  button.secondary { background: transparent; color: var(--fg); }
+  button.small { padding: 5px 10px; min-height: 28px; font-size: 0.85rem; }
+
+  .status-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 0.8rem; font-weight: 600;
+    padding: 3px 10px; border-radius: 999px;
+  }
+  .status-chip.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .status-chip.warn { background: var(--warn-bg); color: var(--warn-fg); }
+  .status-chip.off { background: var(--chip-bg); color: var(--muted); }
+  .status-chip::before { content: "●"; font-size: 0.6rem; }
+
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .toggle-row .label { font-size: 0.9rem; }
+  .toggle-row .sub { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
+  .switch {
+    position: relative; width: 40px; height: 22px; flex-shrink: 0;
+    background: var(--chip-bg); border: 1px solid var(--border); border-radius: 999px;
+  }
+  .switch.on { background: var(--accent); border-color: var(--accent); }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    background: #fff; border-radius: 50%; transition: left .15s;
+  }
+  .switch.on::after { left: 20px; }
+
+  .icon-grid { display: flex; gap: 8px; flex-wrap: wrap; }
+  .icon-swatch {
+    width: 40px; height: 40px; border-radius: 8px; border: 2px solid transparent;
+    background: linear-gradient(135deg, var(--accent), var(--chip-bg));
+    display: flex; align-items: center; justify-content: center; font-size: 0.7rem; color: var(--muted);
+  }
+  .icon-swatch.selected { border-color: var(--accent); }
+
+  .theme-pick { display: flex; gap: 10px; }
+  .theme-opt {
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;
+    font-size: 0.85rem; cursor: pointer; background: var(--bg);
+  }
+  .theme-opt.selected { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
+
+  .path-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .path-value {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.78rem;
+    background: var(--chip-bg);
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: var(--fg);
+    word-break: break-all;
+  }
+
+  .apply-note {
+    display: none;
+    margin-top: 12px;
+    font-size: 0.8rem;
+    color: var(--warn-fg);
+    background: var(--warn-bg);
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+  .apply-note.shown { display: block; }
+
+  .annot-tag {
+    display: inline-block;
+    font-size: 0.68rem; font-weight: 700; letter-spacing: .02em;
+    color: var(--annot); background: var(--annot-bg);
+    border: 1px solid var(--annot);
+    border-radius: 4px; padding: 1px 6px; margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  footer.note {
+    max-width: 720px; margin: 8px auto 0; padding: 0 32px;
+    color: var(--muted); font-size: 0.78rem; line-height: 1.5;
+  }
+</style>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <button class="back-link" type="button">&larr; Contacts</button>
+    <span class="brand">rolodex</span>
+  </div>
+  <div></div>
+</div>
+
+<main>
+  <div class="page-header">
+    <h1>Settings</h1>
+    <p>New <code>#/settings</code> screen — replaces the gear popover. All six sections below live on this one page.</p>
+  </div>
+
+  <div class="banner">
+    <span>&#9888;&#65039;</span>
+    <span><b>Wireframe note:</b> red dashed callouts mark what's <em>new</em> in this epic. Everything else is the existing popover's four sections, moved here as-is.</span>
+  </div>
+
+  <!-- Follow-up -->
+  <section class="card">
+    <h2>Follow-up window</h2>
+    <p class="desc">How long before a contact with a next step counts as "gone cold."</p>
+    <div class="field-row">
+      <label class="inline" for="w">Window</label>
+      <input type="number" id="w" value="30" />
+      <span class="inline">days,</span>
+      <label class="inline" for="g">grace</label>
+      <input type="number" id="g" value="14" />
+      <span class="inline">days</span>
+      <button class="small" type="button">Save</button>
+    </div>
+  </section>
+
+  <!-- Appearance -->
+  <section class="card">
+    <h2>Appearance</h2>
+    <p class="desc">Theme and app icon.</p>
+    <div class="field-row">
+      <div class="theme-pick">
+        <div class="theme-opt selected">Default</div>
+        <div class="theme-opt">Brass</div>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="icon-grid">
+        <div class="icon-swatch selected">6</div>
+        <div class="icon-swatch">1</div>
+        <div class="icon-swatch">2</div>
+        <div class="icon-swatch">3</div>
+        <div class="icon-swatch">4</div>
+        <div class="icon-swatch">5</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Autostart -->
+  <section class="card">
+    <h2>Launch at login</h2>
+    <div class="toggle-row">
+      <div>
+        <div class="label">Start rolodex when you log in</div>
+        <div class="sub">Packaged app only — uses the OS's own login-item mechanism.</div>
+      </div>
+      <div class="switch on"></div>
+    </div>
+  </section>
+
+  <!-- Google -->
+  <section class="card">
+    <h2>Google account<span class="annot-tag">STATUS UPGRADED</span></h2>
+    <p class="desc">Connect Google Contacts to sync. Verdict, angle, and next-step never leave rolodex.</p>
+    <div class="field-row">
+      <span class="status-chip ok">Signed in</span>
+      <button class="small secondary" type="button">Reconnect</button>
+    </div>
+  </section>
+
+  <!-- Database -->
+  <section class="card">
+    <h2>Database location<span class="annot-tag">NEW</span></h2>
+    <p class="desc">Where your contacts.db file lives. Reuses the wizard's own path check — nothing here touches your current data.</p>
+    <div class="path-row">
+      <span class="path-value">~/.local/share/rolodex/rolodex.db</span>
+      <button class="small secondary" type="button">Change&hellip;</button>
+      <button class="small secondary" type="button">Reset to default</button>
+    </div>
+    <div class="apply-note shown">Applies next launch — restart rolodex to switch.</div>
+  </section>
+
+  <!-- Secrets backend -->
+  <section class="card">
+    <h2>Secrets backend<span class="annot-tag">NEW</span></h2>
+    <p class="desc">Where your Google OAuth tokens are stored.</p>
+    <div class="field-row">
+      <div class="theme-pick">
+        <div class="theme-opt selected">macOS Keychain</div>
+        <div class="theme-opt">Portunus</div>
+      </div>
+    </div>
+    <div class="apply-note shown">Applies next launch — restart rolodex to switch.</div>
+  </section>
+</main>
+
+<footer class="note">
+  Wireframe only — static markup, no live data or working controls. Colors/type/spacing are pulled directly from <code>src/shell/index.html</code>'s real CSS custom properties, so this reads close to how the shipped screen will actually look.
+</footer>

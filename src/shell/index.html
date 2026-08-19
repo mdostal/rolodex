@@ -248,6 +248,12 @@
        the popover itself. Holds two clearly-separated sections (Follow-up
        settings, Google) — .settings-panel positions the whole popover, each
        section keeps its own .log-interaction-form card look. */
+    /* Settings screen (#/settings) — a real page, not a popover; sections
+       reuse .log-interaction-form's card look and .settings-section-title
+       for headings, same as the popover did. */
+    .settings-page { max-width: 640px; }
+    .settings-page h1 { margin: 0 0 4px; font-size: 1.4rem; }
+    .settings-page .settings-subtitle { margin: 0 0 24px; color: var(--muted); font-size: 0.9rem; }
     .settings-anchor { position: relative; display: inline-block; margin-right: 8px; }
     .settings-panel {
       position: absolute; top: calc(100% + 8px); right: 0; z-index: 20;
@@ -515,6 +521,7 @@
       const hash = location.hash.replace(/^#/, "") || "/";
       const segs = hash.split("/").filter(Boolean);
       if (segs.length === 0) return { view: "list" };
+      if (segs[0] === "settings") return { view: "settings" };
       if (segs[0] === "new") return { view: "form", mode: "add" };
       if (segs[0] === "contact" && segs[1] && segs[2] === "edit") return { view: "form", mode: "edit", id: decodeURIComponent(segs[1]) };
       if (segs[0] === "contact" && segs[1]) return { view: "detail", id: decodeURIComponent(segs[1]) };
@@ -538,6 +545,7 @@
         if (route.view === "list") await renderList();
         else if (route.view === "detail") await renderDetail(route.id);
         else if (route.view === "form") await renderForm(route.mode, route.id);
+        else if (route.view === "settings") await renderSettings();
       } catch (err) {
         content.innerHTML = '<p class="not-found-banner">' + escapeHtml(err.message || String(err)) + "</p>";
         console.error(err);
@@ -549,11 +557,7 @@
       setTopbar({
         left: '<span class="brand">rolodex</span>',
         right:
-          '<span class="settings-anchor" id="settings-anchor">' +
-          '<button type="button" class="secondary" id="settings-toggle" aria-label="Settings" ' +
-          'aria-expanded="false" aria-controls="settings-panel-wrap">&#9881;</button>' +
-          '<div id="settings-panel-wrap"></div>' +
-          "</span>" +
+          '<button type="button" class="secondary" id="settings-toggle" aria-label="Settings">&#9881;</button>' +
           '<button id="add-top">+ Add contact</button>',
       });
       content.innerHTML =
@@ -576,7 +580,7 @@
         '<div id="list-body"></div>';
 
       document.getElementById("add-top").addEventListener("click", () => navigate("#/new"));
-      wireSettingsPanel();
+      document.getElementById("settings-toggle").addEventListener("click", () => navigate("#/settings"));
 
       const syncStatusEl = document.getElementById("sync-status");
       if (lastSyncMessage) {
@@ -854,40 +858,6 @@
       } catch (err) {
         countEl.textContent = "Failed to load contacts";
         console.error(err);
-      }
-
-      // ---- Follow-up settings popover ------------------------------------
-      // Structurally cloned from wireInteractionsPanel()'s open/close/focus
-      // contract (empty wrapper when closed, form innerHTML when open, focus
-      // moves to the first control on open and back to the toggle button on
-      // any close path) — plus outside-click/Escape dismissal, since this is
-      // a non-modal popover rather than an inline disclosure and needs its
-      // own way to go away without a Cancel click. Nested here (rather than
-      // a top-level function) so it can reach the toggle's followUpOn/
-      // needsFollowUpContacts state and re-run runSearch()/setToggleUi()
-      // after a save, per the design brief's post-save recommendation.
-      function settingsFormHtml(windowDays, graceDays) {
-        return (
-          '<form class="log-interaction-form" id="settings-form" aria-label="Follow-up settings" novalidate>' +
-          '<div class="form-error-banner" id="settings-form-error" hidden></div>' +
-          '<div class="form-field" id="settings-window-field">' +
-          '<label for="settings-window">Follow-up window (days)</label>' +
-          '<input type="number" id="settings-window" min="1" step="1" inputmode="numeric" ' +
-          'value="' + escapeHtml(String(windowDays)) + '" aria-describedby="settings-window-error" />' +
-          '<span class="field-error" id="settings-window-error" hidden>Enter a positive whole number.</span>' +
-          "</div>" +
-          '<div class="form-field" id="settings-grace-field">' +
-          '<label for="settings-grace">Grace period (days)</label>' +
-          '<input type="number" id="settings-grace" min="1" step="1" inputmode="numeric" ' +
-          'value="' + escapeHtml(String(graceDays)) + '" aria-describedby="settings-grace-error" />' +
-          '<span class="field-error" id="settings-grace-error" hidden>Enter a positive whole number.</span>' +
-          "</div>" +
-          '<div class="form-actions">' +
-          '<button type="button" class="secondary" id="settings-cancel">Cancel</button>' +
-          '<button type="submit" id="settings-save">Save</button>' +
-          "</div>" +
-          "</form>"
-        );
       }
 
       // The Google section of the settings popover — a "Reconnect Google"
@@ -1278,6 +1248,30 @@
       }
     }
 
+    function settingsFormHtml(windowDays, graceDays) {
+      return (
+        '<form class="log-interaction-form" id="settings-form" aria-label="Follow-up settings" novalidate>' +
+        '<div class="form-error-banner" id="settings-form-error" hidden></div>' +
+        '<div class="form-field" id="settings-window-field">' +
+        '<label for="settings-window">Follow-up window (days)</label>' +
+        '<input type="number" id="settings-window" min="1" step="1" inputmode="numeric" ' +
+        'value="' + escapeHtml(String(windowDays)) + '" aria-describedby="settings-window-error" />' +
+        '<span class="field-error" id="settings-window-error" hidden>Enter a positive whole number.</span>' +
+        "</div>" +
+        '<div class="form-field" id="settings-grace-field">' +
+        '<label for="settings-grace">Grace period (days)</label>' +
+        '<input type="number" id="settings-grace" min="1" step="1" inputmode="numeric" ' +
+        'value="' + escapeHtml(String(graceDays)) + '" aria-describedby="settings-grace-error" />' +
+        '<span class="field-error" id="settings-grace-error" hidden>Enter a positive whole number.</span>' +
+        "</div>" +
+        '<div class="form-actions">' +
+        '<button type="button" class="secondary" id="settings-cancel">Cancel</button>' +
+        '<button type="submit" id="settings-save">Save</button>' +
+        "</div>" +
+        "</form>"
+      );
+    }
+
     function rowHtml(c) {
       const meta = verdictMeta(c.verdict);
       const next = c.nextStep || "";
@@ -1292,6 +1286,92 @@
         '<td class="next-step" title="' + escapeHtml(next) + '">' + escapeHtml(truncated) + "</td>" +
         "</tr>"
       );
+    }
+
+    // ---- Settings view ----------------------------------------------------
+    // Replaces the old gear-icon popover with a real, navigable screen —
+    // same router/topbar/#content pattern renderList/renderDetail/renderForm
+    // already use, not a separate served page (see the settings-account-
+    // screen epic's design discussion for why). Sections land here one epic
+    // story at a time; today it's Follow-up only, migrated as-is from the
+    // popover's settingsFormHtml() (now top-level, shared).
+    async function renderSettings() {
+      setTopbar({
+        left: '<button class="back-link" id="back-link">&larr; Contacts</button>',
+        right: "",
+      });
+      document.getElementById("back-link").addEventListener("click", () => navigate("#/"));
+
+      content.innerHTML =
+        '<div class="settings-page">' +
+        "<h1>Settings</h1>" +
+        '<p class="settings-subtitle">Follow-up window, appearance, and account settings.</p>' +
+        '<section aria-labelledby="follow-up-heading">' +
+        '<h2 class="settings-section-title" id="follow-up-heading">Follow-up window</h2>' +
+        '<div id="follow-up-section-body">Loading&hellip;</div>' +
+        "</section>" +
+        "</div>";
+
+      let saved = { windowDays: 30, graceDays: 14 };
+      try {
+        saved = await getFollowUpSettings();
+      } catch (err) {
+        console.error(err);
+      }
+
+      const body = document.getElementById("follow-up-section-body");
+      body.innerHTML =
+        settingsFormHtml(saved.windowDays, saved.graceDays) +
+        '<div class="status-line" id="follow-up-save-status" aria-live="polite"></div>';
+
+      const windowInput = document.getElementById("settings-window");
+      const graceInput = document.getElementById("settings-grace");
+      const statusEl = document.getElementById("follow-up-save-status");
+
+      function setStatus(kind, text) {
+        statusEl.className = "status-line" + (kind ? " " + kind : "");
+        statusEl.textContent = text;
+      }
+
+      function validatePositiveInt(input, fieldId, errorId) {
+        const raw = input.value.trim();
+        const n = Number(raw);
+        const valid = raw !== "" && Number.isInteger(n) && n > 0;
+        document.getElementById(fieldId).classList.toggle("invalid", !valid);
+        document.getElementById(errorId).hidden = valid;
+        if (valid) input.removeAttribute("aria-invalid");
+        else input.setAttribute("aria-invalid", "true");
+        return valid ? n : null;
+      }
+
+      document.getElementById("settings-cancel").addEventListener("click", () => {
+        windowInput.value = saved.windowDays;
+        graceInput.value = saved.graceDays;
+        validatePositiveInt(windowInput, "settings-window-field", "settings-window-error");
+        validatePositiveInt(graceInput, "settings-grace-field", "settings-grace-error");
+        setStatus("", "");
+      });
+
+      document.getElementById("settings-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const windowDays = validatePositiveInt(windowInput, "settings-window-field", "settings-window-error");
+        const graceDays = validatePositiveInt(graceInput, "settings-grace-field", "settings-grace-error");
+        if (windowDays === null || graceDays === null) {
+          (windowDays === null ? windowInput : graceInput).focus();
+          return;
+        }
+        const saveBtn = document.getElementById("settings-save");
+        saveBtn.disabled = true;
+        try {
+          await putFollowUpSettings({ windowDays, graceDays });
+          saved = { windowDays, graceDays };
+          setStatus("success", "Saved.");
+        } catch (err) {
+          setStatus("error", "Couldn't save: " + err.message);
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
     }
 
     // ---- Detail view ----------------------------------------------------------
