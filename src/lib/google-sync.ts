@@ -35,6 +35,11 @@ export interface GoogleSync {
    * without saving the new one would spuriously fail the next call's
    * conflict check against Google's now-updated etag. */
   push(c: Contact): Promise<{ resourceName: string; etag?: string }>;
+  /** Deletes a contact on Google's side by resourceName. Used by
+   * deleteContactEverywhere() below when a local delete's contact was
+   * linked to Google — never called directly against a contact that
+   * doesn't have a googleResourceName. */
+  deleteContact(resourceName: string): Promise<void>;
 }
 
 /** SecretsAdapter key for the pasted Google OAuth client credentials, stored
@@ -118,6 +123,10 @@ export interface PeopleApiClient {
       updatePersonFields: string;
       requestBody: PersonLite;
     }): Promise<{ data: PersonLite }>;
+    /** Real googleapis method is people.people.deleteContact — params shape
+     * confirmed against node_modules/googleapis/build/src/apis/people/v1.d.ts
+     * (Params$Resource$People$Deletecontact: { resourceName?: string }). */
+    deleteContact(params: { resourceName: string }): Promise<unknown>;
   };
 }
 
@@ -376,6 +385,18 @@ export function createGoogleSync(opts: CreateGoogleSyncOptions = {}): GoogleSync
         throw err;
       }
     },
+    async deleteContact(resourceName) {
+      const client = await getAuthenticatedClient(secrets, createPeopleClient);
+      try {
+        await client.people.deleteContact({ resourceName });
+      } catch (err) {
+        // Already-gone is a successful outcome for a delete, not a failure
+        // to surface — the caller wanted this resourceName to not exist on
+        // Google, and it doesn't.
+        if (httpStatusOf(err) === 404) return;
+        throw err;
+      }
+    },
   };
 }
 
@@ -454,4 +475,55 @@ export function applyPullToStore(pulled: Contact[], store: UpsertableStore): App
     else created++;
   }
   return { pulled: pulled.length, created, updated };
+}
+
+/** Minimal shape this needs from Store — get()+delete(), so tests can pass
+ * a real Store or a hand-rolled fake, matching UpsertableStore's shape
+ * above. */
+export interface DeletableStore {
+  get(id: string): Contact | undefined;
+  delete(id: string): boolean;
+}
+
+export interface DeleteContactSummary {
+  /** False only when no contact with this id existed locally to begin with
+   * — the Google side is never even attempted in that case. */
+  deleted: boolean;
+  /** Set when the local delete succeeded but the best-effort Google-side
+   * delete failed — the local delete is NOT rolled back for this (data the
+   * user asked to remove locally is removed locally regardless), but the
+   * caller gets the failure to decide how to surface it (see the
+   * google-two-way-sync epic's design discussion, decision 4). */
+  googleDeleteError?: string;
+}
+
+/**
+ * Deletes a contact locally, then — only if it was actually linked to
+ * Google and the local delete genuinely happened — best-effort deletes it
+ * on Google's side too. The single place both the HTTP DELETE route and the
+ * rolodex_delete MCP tool call, so this exact contract (local delete always
+ * wins, Google delete is best-effort and non-blocking, a 404-already-gone
+ * on Google's side is not an error) lives in one place instead of two
+ * drifting copies.
+ */
+export async function deleteContactEverywhere(
+  id: string,
+  store: DeletableStore,
+  google: Pick<GoogleSync, "deleteContact">,
+): Promise<DeleteContactSummary> {
+  const contact = store.get(id);
+  if (!contact) return { deleted: false };
+
+  const googleResourceName = contact.googleResourceName;
+  const deleted = store.delete(id);
+
+  if (deleted && googleResourceName) {
+    try {
+      await google.deleteContact(googleResourceName);
+    } catch (err) {
+      return { deleted, googleDeleteError: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  return { deleted };
 }

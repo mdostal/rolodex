@@ -167,6 +167,31 @@ describe("rolodex_delete", () => {
     const result = await handlers.rolodex_delete({ contactId: "does-not-exist" });
     expect(result.isError).toBe(true);
   });
+
+  it("deletes locally (deleted:true) and surfaces a googleDeleteWarning when the linked Google delete fails", async () => {
+    // In-memory secrets, deliberately unseeded — google.deleteContact()
+    // will genuinely fail with "Google isn't connected yet", the same
+    // real, naturally-occurring failure src/shell/server.test.ts's
+    // equivalent DELETE-route test exercises. Explicit google injection
+    // here (not the module-level `handlers`) so this never touches the
+    // real macOS keychain the default createGoogleSync() would reach for.
+    const google = createGoogleSync({ secrets: createInMemorySecretsAdapter() });
+    ({ handlers } = createRolodexMcpServer({ store, google }));
+
+    const contact = parseResult(
+      await handlers.rolodex_upsert({ name: "Ada Lovelace" }),
+    ) as { id: string };
+    // googleResourceName isn't settable via rolodex_upsert's own args (by
+    // design — see its zod schema), so it's set directly on the row the
+    // same way a real sync would have.
+    store.upsert({ ...store.get(contact.id)!, googleResourceName: "people/fake123" });
+
+    const result = await handlers.rolodex_delete({ contactId: contact.id });
+    const payload = parseResult(result) as { deleted: boolean; googleDeleteWarning?: string };
+    expect(payload.deleted).toBe(true);
+    expect(payload.googleDeleteWarning).toMatch(/isn't connected/);
+    expect(store.get(contact.id)).toBeUndefined();
+  });
 });
 
 describe("rolodex_sync_google", () => {
@@ -216,6 +241,9 @@ describe("rolodex_sync_google", () => {
         updateContact: () => {
           throw new Error("not used in this test");
         },
+        deleteContact: () => {
+          throw new Error("not used in this test");
+        },
       },
     };
     const google = createGoogleSync({ secrets, createPeopleClient: () => fakeClient });
@@ -251,6 +279,9 @@ describe("rolodex_sync_google", () => {
           updateContact: () => {
             throw new Error("not used in this test");
           },
+          deleteContact: () => {
+            throw new Error("not used in this test");
+          },
         },
       }),
     });
@@ -271,6 +302,9 @@ describe("rolodex_sync_google", () => {
         return [];
       },
       async push() {
+        throw new Error("should never be called");
+      },
+      async deleteContact() {
         throw new Error("should never be called");
       },
     };

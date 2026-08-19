@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { Store } from "../lib/store.js";
-import { applyPullToStore, createGoogleSync, type GoogleSync } from "../lib/google-sync.js";
+import { applyPullToStore, createGoogleSync, deleteContactEverywhere, type GoogleSync } from "../lib/google-sync.js";
 import type { Contact, Interaction, Verdict } from "../lib/types.js";
 
 /**
@@ -251,8 +251,16 @@ export function createRolodexMcpServer(
     if (!existing) {
       return errorResult(`no contact found with id ${args.contactId}`);
     }
-    store.delete(args.contactId);
-    return textResult({ deleted: true, id: args.contactId, name: existing.name });
+    const summary = await deleteContactEverywhere(args.contactId, store, google);
+    // Unlike the HTTP DELETE route's 204 (which genuinely can't carry a
+    // body), this response has room — surface a best-effort Google-delete
+    // failure directly in it rather than only logging server-side.
+    return textResult({
+      deleted: true,
+      id: args.contactId,
+      name: existing.name,
+      ...(summary.googleDeleteError ? { googleDeleteWarning: summary.googleDeleteError } : {}),
+    });
   });
 
   server.tool(
