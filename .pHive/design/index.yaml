@@ -1,5 +1,15 @@
-updated_at: "2026-08-14T00:00:00Z"
+updated_at: "2026-08-19T00:00:00Z"
 briefs:
+  - topic: "settings-account-screen"
+    surface_kind: "screen"
+    brief_path: ".pHive/design/settings-account-screen/brief.md"
+    wireframe_path: ".pHive/design/settings-account-screen/wireframe.html"
+    export_paths: []
+    rendered_review: "https://claude.ai/code/artifact/1f96e8fc-3b07-4ae5-8ef4-ecb4a97cfbbb"
+    selected_rendition: 1
+    source: "plan-delegated"
+    created_at: "2026-08-19T00:00:00Z"
+    linked_story: []
   - topic: "app-icon"
     surface_kind: "component"
     brief_path: ".pHive/design/app-icon/brief.md"
