@@ -242,12 +242,6 @@
     .log-interaction-form textarea { min-height: 64px; resize: vertical; }
     .log-interaction-form .form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
-    /* Settings popover — anchored under-right of the gear button, reusing
-       .log-interaction-form's border/padding/fieldset styling as-is; this
-       pair is the one CSS addition the design brief allows for positioning
-       the popover itself. Holds two clearly-separated sections (Follow-up
-       settings, Google) — .settings-panel positions the whole popover, each
-       section keeps its own .log-interaction-form card look. */
     /* Settings screen (#/settings) — a real page, not a popover; sections
        reuse .log-interaction-form's card look and .settings-section-title
        for headings, same as the popover did. */
@@ -270,13 +264,6 @@
     .backend-toggle { display: flex; gap: 8px; }
     .backend-toggle .backend-option { flex: 1; padding: 6px 10px; }
     .backend-toggle .backend-option[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
-    .settings-anchor { position: relative; display: inline-block; margin-right: 8px; }
-    .settings-panel {
-      position: absolute; top: calc(100% + 8px); right: 0; z-index: 20;
-      width: 280px; margin-bottom: 0; background: var(--bg);
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-    }
-    .settings-panel .log-interaction-form:last-child { margin-bottom: 0; }
     .settings-section-title {
       font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em;
       color: var(--muted); margin: 0 0 8px;
@@ -571,7 +558,18 @@
 
     const content = document.getElementById("content");
 
+    // Each render*() function's own fetches keep running even after the
+    // user navigates away (renderSettings() in particular awaits several
+    // sequential requests, giving a fast back-click plenty of time to land
+    // first) — nothing cancels an in-flight render. Without this counter, a
+    // stale render's error handler landing after a newer render already
+    // succeeded would clobber the fresh, correct DOM with an error banner
+    // (both write to the same shared `content` node). Bumped once per
+    // render() call; a render only touches `content` on failure if it's
+    // still the most recent one.
+    let renderGeneration = 0;
     async function render() {
+      const myGeneration = ++renderGeneration;
       const route = parseRoute();
       try {
         if (route.view === "list") await renderList();
@@ -579,6 +577,7 @@
         else if (route.view === "form") await renderForm(route.mode, route.id);
         else if (route.view === "settings") await renderSettings();
       } catch (err) {
+        if (myGeneration !== renderGeneration) return;
         content.innerHTML = '<p class="not-found-banner">' + escapeHtml(err.message || String(err)) + "</p>";
         console.error(err);
       }
@@ -751,8 +750,10 @@
       // parallel with the normal contacts fetch, below) so the button's count
       // label is accurate before the user ever clicks it; toggling ON reuses
       // that same snapshot rather than re-fetching, since nothing changes it
-      // except a settings save (handled explicitly in wireSettingsPanel) or a
-      // fresh renderList() (e.g. navigating away and back, or "Sync now").
+      // except a fresh renderList() (e.g. navigating away and back, or "Sync
+      // now") — a Follow-up window/grace save on the Settings screen only
+      // takes effect the next time renderList() itself runs, same as any
+      // other navigation back to the list.
       let followUpOn = false;
       let needsFollowUpContacts = null;
 
@@ -892,169 +893,6 @@
         console.error(err);
       }
 
-      function wireSettingsPanel() {
-        const anchor = document.getElementById("settings-anchor");
-        const toggleBtn = document.getElementById("settings-toggle");
-        const wrap = document.getElementById("settings-panel-wrap");
-        let panelOpen = false;
-        // The AbortController for an in-flight "Reconnect Google" request, if
-        // any. Tracked here (not just inside runReconnect()'s own closure) so
-        // closePanel() can abort it too — otherwise dismissing the popover
-        // (outside click, Escape, hashchange) while a connect is in flight
-        // would both leave the server's local OAuth listener open for the
-        // full 120s timeout AND leave the request's then/catch handlers
-        // trying to update DOM nodes that wrap.innerHTML = "" just removed.
-        let reconnectController = null;
-
-        function onDocumentMousedown(e) {
-          if (panelOpen && !anchor.contains(e.target)) {
-            // Prevent the browser's native default mousedown action (which
-            // shifts focus to <body> for clicks on non-focusable elements)
-            // from clobbering the explicit toggleBtn.focus() in closePanel().
-            // That default action runs AFTER this synchronous handler
-            // returns, so without preventDefault() here, focus would land on
-            // <body> instead of the gear button.
-            e.preventDefault();
-            closePanel();
-          }
-        }
-        function onDocumentKeydown(e) {
-          if (panelOpen && e.key === "Escape") {
-            e.preventDefault();
-            closePanel();
-          }
-        }
-        function onHashChange() {
-          closePanel();
-        }
-
-        function closePanel() {
-          if (!panelOpen) return;
-          panelOpen = false;
-          if (reconnectController) {
-            reconnectController.abort();
-            reconnectController = null;
-          }
-          wrap.innerHTML = "";
-          toggleBtn.setAttribute("aria-expanded", "false");
-          document.removeEventListener("mousedown", onDocumentMousedown);
-          document.removeEventListener("keydown", onDocumentKeydown);
-          window.removeEventListener("hashchange", onHashChange);
-          toggleBtn.focus();
-        }
-
-        function validatePositiveInt(input, fieldId, errorId) {
-          const raw = input.value.trim();
-          const n = Number(raw);
-          const valid = raw !== "" && Number.isInteger(n) && n > 0;
-          document.getElementById(fieldId).classList.toggle("invalid", !valid);
-          document.getElementById(errorId).hidden = valid;
-          if (valid) input.removeAttribute("aria-invalid");
-          else input.setAttribute("aria-invalid", "true");
-          return valid ? n : null;
-        }
-
-        function wireForm() {
-          const form = document.getElementById("settings-form");
-          const windowInput = document.getElementById("settings-window");
-          const graceInput = document.getElementById("settings-grace");
-
-          document.getElementById("settings-cancel").addEventListener("click", () => closePanel());
-
-          form.addEventListener("submit", async (e) => {
-            e.preventDefault();
-
-            const windowDays = validatePositiveInt(windowInput, "settings-window-field", "settings-window-error");
-            const graceDays = validatePositiveInt(graceInput, "settings-grace-field", "settings-grace-error");
-            if (windowDays === null || graceDays === null) {
-              (windowDays === null ? windowInput : graceInput).focus();
-              return;
-            }
-
-            const errorBanner = document.getElementById("settings-form-error");
-            const saveBtn = document.getElementById("settings-save");
-            saveBtn.disabled = true;
-            try {
-              await putFollowUpSettings({ windowDays, graceDays });
-              errorBanner.hidden = true;
-              closePanel();
-              // Recommendation beyond the bare acceptance criteria: if the
-              // follow-up toggle is currently ON, the visible list was built
-              // from the OLD window/grace values — re-fetch immediately so it
-              // (and the count badge) reflect what was just saved, instead of
-              // waiting for the next toggle click.
-              if (followUpOn) {
-                try {
-                  needsFollowUpContacts = await getNeedsFollowUp();
-                } catch (err) {
-                  console.error(err);
-                }
-                setToggleUi();
-                runSearch(searchInput.value);
-              }
-            } catch (err) {
-              // Save fails: keep the panel open with an inline error banner,
-              // preserving the user's edits (matches the log-interaction
-              // form's failure behavior).
-              errorBanner.hidden = false;
-              errorBanner.textContent = "Couldn't save: " + err.message;
-            } finally {
-              saveBtn.disabled = false;
-            }
-          });
-        }
-
-        function wireAppearanceSection(theme, iconId) {
-          // Popover-era body intentionally emptied — the real implementation
-          // now lives at top level (see near settingsFormHtml) and is shared
-          // with renderSettings(). This function is dead (wireSettingsPanel
-          // is never called) and removed entirely in story 6.
-        }
-
-        async function openPanel() {
-          panelOpen = true;
-          toggleBtn.setAttribute("aria-expanded", "true");
-          let current = { windowDays: 30, graceDays: 14 };
-          let appearance = { theme: "default", iconId: 6 };
-          let autostart = { supported: false, enabled: false };
-          try {
-            current = await getFollowUpSettings();
-          } catch (err) {
-            console.error(err);
-          }
-          try {
-            appearance = await getAppearanceSettings();
-          } catch (err) {
-            console.error(err);
-          }
-          try {
-            autostart = await getAutostartSettings();
-          } catch (err) {
-            console.error(err);
-          }
-          wrap.innerHTML =
-            '<div class="settings-panel" id="settings-panel">' +
-            '<h3 class="settings-section-title">Follow-up settings</h3>' +
-            settingsFormHtml(current.windowDays, current.graceDays) +
-            appearanceSectionHtml(appearance.theme, appearance.iconId) +
-            (autostart.supported ? autostartSectionHtml(autostart.enabled) : "") +
-            googleSectionHtml() +
-            "</div>";
-          wireForm();
-          if (autostart.supported) wireAutostartSection();
-          wireAppearanceSection(appearance.theme, appearance.iconId);
-          wireGoogleSection();
-          document.getElementById("settings-window").focus();
-          document.addEventListener("mousedown", onDocumentMousedown);
-          document.addEventListener("keydown", onDocumentKeydown);
-          window.addEventListener("hashchange", onHashChange);
-        }
-
-        toggleBtn.addEventListener("click", () => {
-          if (panelOpen) closePanel();
-          else openPanel();
-        });
-      }
     }
 
     function settingsFormHtml(windowDays, graceDays) {

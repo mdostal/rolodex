@@ -80,11 +80,11 @@ decision, not a gap.
 
 ### The shape
 - **You own the data** — SQLite, stored at `~/.local/share/rolodex/rolodex.db`
-  by default (or wherever the wizard's Database screen points it, or
-  `ROLODEX_DB`). Export any time; no lock-in. Full-text search (FTS5) needs
-  **Node 23+**; on Node 22.x it degrades gracefully to a slower but fully
-  functional LIKE-based scan — contacts and interactions work identically
-  either way.
+  by default (changeable any time from Settings, not just during first-run
+  setup, or via `ROLODEX_DB`). Export any time; no lock-in. Full-text search
+  (FTS5) needs **Node 23+**; on Node 22.x it degrades gracefully to a slower
+  but fully functional LIKE-based scan — contacts and interactions work
+  identically either way.
 - **Google Contacts sync, two-way** — pull, or push every local contact back
   to Google (create new, update linked ones), deduped by resource name/email.
   A real edit conflict (the contact changed on Google since your last sync)
@@ -99,6 +99,10 @@ decision, not a gap.
 - **Launch at login** — the packaged app (not the dev server) has a native
   "start at login" toggle in Settings, backed by the OS's own login-item
   mechanism, not a launchd/systemd script bolted on from outside.
+- **A real Settings screen** — follow-up window, appearance, autostart,
+  Google account status, database location, and secrets backend (Keychain
+  vs Portunus, when available) all live in one place, reachable any time
+  from the gear icon — not just during first-run setup.
 
 ### Relationship model
 Each contact carries: `org`, `role`, how you `met` them, `what` they do, the
