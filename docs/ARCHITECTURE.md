@@ -285,7 +285,8 @@ implementation.
 ```ts
 export interface GoogleSync {
   pull(): Promise<Contact[]>;
-  push(c: Contact): Promise<{ resourceName: string }>; // stub — see Remaining Gaps
+  push(c: Contact): Promise<{ resourceName: string; etag?: string }>;
+  deleteContact(resourceName: string): Promise<void>;
 }
 export function createGoogleSync(opts?: CreateGoogleSyncOptions): GoogleSync;
 ```
@@ -299,15 +300,46 @@ export function createGoogleSync(opts?: CreateGoogleSyncOptions): GoogleSync;
    `people.connections.list`, mapping each `resourceName` to
    `Contact.googleResourceName` for idempotent re-sync.
 
-**One-shot pull only, today.** `POST /api/sync/google` on the shell server
-calls `pull()`, then merges each pulled contact with any existing local match
-(by `googleResourceName`, then email) before handing it to `Store.upsert()` —
-this merge (`mergeLocalOnlyFields()`) is what actually protects
+**Real two-way sync.** `POST /api/sync/google` on the shell server (and
+`rolodex_sync_google`'s `direction: "pull"`) calls `pull()`, then merges each
+pulled contact with any existing local match (by `googleResourceName`, then
+email) before handing it to `Store.upsert()` — this merge
+(`mergeLocalOnlyFields()`) is what actually protects
 verdict/angle/nextStep/tags/met/what/createdAt from being clobbered by a
 resync; `Store.upsert()` itself has no notion of "leave this column alone"
-and always writes every field it's given. `push()` remains an explicit stub
-(`throw new Error("not implemented")`) — two-way sync is out of scope for
-this epic.
+and always writes every field it's given.
+
+`push()` is real: `contactToPersonBody()` maps a `Contact` down to only the
+fields Google People actually has (name/org/role/email/phone — local-only
+fields are never sent), then either `people.createContact` (no
+`googleResourceName` yet) or `people.updateContact` (already linked), and the
+returned `resourceName`/`etag` are written back onto the local row.
+Conflict detection rides Google's own optimistic-concurrency mechanism: every
+pulled/pushed contact's `etag` is stored in `Contact.googleEtag`, and an
+`updateContact` call sends it back — if the contact changed on Google since
+the last pull, the People API responds `400 failedPrecondition` and `push()`
+turns that into a clear, contact-named error (`"<name>" changed on Google
+since your last sync — pull, then push again`) rather than silently
+overwriting the remote edit. A stale link (`updateContact` 404s — deleted on
+Google's side) falls back to `createContact` rather than treating the row as
+orphaned. `pushAllToGoogle()` (`src/lib/google-sync.ts`) drives this across
+every local contact, isolating each contact's failure into a per-contact
+`errors` array instead of aborting the whole batch — the shell server exposes
+this as its own explicit `POST /api/sync/google/push` action (a "Push to
+Google" button, separate from "Sync now"), and `rolodex_sync_google`'s
+`direction: "push"`/`"both"` call the same function.
+
+**Deletes are intentionally asymmetric.** `Store.delete()` plus
+`deleteContactEverywhere()` (`src/lib/google-sync.ts`) delete a contact
+locally, then best-effort delete it on Google too (a 404 there — already
+gone — is treated as success, not an error); a failure on the Google side
+does not roll back the local delete, it's surfaced to the caller instead
+(HTTP: `console.warn`; MCP: a `googleDeleteWarning` field in the response).
+The reverse never happens automatically: a contact deleted on Google's side
+is simply not returned by a future `pull()` — nothing removes it locally.
+Auto-propagating a remote delete into a silent local delete was judged too
+destructive for a personal contacts store (see the `google-two-way-sync`
+epic's design discussion for the reasoning).
 
 **Real OAuth exchange is built** (`src/lib/google-oauth-flow.ts`,
 `connectGoogleAccount()`) — see "First-run setup wizard" above for the full
@@ -318,16 +350,17 @@ reconnecting), not because the exchange doesn't exist.
 ## MCP surface (`src/mcp/server.ts`) — secondary, wired to the real logic
 
 Stdio MCP server exposing `rolodex_upsert`, `rolodex_search`,
-`rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`. Every
-tool is wired to the same `Store`/`GoogleSync` logic the standalone app
-uses — JSON-stringified responses, `isError: true` on any thrown error
-instead of crashing the stdio process, and `rolodex_sync_google`'s `push`
-direction returning a clear not-implemented response rather than a silent
-no-op (two-way sync is still a genuine gap, see below). This remains a
-secondary integration surface, not the primary way to use rolodex — the
-standalone app is that. Run it with `npm run dev`. If you use Claude Code,
-`.claude/skills/rolodex/SKILL.md` teaches an agent how to use these tools
-well.
+`rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`, and
+`rolodex_delete`. Every tool is wired to the same `Store`/`GoogleSync` logic
+the standalone app uses — JSON-stringified responses, `isError: true` on any
+thrown error instead of crashing the stdio process. `rolodex_sync_google`'s
+`direction: "pull" | "push" | "both"` is real two-way sync (see "Google
+sync" above); `rolodex_delete` is destructive and permanent, guarded in its
+tool description to only fire on an explicit, unambiguous user request. This
+remains a secondary integration surface, not the primary way to use
+rolodex — the standalone app is that. Run it with `npm run dev`. If you use
+Claude Code, `.claude/skills/rolodex/SKILL.md` teaches an agent how to use
+these tools well.
 
 ## Single-user, no in-app login — deliberate, not an oversight
 
@@ -373,7 +406,8 @@ normal filesystem permissions.
 ## Build-out status
 
 Done (across `standalone-app-foundation`, `followups-view`,
-`mcp-tool-bodies`, and `google-oauth-flow`):
+`mcp-tool-bodies`, `google-oauth-flow`, `electron-packaging`, and
+`google-two-way-sync`):
 - [x] Desktop shell + local server, bound to loopback, real `Store` wired in.
 - [x] `Store` bodies: `list`, `upsert`, `get`, `setVerdict`, `setNextStep`,
       `logInteraction`, `listInteractions`, `search` (FTS5 + LIKE fallback),
@@ -387,9 +421,15 @@ Done (across `standalone-app-foundation`, `followups-view`,
 - [x] A real Google OAuth 2.0 consent flow (loopback IP address flow,
       `src/lib/google-oauth-flow.ts`), reachable from the wizard and from a
       "Reconnect Google" action in Settings, with a working Cancel button.
-- [x] One-shot Google Contacts pull, with local-only-fields-survive-sync
-      guarantee, and a refreshed token now persisted back to the keychain.
-- [x] All 5 MCP tools wired to the same real `Store`/`GoogleSync` logic.
+- [x] Real two-way Google Contacts sync (`google-two-way-sync` epic):
+      `push()`/`pushAllToGoogle()` (create-or-update, etag-based conflict
+      detection, per-contact error isolation), `Store.delete()` +
+      best-effort delete-on-Google, all wired through the shell UI ("Push to
+      Google" button), MCP (`rolodex_sync_google` push/both,
+      `rolodex_delete`), and the CLI — alongside the pre-existing pull, still
+      with the local-only-fields-survive-sync guarantee, and a refreshed
+      token persisted back to the keychain.
+- [x] All 6 MCP tools wired to the same real `Store`/`GoogleSync` logic.
 - [x] A third plain CLI surface (`rolodex <command>`) wrapping the same
       handlers, for non-MCP tooling/scripts — including a fix for the
       `isMainModule` symlink bug that made a global `npm link`/`npm i -g`
@@ -419,8 +459,6 @@ Remaining gaps:
       launched and smoke-tested so far (no cross-build tooling on the
       development machine); this resolves the first time the release
       workflow runs on a real pushed tag.
-- [ ] Google `push()` / full two-way sync — pull-only today; the OAuth
-      exchange itself is real, `push()` remains an explicit stub.
 - [ ] Enrichment-on-add as a *product feature* (a built-in public-info
       lookup) is still deferred. What exists today is a skill-level
       reconciliation instead: `.claude/skills/rolodex/SKILL.md` tells an

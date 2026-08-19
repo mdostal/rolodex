@@ -6,7 +6,7 @@ description: Use when the user asks you to look up, add, or update a contact in 
 # rolodex
 
 rolodex is the user's own local, single-user relationship/contacts manager
-(SQLite-backed, with an optional one-way pull from Google Contacts). It is
+(SQLite-backed, with an optional two-way Google Contacts sync). It is
 not a hosted CRM — every install is one person's own data, on their own
 machine. Repo: https://github.com/mdostal/rolodex
 
@@ -43,10 +43,21 @@ a match; if you don't have real data, say so:
   meeting/note) against a contact. Only log something the user actually
   describes as having happened — not something merely planned or
   discussed.
-- **`rolodex_sync_google`** — one-way pull from the user's Google
-  Contacts into rolodex. `direction: "push"` is not implemented. If asked
-  for two-way sync or to push local edits back to Google, say plainly
-  that isn't supported yet — don't imply it happened.
+- **`rolodex_sync_google`** — real two-way sync with the user's Google
+  Contacts. `direction: "pull"` brings Google's contacts in;
+  `"push"` sends every local contact to Google (creating new ones,
+  updating linked ones); `"both"` (the default) does pull then push. A
+  genuine edit conflict (the contact changed on Google since the last
+  sync) surfaces as a per-contact error in the result rather than
+  silently overwriting either side — don't tell the user it synced clean
+  if the result contains errors.
+- **`rolodex_delete`** — permanently deletes a contact (and its
+  interaction history) locally, and best-effort on Google too if it was
+  linked. There is no undo. Only call this on an explicit, unambiguous
+  delete/remove request from the user — never as a side effect of a
+  search or an update, and never as your own inference (if they just
+  want it deprioritized, that's `verdict`, not deletion). If you're
+  unsure which contact they mean, ask first.
 
 ## Call notes / meeting transcripts with multiple people
 

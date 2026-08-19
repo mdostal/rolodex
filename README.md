@@ -85,13 +85,15 @@ decision, not a gap.
   **Node 23+**; on Node 22.x it degrades gracefully to a slower but fully
   functional LIKE-based scan — contacts and interactions work identically
   either way.
-- **Google Contacts sync** — one-shot pull today (push/two-way is a planned
-  follow-up), deduped by resource name/email. Verdict/angle/next-step are
-  local-only and always survive a sync. Connects through a real OAuth 2.0
-  consent flow in your own browser (Google's current "loopback" mechanism
-  for a desktop app), with the resulting token — and every later refresh —
-  stored via the OS keychain (`SecretsAdapter`) and never an env var, log,
-  or file.
+- **Google Contacts sync, two-way** — pull, or push every local contact back
+  to Google (create new, update linked ones), deduped by resource name/email.
+  A real edit conflict (the contact changed on Google since your last sync)
+  is reported clearly rather than silently overwritten. Verdict/angle/
+  next-step are local-only and always survive a sync. Connects through a
+  real OAuth 2.0 consent flow in your own browser (Google's current
+  "loopback" mechanism for a desktop app), with the resulting token — and
+  every later refresh — stored via the OS keychain (`SecretsAdapter`) and
+  never an env var, log, or file.
 - **Search + interaction logging** — find a contact by name/org/what-they-do/
   angle/tags, and log calls/emails/meetings against them.
 - **Launch at login** — the packaged app (not the dev server) has a native
@@ -106,21 +108,20 @@ the full touch history per contact.
 
 ## MCP server (secondary integration surface)
 `src/mcp/server.ts` is a stdio MCP server exposing `rolodex_upsert`,
-`rolodex_search`, `rolodex_followups`, `rolodex_log_interaction`, and
-`rolodex_sync_google` — add it to **any MCP-compatible agent host** (Claude
-Desktop, Claude Code, or your own harness — this is the standard
-`@modelcontextprotocol/sdk` stdio transport, nothing Claude-specific) and
-the agent has a real rolodex it can read, search, and update. Every tool's
-own description carries the guardrails an agent needs (search before
-creating, never fabricate a match, `push` isn't implemented) directly in
-the MCP protocol response — not tucked away in a Claude-specific file — so
-this works the same regardless of which host is calling it. Every tool is
-wired to the same `Store`/`GoogleSync` logic the standalone app uses —
-verdict/angle/next-step stay local-only through a sync, and
-`rolodex_sync_google`'s `push` direction returns a clear not-implemented
-error rather than a silent no-op (two-way sync is still a planned
-follow-up). This remains a secondary integration surface, not the primary
-way to use rolodex — the standalone app is that.
+`rolodex_search`, `rolodex_followups`, `rolodex_log_interaction`,
+`rolodex_sync_google`, and `rolodex_delete` — add it to **any MCP-compatible
+agent host** (Claude Desktop, Claude Code, or your own harness — this is the
+standard `@modelcontextprotocol/sdk` stdio transport, nothing
+Claude-specific) and the agent has a real rolodex it can read, search, and
+update. Every tool's own description carries the guardrails an agent needs
+(search before creating, never fabricate a match, delete is destructive and
+permanent) directly in the MCP protocol response — not tucked away in a
+Claude-specific file — so this works the same regardless of which host is
+calling it. Every tool is wired to the same `Store`/`GoogleSync` logic the
+standalone app uses — verdict/angle/next-step stay local-only through a
+sync, and `rolodex_sync_google`'s `direction: "pull" | "push" | "both"` is
+real two-way sync, not a stub. This remains a secondary integration surface,
+not the primary way to use rolodex — the standalone app is that.
 
 Run it directly with `npm run dev`, or point any MCP host's config at it:
 
@@ -154,7 +155,8 @@ rolodex upsert --name "Ezra Cohen" --org "Fieldnote Labs" --role Founder --verdi
 rolodex search "Fieldnote"
 rolodex log <contactId> "Had a work call, liked him a lot." --channel call
 rolodex followups
-rolodex sync-google --direction pull
+rolodex sync-google --direction both
+rolodex delete <contactId>
 rolodex --help
 ```
 
@@ -168,15 +170,15 @@ npm run build        # compile to dist/
 ## Status
 `v0.4.0` — the standalone app is the primary, working surface: shell +
 server, setup wizard, contact CRUD, search, interaction logging, a real
-Google Contacts connect-and-pull flow, and a "who's gone cold" follow-up
-view all work end to end. The MCP server's tool bodies are wired to that
-same real logic, and a plain CLI (`rolodex <command>`) wraps the same
-handlers for non-MCP tooling. The app also packages as a real installable
-Electron desktop app for macOS/Windows/Linux (unsigned for now), with a
+two-way Google Contacts sync, and a "who's gone cold" follow-up view all
+work end to end. The MCP server's tool bodies are wired to that same real
+logic, and a plain CLI (`rolodex <command>`) wraps the same handlers for
+non-MCP tooling. The app also packages as a real installable Electron
+desktop app for macOS/Windows/Linux (unsigned for now), with a
 tag-triggered CI workflow publishing releases. See
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture
-and the list of remaining gaps (Google push/two-way sync, enrichment-on-add
-as a built-in feature, code signing/notarization, an auto-updater).
+and the list of remaining gaps (enrichment-on-add as a built-in feature,
+code signing/notarization, an auto-updater).
 
 A future Pantheon plugin tie-in exists only as a dormant, unwired stub —
 see [`docs/PANTHEON.md`](docs/PANTHEON.md). Rolodex has zero Pantheon
