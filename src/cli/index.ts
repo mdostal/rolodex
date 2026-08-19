@@ -44,7 +44,11 @@ Commands:
              --at <ISO-8601 timestamp>   defaults to now
 
   sync-google
-             One-way pull from Google Contacts (push is not implemented)
+             Two-way sync with Google Contacts. pull brings Google's
+             contacts in; push sends every local contact to Google
+             (per-contact failures — e.g. a real conflict — are reported
+             in the result's errors array, not fatal to the batch); both
+             runs pull then push and returns { pull, push }.
              --direction <pull|push|both>   defaults to both
 
   delete <contactId>

@@ -423,6 +423,7 @@
         body: JSON.stringify({ nextStep }),
       });
     const syncGoogle = () => api("/api/sync/google", { method: "POST" });
+    const pushGoogle = () => api("/api/sync/google/push", { method: "POST" });
     const searchContacts = (q) => api("/api/contacts/search?q=" + encodeURIComponent(q));
     const getNeedsFollowUp = () => api("/api/contacts/needs-follow-up");
     const getFollowUpSettings = () => api("/api/settings/follow-up");
@@ -567,6 +568,7 @@
         "</div>" +
         '<button type="button" class="secondary" id="followup-toggle" aria-pressed="false">Needs follow-up</button>' +
         '<button type="button" class="secondary" id="sync-now">Sync now</button>' +
+        '<button type="button" class="secondary" id="push-google">Push to Google</button>' +
         "</div>" +
         "</div>" +
         '<div id="result-summary" aria-live="polite"></div>' +
@@ -595,6 +597,41 @@
         } catch (err) {
           syncStatusEl.className = "sync-status sync-error";
           syncStatusEl.textContent = "Sync failed: " + err.message;
+          btn.disabled = false;
+        }
+      });
+      document.getElementById("push-google").addEventListener("click", async () => {
+        // Push is the more consequential direction — it creates/overwrites
+        // data on the owner's real Google account — so it gets its own
+        // confirmation, unlike the non-destructive "Sync now" pull.
+        if (!confirm("Push every local contact to Google Contacts? This may create or overwrite contacts there.")) return;
+        const btn = document.getElementById("push-google");
+        btn.disabled = true;
+        syncStatusEl.className = "sync-status";
+        syncStatusEl.textContent = "Pushing to Google Contacts…";
+        try {
+          const result = await pushGoogle();
+          let message =
+            "Pushed " + result.pushed + " contact" + (result.pushed === 1 ? "" : "s") +
+            " to Google (" + result.created + " new, " + result.updated + " updated).";
+          if (result.errors.length) {
+            message += " " + result.errors.length + " failed — see below.";
+          }
+          lastSyncMessage = message;
+          await renderList();
+          if (result.errors.length) {
+            syncStatusEl.className = "sync-status sync-error";
+            syncStatusEl.textContent =
+              "Some contacts couldn't be pushed: " +
+              // Assigned via .textContent below, not innerHTML — no
+              // escapeHtml() needed here (it would double-escape entities);
+              // .textContent never interprets its value as markup.
+              result.errors.map((e) => e.name + " (" + e.error + ")").join("; ");
+          }
+        } catch (err) {
+          syncStatusEl.className = "sync-status sync-error";
+          syncStatusEl.textContent = "Push failed: " + err.message;
+        } finally {
           btn.disabled = false;
         }
       });

@@ -527,3 +527,49 @@ export async function deleteContactEverywhere(
 
   return { deleted };
 }
+
+export interface PushAllSummary {
+  /** created + updated — every contact push() actually succeeded for. */
+  pushed: number;
+  created: number;
+  updated: number;
+  /** Per-contact failures (e.g. the etag-conflict error push() throws) —
+   * one bad contact never aborts the rest of the batch. Empty on a fully
+   * clean run. */
+  errors: { contactId: string; name: string; error: string }[];
+}
+
+/** Minimal shape this needs from Store — list()+upsert(), matching
+ * UpsertableStore's shape above (a real Store already satisfies both). */
+export type PushableStore = UpsertableStore;
+
+/**
+ * Pushes every local contact to Google, one at a time — sequentially, not
+ * concurrently, per Google's own guidance for mutate requests against the
+ * same user (see the google-two-way-sync epic's design discussion). Each
+ * push()'s fresh resourceName/etag is written back onto the local row
+ * immediately via store.upsert() — skipping this would leave the NEXT
+ * push() sending a now-stale etag, spuriously failing its own conflict
+ * check. A single contact's failure (most commonly the etag-conflict error)
+ * is collected, not thrown — the rest of the batch still runs.
+ */
+export async function pushAllToGoogle(store: PushableStore, google: Pick<GoogleSync, "push">): Promise<PushAllSummary> {
+  const contacts = store.list();
+  let created = 0;
+  let updated = 0;
+  const errors: PushAllSummary["errors"] = [];
+
+  for (const contact of contacts) {
+    const wasNew = !contact.googleResourceName;
+    try {
+      const { resourceName, etag } = await google.push(contact);
+      store.upsert({ ...contact, googleResourceName: resourceName, googleEtag: etag });
+      if (wasNew) created++;
+      else updated++;
+    } catch (err) {
+      errors.push({ contactId: contact.id, name: contact.name, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  return { pushed: created + updated, created, updated, errors };
+}

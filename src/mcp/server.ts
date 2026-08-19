@@ -7,7 +7,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { Store } from "../lib/store.js";
-import { applyPullToStore, createGoogleSync, deleteContactEverywhere, type GoogleSync } from "../lib/google-sync.js";
+import {
+  applyPullToStore,
+  createGoogleSync,
+  deleteContactEverywhere,
+  pushAllToGoogle,
+  type GoogleSync,
+} from "../lib/google-sync.js";
 import type { Contact, Interaction, Verdict } from "../lib/types.js";
 
 /**
@@ -221,27 +227,22 @@ export function createRolodexMcpServer(
 
   const syncHandler = withErrorHandling<SyncGoogleArgs>(async (args) => {
     if (args.direction === "push") {
-      // push() is explicitly still a stub (see google-sync.ts) — don't call
-      // it at all, just say so plainly rather than letting it throw its own
-      // "not implemented" error up through the generic error path.
-      return {
-        content: [{ type: "text", text: JSON.stringify({ error: "push is not implemented — one-shot pull only" }) }],
-        isError: true,
-      };
+      return textResult(await pushAllToGoogle(store, google));
     }
 
     const pulled = await google.pull();
-    const summary = applyPullToStore(pulled, store);
+    const pullSummary = applyPullToStore(pulled, store);
 
     if (args.direction === "both") {
-      return textResult({ ...summary, pushed: false, note: "push is not implemented — only the pull half of 'both' ran" });
+      const pushSummary = await pushAllToGoogle(store, google);
+      return textResult({ pull: pullSummary, push: pushSummary });
     }
-    return textResult(summary);
+    return textResult(pullSummary);
   });
 
   server.tool(
     "rolodex_sync_google",
-    "ONE-WAY pull from the owner's Google Contacts (People API) into the local store — this is not two-way sync. Verdict/angle/next-step are local-only and are never overwritten by a pull. The 'push' direction is not implemented: passing direction:'push' returns an error rather than pushing anything to Google, and direction:'both' only performs the pull half.",
+    "Two-way sync with the owner's Google Contacts (People API). 'pull' brings Google's contacts in (verdict/angle/next-step are local-only and never overwritten by a pull). 'push' sends every local contact to Google, one at a time — creating new ones, updating linked ones, and reporting per-contact failures in the result's `errors` array rather than aborting the whole batch (the most common failure is a genuine conflict: the contact changed on Google since the last pull — pull again before retrying that one). 'both' runs pull then push and returns { pull, push } — both summaries.",
     { direction: z.enum(["pull", "push", "both"]).default("both") },
     syncHandler,
   );

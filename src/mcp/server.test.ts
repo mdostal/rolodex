@@ -265,20 +265,22 @@ describe("rolodex_sync_google", () => {
     });
   });
 
-  it("direction 'both' runs the pull half for real and notes push wasn't performed", async () => {
+  it("direction 'both' runs pull then push for real, returning { pull, push }", async () => {
     const secrets = await seededSecrets();
     const list = async () => ({ data: { connections: [{ resourceName: "people/1", names: [{ displayName: "One" }] }] } });
+    const createContact = () => {
+      throw new Error("not used in this test — the pulled contact already has a googleResourceName");
+    };
+    const updateContact = async () => ({
+      data: { resourceName: "people/1", metadata: { sources: [{ etag: 'W/"e2"' }] } },
+    });
     const google = createGoogleSync({
       secrets,
       createPeopleClient: () => ({
         people: {
           connections: { list },
-          createContact: () => {
-            throw new Error("not used in this test");
-          },
-          updateContact: () => {
-            throw new Error("not used in this test");
-          },
+          createContact,
+          updateContact,
           deleteContact: () => {
             throw new Error("not used in this test");
           },
@@ -289,20 +291,30 @@ describe("rolodex_sync_google", () => {
 
     const result = await handlers.rolodex_sync_google({ direction: "both" });
     expect(result.isError).toBeUndefined();
-    const summary = parseResult(result) as { pulled: number; created: number; updated: number; pushed: boolean };
-    expect(summary).toMatchObject({ pulled: 1, created: 1, updated: 0, pushed: false });
+    const summary = parseResult(result) as {
+      pull: { pulled: number; created: number; updated: number };
+      push: { pushed: number; created: number; updated: number; errors: unknown[] };
+    };
+    expect(summary.pull).toMatchObject({ pulled: 1, created: 1, updated: 0 });
+    // The contact just pulled already carries the googleResourceName Google
+    // gave it, so pushing it back is an update, not a create.
+    expect(summary.push).toEqual({ pushed: 1, created: 0, updated: 1, errors: [] });
     expect(store.list()).toHaveLength(1);
+    expect(store.list()[0]?.googleEtag).toBe('W/"e2"');
   });
 
-  it("direction 'push' returns isError:true without crashing and never calls pull/push", async () => {
+  it("direction 'push' pushes every local contact to Google, reporting created/updated/errors, and never calls pull", async () => {
+    const contact = parseResult(await handlers.rolodex_upsert({ name: "Ada Lovelace" })) as { id: string };
     let pullCalled = false;
+    const pushedIds: string[] = [];
     const google = {
       async pull() {
         pullCalled = true;
         return [];
       },
-      async push() {
-        throw new Error("should never be called");
+      async push(c: { id: string }) {
+        pushedIds.push(c.id);
+        return { resourceName: "people/new1", etag: 'W/"e1"' };
       },
       async deleteContact() {
         throw new Error("should never be called");
@@ -311,10 +323,12 @@ describe("rolodex_sync_google", () => {
     ({ handlers } = createRolodexMcpServer({ store, google }));
 
     const result = await handlers.rolodex_sync_google({ direction: "push" });
-    expect(result.isError).toBe(true);
-    const parsed = parseResult(result) as { error: string };
-    expect(parsed.error).toMatch(/not implemented/i);
+    expect(result.isError).toBeUndefined();
+    const summary = parseResult(result) as { pushed: number; created: number; updated: number; errors: unknown[] };
+    expect(summary).toEqual({ pushed: 1, created: 1, updated: 0, errors: [] });
     expect(pullCalled).toBe(false);
+    expect(pushedIds).toEqual([contact.id]);
+    expect(store.get(contact.id)?.googleResourceName).toBe("people/new1");
   });
 });
 

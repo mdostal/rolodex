@@ -10,7 +10,7 @@ import { Store } from "../lib/store.js";
 import type { Contact, Interaction } from "../lib/types.js";
 import { createSecretsAdapter, isPortunusAvailable as defaultIsPortunusAvailable, type CreateSecretsAdapterOptions, type SecretsAdapter } from "../lib/secrets-adapter.js";
 import { checkSecretsCapability } from "../lib/secrets-check.js";
-import { applyPullToStore, createGoogleSync, deleteContactEverywhere } from "../lib/google-sync.js";
+import { applyPullToStore, createGoogleSync, deleteContactEverywhere, pushAllToGoogle } from "../lib/google-sync.js";
 import { connectGoogleAccount as defaultConnectGoogleAccount, type ConnectGoogleAccountOptions } from "../lib/google-oauth-flow.js";
 import {
   checkDbPathWritable,
@@ -506,6 +506,25 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
         } catch (err) {
           sendJson(res, 502, { error: err instanceof Error ? err.message : String(err) });
         }
+        return;
+      }
+
+      // POST /api/sync/google/push — a genuinely separate action from the
+      // pull route above, not a query-param variant of it: push is the more
+      // consequential direction (it creates/overwrites data on the owner's
+      // real Google account), so it gets its own explicit endpoint the UI
+      // surfaces as its own clearly-labeled button, not folded into
+      // "Sync now". Per-contact failures land in the response's errors
+      // array (200, not partial-failure-as-502) — one bad contact
+      // shouldn't read as "the whole push failed" when most of it worked.
+      if (req.method === "POST" && parts.length === 4 && parts[0] === "api" && parts[1] === "sync" && parts[2] === "google" && parts[3] === "push") {
+        if (!(await isWizardCompleted())) {
+          sendJson(res, 409, { error: "setup not complete" });
+          return;
+        }
+        const s = await getStore();
+        const summary = await pushAllToGoogle(s, googleSync);
+        sendJson(res, 200, summary);
         return;
       }
 
