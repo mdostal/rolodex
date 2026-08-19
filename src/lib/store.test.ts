@@ -79,6 +79,55 @@ function baseContact(overrides: Partial<Parameters<Store["upsert"]>[0]> = {}) {
   };
 }
 
+describe("googleEtag column", () => {
+  it("upsert()/get() round-trip a googleEtag value", () => {
+    const store = new Store(dbPath);
+    const saved = store.upsert(baseContact({ name: "Ada Lovelace", googleEtag: 'W/"abc123"' }));
+    expect(saved.googleEtag).toBe('W/"abc123"');
+    expect(store.get(saved.id)?.googleEtag).toBe('W/"abc123"');
+  });
+
+  it("is undefined, not null or empty string, for a contact with no googleEtag", () => {
+    const store = new Store(dbPath);
+    const saved = store.upsert(baseContact({ name: "Ada Lovelace" }));
+    expect(saved.googleEtag).toBeUndefined();
+  });
+
+  it("migrates a pre-existing database file that predates this column, without losing existing data", () => {
+    // Simulates a real upgrade: a contacts table exactly as it looked
+    // before this column existed, with a real row already in it — Store's
+    // migrate() must add the column via ALTER TABLE without erroring and
+    // without touching the existing row's other data.
+    const raw = new DatabaseSync(dbPath);
+    raw.exec(`
+      CREATE TABLE contacts (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, org TEXT, role TEXT, email TEXT, phone TEXT,
+        met TEXT, what TEXT, angle TEXT, verdict TEXT NOT NULL DEFAULT 'none',
+        nextStep TEXT, tags TEXT, googleResourceName TEXT,
+        createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+      );
+    `);
+    raw.prepare(
+      "INSERT INTO contacts (id, name, verdict, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)",
+    ).run("pre-existing-id", "Grace Hopper", "strong", "2020-01-01T00:00:00.000Z", "2020-01-01T00:00:00.000Z");
+    raw.close();
+
+    const store = new Store(dbPath);
+    const existing = store.get("pre-existing-id");
+    expect(existing).toMatchObject({ name: "Grace Hopper", verdict: "strong" });
+    expect(existing?.googleEtag).toBeUndefined();
+
+    // The column actually works post-migration, not just "didn't crash".
+    store.upsert({ ...existing!, googleEtag: 'W/"fresh"' });
+    expect(store.get("pre-existing-id")?.googleEtag).toBe('W/"fresh"');
+  });
+
+  it("opening the same already-migrated database twice does not error (ALTER TABLE is not re-run destructively)", () => {
+    new Store(dbPath).upsert(baseContact({ name: "Ada Lovelace" }));
+    expect(() => new Store(dbPath)).not.toThrow();
+  });
+});
+
 describe("Store.upsert()", () => {
   it("dedups by the first identifier (googleResourceName) — a second upsert with the same googleResourceName updates, not inserts", () => {
     const store = new Store(dbPath);

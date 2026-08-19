@@ -58,6 +58,29 @@ describe("mapPersonToContact", () => {
     });
   });
 
+  it("captures metadata.sources[].etag as googleEtag", () => {
+    const person: PersonLite = {
+      resourceName: "people/c123",
+      names: [{ displayName: "Grace Hopper" }],
+      metadata: { sources: [{ type: "CONTACT", etag: 'W/"abc123"' }] },
+    };
+    expect(mapPersonToContact(person).googleEtag).toBe('W/"abc123"');
+  });
+
+  it("takes the first source that actually has an etag, when there are multiple sources", () => {
+    const person: PersonLite = {
+      resourceName: "people/c123",
+      names: [{ displayName: "Grace Hopper" }],
+      metadata: { sources: [{ type: "PROFILE", etag: null }, { type: "CONTACT", etag: 'W/"real"' }] },
+    };
+    expect(mapPersonToContact(person).googleEtag).toBe('W/"real"');
+  });
+
+  it("leaves googleEtag undefined when metadata/sources are absent", () => {
+    const contact = mapPersonToContact({ resourceName: "people/c1", names: [{ displayName: "X" }] });
+    expect(contact.googleEtag).toBeUndefined();
+  });
+
   it("only reads the first entry in each repeated field", () => {
     const person: PersonLite = {
       resourceName: "people/c1",
@@ -141,7 +164,7 @@ describe("createGoogleSync().pull()", () => {
     // nextPageToken. Both calls request the same resourceName/personFields.
     expect(list.mock.calls[0]![0]).toMatchObject({
       resourceName: "people/me",
-      personFields: "names,organizations,emailAddresses,phoneNumbers",
+      personFields: "names,organizations,emailAddresses,phoneNumbers,metadata",
       pageToken: undefined,
     });
     expect(list.mock.calls[1]![0]).toMatchObject({ pageToken: "page-2" });

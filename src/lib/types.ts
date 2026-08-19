@@ -23,6 +23,13 @@ export interface Contact {
   tags?: string[];
   /** external source id, e.g. Google People `resourceName`, for sync/dedup */
   googleResourceName?: string;
+  /** The People API's per-person `metadata.sources[].etag` from the last
+   * pull() of this contact — required by push()'s updateContact call for
+   * Google's own optimistic-concurrency check (a stale etag is rejected
+   * with 400 failedPrecondition, the real conflict-detection mechanism;
+   * see the google-two-way-sync epic's design discussion). Unset for
+   * local-only contacts that have never been pulled from/pushed to Google. */
+  googleEtag?: string;
   createdAt: string;          // ISO
   updatedAt: string;          // ISO
 }
