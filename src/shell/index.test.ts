@@ -87,7 +87,16 @@ async function loadApp(baseUrl: string): Promise<JSDOM> {
 async function waitFor(fn: () => boolean, label: string, timeoutMs = 10000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    if (fn()) return;
+    // A predicate built on byId() (throws if the element doesn't exist yet)
+    // must be able to fail transiently without aborting the poll early — on
+    // a slower/more contended runner the gap between "the container renders"
+    // and "the section's fetch fills it" is real, not just local-machine
+    // noise (this exact race only surfaced on CI, never locally).
+    try {
+      if (fn()) return;
+    } catch {
+      // not ready yet — keep polling
+    }
     await new Promise((r) => setTimeout(r, 10));
   }
   throw new Error(`waitFor timed out: ${label}`);
