@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Packaged desktop app.** rolodex now installs as a real Electron app for macOS (dmg), Windows (NSIS), and Linux (AppImage + deb) — `npm run electron` to run from source, `npm run electron:package` to build locally. Unsigned for now (Gatekeeper/SmartScreen show an "unidentified developer" warning; documented workaround in the README). A tag-triggered CI workflow (`.github/workflows/release.yml`) publishes builds to GitHub Releases, though no tag has been pushed yet as of this entry.
+- **Native launch-at-login**, in the packaged app's Settings popover — backed by the OS's own login-item mechanism (`app.setLoginItemSettings`), not an external launchd/systemd script.
+- **A real generated app icon**, replacing the original hand-drawn placeholder favicon, plus a **selectable "Brass" appearance theme** and a 10-candidate icon picker in Settings.
+- **A third, plain CLI surface** (`rolodex <command>`) for non-MCP tooling/scripts — `upsert`, `search`, `followups`, `log`, `sync-google`, all wired to the exact same handlers the MCP server registers.
+- **A real second `SecretsAdapter` backend: Portunus.** The setup wizard now offers a Keychain/Portunus choice, not just macOS Keychain.
+- MCP tool descriptions rewritten to work identically across any MCP-compatible host, not just Claude Code.
+- The GitHub Pages site rebuilt to match the rest of the tool portfolio's bar (stats, tech stack, support links).
+- The rolodex skill (`.claude/skills/rolodex/SKILL.md`) gained explicit guidance for filing multi-person call notes and for deep-diving/pre-filling a contact from a web search, always confirming sourced fields with the user before writing them.
+
+### Fixed
+
+- **Security:** the packaged Electron app was binding its local HTTP server to all network interfaces instead of loopback-only, exposing the unauthenticated contacts API and Google OAuth credential routes to anyone on the same network. Fixed before any release shipped it.
+- A global install (`npm link`/`npm i -g`) of the MCP server or CLI silently did nothing when invoked through the resulting symlinked bin — `isMainModule`'s path comparison didn't resolve symlinks.
+
 ## [0.4.0] - 2026-08-12
 
 ### Changed

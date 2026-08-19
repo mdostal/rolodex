@@ -236,30 +236,45 @@ export function createSecretsAdapter(opts?: CreateSecretsAdapterOptions): Secret
 export function createInMemorySecretsAdapter(): SecretsAdapter; // fake, and the fallback target
 ```
 
-- **Real backend:** macOS Keychain via the `security` CLI
+**Two real backends ship**, chosen via `createSecretsAdapter({ backend: "keychain" | "portunus" })`
+(defaults to `"keychain"` for byte-identical behavior against every caller
+that predates the `backend` option) — the setup wizard's Secrets screen
+lets the user pick between them at install time, not just macOS Keychain:
+
+- **Keychain:** macOS Keychain via the `security` CLI
   (`add/find/delete-generic-password`), invoked through
   `child_process.execFile` with an argv array (never a shell string).
   Deliberately **not** `keytar` (archived/unmaintained) and not a compiled
   native module like `@napi-rs/keyring` (per-platform prebuilds are an
   install-time risk this factory needs to avoid) — `security` ships with
-  every macOS install and needs no dependency or compilation.
+  every macOS install and needs no dependency or compilation. Darwin-only —
+  `createSecretsAdapter()` falls back to the in-memory fake immediately on
+  any other platform (with a `console.warn`).
+- **Portunus:** `createPortunusSecretsAdapter()` shells out to the real
+  `portunus` CLI the same way (`execFile`, argv array, no shell string) —
+  no `process.platform` guard, since Portunus itself is a cross-platform
+  Python CLI rather than an OS-specific credential store. Whether Portunus
+  is actually installed and working on a given machine is checked at wizard
+  time (`isPortunusAvailable()`), and is outside this repo's control to
+  guarantee on Windows/Linux.
 - **Fake backend:** a plain in-memory `Map`, used by tests and as the
-  automatic fallback target.
-- `createSecretsAdapter()` auto-detects: non-Darwin platforms get the
-  in-memory fake immediately (with a `console.warn`); on Darwin, if the real
-  keychain backend throws on its first call (no `security` binary, sandboxed
-  environment, etc.) the whole adapter permanently swaps to the in-memory
-  fake for the rest of the process rather than crashing the app.
-- Errors thrown from the keychain `set()` path are deliberately sanitized
-  before they can reach a log line — `security`'s own error object embeds
-  the full invoked argv (including the plaintext secret) in `.message`/`.cmd`;
-  `secrets-adapter.ts`'s `sanitizeSetError()` strips that before anything
+  automatic fallback target for both real backends.
+- Either real backend, if it throws on its very first call (no `security`/
+  `portunus` binary, sandboxed environment, wrong platform, etc.), makes the
+  whole adapter permanently swap to the in-memory fake for the rest of the
+  process rather than crashing the app — `withInMemoryFallback()` wraps
+  both real backends identically, warning once with whichever backend
+  actually failed named in the message.
+- Errors thrown from either backend's `set()` path are deliberately
+  sanitized before they can reach a log line — the underlying CLI's own
+  error object can embed the full invoked argv (including the plaintext
+  secret) in `.message`/`.cmd`; `sanitizeSetError()` (keychain) and
+  `sanitizePortunusError()` (Portunus) both strip that before anything
   downstream (including the wizard's own error UI) can see it.
-- The interface boundary exists specifically so a future OSS contribution
-  (the owner has named a `Portunus` adapter — key injection from an
-  encrypted external store) can plug in without touching `Store`, the wizard,
-  or the UI. This epic ships exactly one real backend (OS keychain); no
-  second backend is implemented yet.
+- The interface boundary that made adding Portunus possible without
+  touching `Store`, the wizard's other screens, or the main UI is exactly
+  why it was scoped as "swap the adapter," not a rewrite — same pattern any
+  future third backend would follow.
 
 ## Google sync (`src/lib/google-sync.ts`)
 
@@ -364,8 +379,10 @@ Done (across `standalone-app-foundation`, `followups-view`,
       `logInteraction`, `listInteractions`, `search` (FTS5 + LIKE fallback),
       `needsFollowUp` — with a "Needs follow-up" UI view and a configurable
       follow-up window/grace period.
-- [x] `SecretsAdapter`: interface + factory + macOS-keychain implementation +
-      in-memory fake, with automatic fallback and error sanitization.
+- [x] `SecretsAdapter`: interface + factory + **two** real backends
+      (macOS Keychain and Portunus, user-selectable in the wizard's Secrets
+      screen) + in-memory fake, with automatic fallback and error
+      sanitization for both.
 - [x] Five-screen first-run setup wizard, no login/logout anywhere.
 - [x] A real Google OAuth 2.0 consent flow (loopback IP address flow,
       `src/lib/google-oauth-flow.ts`), reachable from the wizard and from a
@@ -374,13 +391,20 @@ Done (across `standalone-app-foundation`, `followups-view`,
       guarantee, and a refreshed token now persisted back to the keychain.
 - [x] All 5 MCP tools wired to the same real `Store`/`GoogleSync` logic.
 - [x] A third plain CLI surface (`rolodex <command>`) wrapping the same
-      handlers, for non-MCP tooling/scripts.
+      handlers, for non-MCP tooling/scripts — including a fix for the
+      `isMainModule` symlink bug that made a global `npm link`/`npm i -g`
+      install of the CLI (or the MCP server) silently do nothing.
 - [x] Search (UI + API) and interaction logging (UI + API).
 - [x] Docs rewrite (this file + README.md) and CI.
 - [x] A packaged, installable Electron desktop app for macOS/Windows/Linux
       (unsigned), native launch-at-login, and a tag-triggered CI release
       workflow publishing to GitHub Releases (`electron-packaging` epic) —
       see "Packaged desktop app" above.
+- [x] A pre-release security/correctness review (this section reflects its
+      output) — caught and fixed a critical bug where the packaged
+      Electron app bound its server to all network interfaces instead of
+      loopback-only, plus a missing single-instance lock and unhandled
+      boot-error path in the same file.
 
 Remaining gaps:
 - [ ] Code signing / notarization — explicitly deferred as part of the
@@ -406,11 +430,9 @@ Remaining gaps:
       convention holds because the write step still requires a human yes,
       not because enrichment doesn't happen. No new Store/MCP/CLI code
       backs this; it's agent behavior on top of the existing tools.
-- [ ] A dedicated settings/account screen beyond the current "Reconnect
-      Google" + follow-up-window popover (e.g. changing `ROLODEX_DB` after
-      first run, re-running the wizard).
-- [ ] Portunus (or any second) `SecretsAdapter` backend — interface is open,
-      only one real implementation ships.
+- [ ] A dedicated settings/account screen beyond the current Follow-up/
+      Appearance/Google/Autostart popover sections (e.g. changing
+      `ROLODEX_DB` after first run, re-running the wizard).
 - [ ] Full at-rest database encryption — see "Single-user, no in-app login"
       above; not planned as an in-app feature.
 - [ ] Comprehensive loading/error/toast state coverage across the Contact UI

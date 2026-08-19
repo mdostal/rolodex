@@ -22,9 +22,20 @@ contacts without anyone else holding your token.
 ## Download the app
 
 rolodex packages as a real installable desktop app (Electron) for macOS,
-Windows, and Linux, via [GitHub Releases](https://github.com/mdostal/rolodex/releases)
-— grab the `.dmg` / `.exe` / `.AppImage`/`.deb` for your platform once a
-release has been cut.
+Windows, and Linux — `.dmg` / `.exe` / `.AppImage`+`.deb` respectively,
+published to [GitHub Releases](https://github.com/mdostal/rolodex/releases)
+on a tagged release going forward.
+
+**No packaged build has been published yet as of this writing.** The
+current latest release predates the Electron-packaging work — check the
+Releases page for whether a newer tag with real desktop binaries has
+landed since. Until then, build from source below.
+
+Of the three platforms, only **macOS** has actually been built and
+launch-tested end to end so far; Windows and Linux are configured
+identically but haven't been verified on real hardware yet (see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s "Remaining gaps" for the
+current status).
 
 **Builds are currently unsigned.** That means:
 - **macOS:** Gatekeeper will say the app is from an "unidentified
