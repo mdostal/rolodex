@@ -534,14 +534,14 @@ describe("GET /api/wizard/secrets-backends", () => {
     const { baseUrl } = await start({ isPortunusAvailable: async () => true });
     const { status, body } = await getJson(baseUrl + "/api/wizard/secrets-backends");
     expect(status).toBe(200);
-    expect(body).toEqual({ portunusAvailable: true });
+    expect(body).toEqual({ portunusAvailable: true, currentBackend: "keychain" });
   });
 
   it("reports portunusAvailable:false when the injected probe resolves false", async () => {
     const { baseUrl } = await start({ isPortunusAvailable: async () => false });
     const { status, body } = await getJson(baseUrl + "/api/wizard/secrets-backends");
     expect(status).toBe(200);
-    expect(body).toEqual({ portunusAvailable: false });
+    expect(body).toEqual({ portunusAvailable: false, currentBackend: "keychain" });
   });
 
   it("defaults to the real isPortunusAvailable() probe when not injected, and never throws regardless of what's actually installed on this machine", async () => {
@@ -549,6 +549,13 @@ describe("GET /api/wizard/secrets-backends", () => {
     const { status, body } = await getJson(baseUrl + "/api/wizard/secrets-backends");
     expect(status).toBe(200);
     expect(typeof (body as { portunusAvailable: unknown }).portunusAvailable).toBe("boolean");
+  });
+
+  it("reports currentBackend:portunus once that choice has actually been persisted for this homeDir", async () => {
+    const { baseUrl } = await start({ isPortunusAvailable: async () => true });
+    await postJson(baseUrl + "/api/wizard/secrets-backend-choice", { backend: "portunus" });
+    const { body } = await getJson(baseUrl + "/api/wizard/secrets-backends");
+    expect(body).toMatchObject({ currentBackend: "portunus" });
   });
 });
 
@@ -695,7 +702,7 @@ describe("`secrets` construction: backend resolution via getSecretsBackendChoice
   it("a Portunus choice persisted via the real wizard route is what the next `secrets` construction for this homeDir resolves to — and that adapter is what the Google-connect route's secrets.set() call actually uses", async () => {
     const { baseUrl } = await start({ isPortunusAvailable: async () => true });
     const avail = await getJson(baseUrl + "/api/wizard/secrets-backends");
-    expect(avail.body).toEqual({ portunusAvailable: true });
+    expect(avail.body).toEqual({ portunusAvailable: true, currentBackend: "keychain" });
 
     const choice = await postJson(baseUrl + "/api/wizard/secrets-backend-choice", { backend: "portunus" });
     expect(choice.status).toBe(200);

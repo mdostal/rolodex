@@ -263,6 +263,13 @@
       margin-top: 10px; font-size: 0.85rem; color: var(--muted);
       background: var(--chip-bg); border-radius: 6px; padding: 8px 10px;
     }
+    /* Same look as .theme-toggle/.theme-option (Appearance section), under
+       its own class names — wireAppearanceSection() queries .theme-option
+       globally (not scoped to its own section), so reusing that class here
+       would make its click handler fire on these buttons too. */
+    .backend-toggle { display: flex; gap: 8px; }
+    .backend-toggle .backend-option { flex: 1; padding: 6px 10px; }
+    .backend-toggle .backend-option[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
     .settings-anchor { position: relative; display: inline-block; margin-right: 8px; }
     .settings-panel {
       position: absolute; top: calc(100% + 8px); right: 0; z-index: 20;
@@ -464,6 +471,13 @@
         body: JSON.stringify({ path: dbPath }),
       });
     const postDbLocationReset = () => api("/api/wizard/database/reset", { method: "POST" });
+    const getSecretsBackends = () => api("/api/wizard/secrets-backends");
+    const postSecretsBackendChoice = (backend) =>
+      api("/api/wizard/secrets-backend-choice", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend }),
+      });
     const getAppearanceSettings = () => api("/api/settings/appearance");
     const putAppearanceSettings = (payload) =>
       api("/api/settings/appearance", {
@@ -1405,6 +1419,56 @@
       });
     }
 
+    // The Secrets backend section — new this epic, not migrated from
+    // anywhere. Only ever rendered when Portunus is actually available
+    // (same convention as the Autostart section: omitted entirely, not
+    // shown with a single disabled option, when there's no real choice to
+    // make) — reuses GET /api/wizard/secrets-backends (now also reporting
+    // currentBackend) and POST /api/wizard/secrets-backend-choice verbatim.
+    // No live secrets-check/troubleshooting UI here — that's the wizard's
+    // heavier first-run verification flow; this section is just the
+    // choice itself, same "restart to apply" note as the Database section
+    // since the choice can't take effect mid-process either.
+    function secretsBackendSectionHtml(current) {
+      return (
+        '<div class="log-interaction-form" id="secrets-backend-section">' +
+        '<h3 class="settings-section-title">Secrets backend</h3>' +
+        '<div class="backend-toggle" role="group" aria-label="Secrets backend">' +
+        '<button type="button" class="secondary backend-option" data-backend-option="keychain" ' +
+        'aria-pressed="' + (current === "keychain") + '">macOS Keychain</button>' +
+        '<button type="button" class="secondary backend-option" data-backend-option="portunus" ' +
+        'aria-pressed="' + (current === "portunus") + '">Portunus</button>' +
+        "</div>" +
+        '<div class="settings-note" id="secrets-backend-apply-note" hidden>Applies next launch — restart rolodex to switch.</div>' +
+        "</div>"
+      );
+    }
+
+    function wireSecretsBackendSection(current) {
+      const applyNote = document.getElementById("secrets-backend-apply-note");
+      const options = document.querySelectorAll(".backend-option");
+      function setPressed(backend) {
+        options.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.backendOption === backend)));
+      }
+      options.forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const backend = btn.dataset.backendOption;
+          const prev = current;
+          current = backend;
+          setPressed(current);
+          try {
+            await postSecretsBackendChoice(backend);
+            applyNote.hidden = false;
+          } catch (err) {
+            // Revert on failure — nothing was actually persisted.
+            current = prev;
+            setPressed(current);
+            console.error(err);
+          }
+        });
+      });
+    }
+
     function rowHtml(c) {
       const meta = verdictMeta(c.verdict);
       const next = c.nextStep || "";
@@ -1454,6 +1518,9 @@
         '<div id="google-section-body">Loading&hellip;</div>' +
         "</section>" +
         '<section>' + databaseSectionHtml() + "</section>" +
+        '<section>' +
+        '<div id="secrets-backend-section-body"></div>' +
+        "</section>" +
         "</div>";
 
       let saved = { windowDays: 30, graceDays: 14 };
@@ -1548,6 +1615,16 @@
       wireGoogleSection();
 
       wireDatabaseSection();
+
+      try {
+        const backends = await getSecretsBackends();
+        if (backends.portunusAvailable) {
+          document.getElementById("secrets-backend-section-body").innerHTML = secretsBackendSectionHtml(backends.currentBackend);
+          wireSecretsBackendSection(backends.currentBackend);
+        }
+      } catch (err) {
+        console.error(err);
+      }
     }
 
     // ---- Detail view ----------------------------------------------------------
