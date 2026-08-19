@@ -10,10 +10,12 @@ import {
   findExistingMatch,
   mapPersonToContact,
   mergeLocalOnlyFields,
+  pushAllToGoogle,
   type DeletableStore,
   type GoogleSync,
   type PeopleApiClient,
   type PersonLite,
+  type PushableStore,
 } from "./google-sync.js";
 import { createInMemorySecretsAdapter } from "./secrets-adapter.js";
 import { Store } from "./store.js";
@@ -528,6 +530,77 @@ describe("deleteContactEverywhere", () => {
 
     expect(summary.deleted).toBe(true);
     expect(summary.googleDeleteError).toMatch(/isn't connected/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pushAllToGoogle — batch push, one contact at a time, per-contact failures
+// isolated into the errors array rather than aborting the whole batch.
+// ---------------------------------------------------------------------------
+describe("pushAllToGoogle", () => {
+  function fakeStore(initial: Contact[]): { store: PushableStore; upserted: Contact[] } {
+    const contacts = new Map(initial.map((c) => [c.id, c]));
+    const upserted: Contact[] = [];
+    const store: PushableStore = {
+      list: () => Array.from(contacts.values()),
+      upsert: (c) => {
+        contacts.set(c.id, c);
+        upserted.push(c);
+        return c;
+      },
+    };
+    return { store, upserted };
+  }
+
+  it("returns a zeroed summary and never calls push when there are no contacts", async () => {
+    const { store } = fakeStore([]);
+    const push = vi.fn();
+
+    const summary = await pushAllToGoogle(store, { push });
+
+    expect(summary).toEqual({ pushed: 0, created: 0, updated: 0, errors: [] });
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("creates a brand-new contact (no googleResourceName) and writes the returned resourceName/etag back to the store", async () => {
+    const contact = baseContact({ id: "new-1" });
+    const { store, upserted } = fakeStore([contact]);
+    const push = vi.fn().mockResolvedValue({ resourceName: "people/new1", etag: 'W/"e1"' });
+
+    const summary = await pushAllToGoogle(store, { push });
+
+    expect(summary).toEqual({ pushed: 1, created: 1, updated: 0, errors: [] });
+    expect(push).toHaveBeenCalledWith(contact);
+    expect(upserted).toEqual([{ ...contact, googleResourceName: "people/new1", googleEtag: 'W/"e1"' }]);
+  });
+
+  it("updates an already-linked contact (has googleResourceName) and counts it as updated, not created", async () => {
+    const contact = baseContact({ id: "linked-1", googleResourceName: "people/c1", googleEtag: 'W/"old"' });
+    const { store, upserted } = fakeStore([contact]);
+    const push = vi.fn().mockResolvedValue({ resourceName: "people/c1", etag: 'W/"new"' });
+
+    const summary = await pushAllToGoogle(store, { push });
+
+    expect(summary).toEqual({ pushed: 1, created: 0, updated: 1, errors: [] });
+    expect(upserted).toEqual([{ ...contact, googleResourceName: "people/c1", googleEtag: 'W/"new"' }]);
+  });
+
+  it("isolates a per-contact failure into the errors array — one bad contact doesn't abort the batch or touch the store", async () => {
+    const ok = baseContact({ id: "ok-1", name: "Grace Hopper" });
+    const bad = baseContact({ id: "bad-1", name: "Ada Lovelace" });
+    const { store, upserted } = fakeStore([ok, bad]);
+    const push = vi.fn(async (c: Contact) => {
+      if (c.id === "bad-1") throw new Error('"Ada Lovelace" changed on Google since your last sync');
+      return { resourceName: "people/ok1", etag: 'W/"e1"' };
+    });
+
+    const summary = await pushAllToGoogle(store, { push });
+
+    expect(summary.pushed).toBe(1);
+    expect(summary.created).toBe(1);
+    expect(summary.updated).toBe(0);
+    expect(summary.errors).toEqual([{ contactId: "bad-1", name: "Ada Lovelace", error: expect.stringMatching(/changed on Google/) }]);
+    expect(upserted).toEqual([{ ...ok, googleResourceName: "people/ok1", googleEtag: 'W/"e1"' }]);
   });
 });
 

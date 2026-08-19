@@ -984,6 +984,42 @@ describe("DELETE /api/contacts/:id", () => {
   });
 });
 
+describe("POST /api/sync/google/push", () => {
+  it("returns 409 before the wizard is complete", async () => {
+    const { baseUrl } = await start();
+    const { status, body } = await postJson(baseUrl + "/api/sync/google/push");
+    expect(status).toBe(409);
+    expect(body).toEqual({ error: "setup not complete" });
+  });
+
+  it("with no contacts, returns a zeroed summary and never touches Google", async () => {
+    const { baseUrl } = await startReady();
+    const { status, body } = await postJson(baseUrl + "/api/sync/google/push");
+    expect(status).toBe(200);
+    expect(body).toEqual({ pushed: 0, created: 0, updated: 0, errors: [] });
+  });
+
+  it("reports a per-contact error (not a 5xx) when Google isn't connected — one bad contact doesn't fail the batch", async () => {
+    // Same real, naturally-occurring failure shape as the DELETE route's
+    // Google-side test above: no OAuth client is configured in this test
+    // server, so push() genuinely throws its actionable "isn't connected"
+    // error — caught per-contact by pushAllToGoogle, not fatal to the call.
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+
+    const { status, body } = await postJson(baseUrl + "/api/sync/google/push");
+    expect(status).toBe(200);
+    const summary = body as { pushed: number; created: number; updated: number; errors: { contactId: string; name: string; error: string }[] };
+    expect(summary).toMatchObject({ pushed: 0, created: 0, updated: 0 });
+    expect(summary.errors).toEqual([{ contactId: id, name: "Ada Lovelace", error: expect.stringMatching(/isn't connected/) }]);
+
+    // The failed push must not have mutated the local row.
+    const after = await getJson(baseUrl + `/api/contacts/${id}`);
+    expect((after.body as { googleResourceName?: string }).googleResourceName).toBeUndefined();
+  });
+});
+
 describe("malformed JSON request bodies", () => {
   it("POST /api/contacts with malformed JSON returns 400, not 500", async () => {
     const { baseUrl } = await startReady();
