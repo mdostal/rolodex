@@ -8,6 +8,7 @@ import { createInMemorySecretsAdapter } from "../lib/secrets-adapter.js";
 import type { CreateSecretsAdapterOptions, SecretsAdapter } from "../lib/secrets-adapter.js";
 import { getSecretsBackendChoiceSync, setSecretsBackendChoice } from "./secrets-backend-config.js";
 import { Store } from "../lib/store.js";
+import { GOOGLE_OAUTH_TOKEN_KEY } from "../lib/google-sync.js";
 
 let dir: string;
 let server: Server | undefined;
@@ -747,7 +748,7 @@ describe("`secrets` construction: backend resolution via getSecretsBackendChoice
 });
 
 describe("GET /api/wizard/summary", () => {
-  it("reports dbPath, googleConfigured, and the secrets probe result", async () => {
+  it("reports dbPath, googleConfigured, googleSignedIn:false (no token yet), and the secrets probe result", async () => {
     const { baseUrl } = await start();
     await postJson(baseUrl + "/api/wizard/google", { clientId: "id", clientSecret: "secret" });
     const { status, body } = await getJson(baseUrl + "/api/wizard/summary");
@@ -755,12 +756,27 @@ describe("GET /api/wizard/summary", () => {
     expect(body).toMatchObject({
       dbPath: `${dir}/.local/share/rolodex/rolodex.db`,
       googleConfigured: true,
+      googleSignedIn: false,
     });
     // start()'s own default injects createInMemorySecretsAdapter() (see this
     // file's start() helper), so this is deterministic regardless of
     // platform — no real Darwin-only keychain involved.
     const secrets = (body as { secrets: { ok: boolean; backend: string } }).secrets;
     expect(secrets).toMatchObject({ ok: true, backend: "macOS Keychain" });
+  });
+
+  it("reports googleSignedIn:true once an OAuth token is actually stored — distinct from just having client credentials saved", async () => {
+    const { baseUrl, secrets } = await start();
+    await postJson(baseUrl + "/api/wizard/google", { clientId: "id", clientSecret: "secret" });
+    await secrets.set(GOOGLE_OAUTH_TOKEN_KEY, JSON.stringify({ access_token: "at", refresh_token: "rt" }));
+    const { body } = await getJson(baseUrl + "/api/wizard/summary");
+    expect(body).toMatchObject({ googleConfigured: true, googleSignedIn: true });
+  });
+
+  it("reports googleConfigured:false and googleSignedIn:false when nothing has been saved yet", async () => {
+    const { baseUrl } = await start();
+    const { body } = await getJson(baseUrl + "/api/wizard/summary");
+    expect(body).toMatchObject({ googleConfigured: false, googleSignedIn: false });
   });
 });
 

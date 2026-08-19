@@ -10,7 +10,7 @@ import { Store } from "../lib/store.js";
 import type { Contact, Interaction } from "../lib/types.js";
 import { createSecretsAdapter, isPortunusAvailable as defaultIsPortunusAvailable, type CreateSecretsAdapterOptions, type SecretsAdapter } from "../lib/secrets-adapter.js";
 import { checkSecretsCapability } from "../lib/secrets-check.js";
-import { applyPullToStore, createGoogleSync, deleteContactEverywhere, pushAllToGoogle } from "../lib/google-sync.js";
+import { applyPullToStore, createGoogleSync, deleteContactEverywhere, pushAllToGoogle, GOOGLE_OAUTH_TOKEN_KEY } from "../lib/google-sync.js";
 import { connectGoogleAccount as defaultConnectGoogleAccount, type ConnectGoogleAccountOptions } from "../lib/google-oauth-flow.js";
 import {
   checkDbPathWritable,
@@ -406,8 +406,15 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
     if (req.method === "GET" && segs.length === 1 && segs[0] === "summary") {
       const dbPath = await resolveDbPath(homeDir);
       const googleConfigured = (await secrets.get(GOOGLE_OAUTH_CLIENT_KEY)) !== undefined;
+      // Distinct from googleConfigured (client id/secret saved): this is
+      // whether the OAuth exchange has actually happened. A client can be
+      // configured without ever having been signed in (e.g. the wizard's
+      // Google step was skipped after just saving credentials), which
+      // googleConfigured alone can't tell apart from "fully connected" —
+      // the Settings screen's account-status line needs that distinction.
+      const googleSignedIn = (await secrets.get(GOOGLE_OAUTH_TOKEN_KEY)) !== undefined;
       const secretsResult = await checkSecretsCapability(secretsCapabilityFactory);
-      sendJson(res, 200, { dbPath, googleConfigured, secrets: secretsResult });
+      sendJson(res, 200, { dbPath, googleConfigured, googleSignedIn, secrets: secretsResult });
       return;
     }
 
