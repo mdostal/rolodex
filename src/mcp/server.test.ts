@@ -207,7 +207,17 @@ describe("rolodex_sync_google", () => {
         ],
       },
     });
-    const fakeClient: PeopleApiClient = { people: { connections: { list } } };
+    const fakeClient: PeopleApiClient = {
+      people: {
+        connections: { list },
+        createContact: () => {
+          throw new Error("not used in this test");
+        },
+        updateContact: () => {
+          throw new Error("not used in this test");
+        },
+      },
+    };
     const google = createGoogleSync({ secrets, createPeopleClient: () => fakeClient });
 
     ({ handlers } = createRolodexMcpServer({ store, google }));
@@ -230,7 +240,20 @@ describe("rolodex_sync_google", () => {
   it("direction 'both' runs the pull half for real and notes push wasn't performed", async () => {
     const secrets = await seededSecrets();
     const list = async () => ({ data: { connections: [{ resourceName: "people/1", names: [{ displayName: "One" }] }] } });
-    const google = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list } } }) });
+    const google = createGoogleSync({
+      secrets,
+      createPeopleClient: () => ({
+        people: {
+          connections: { list },
+          createContact: () => {
+            throw new Error("not used in this test");
+          },
+          updateContact: () => {
+            throw new Error("not used in this test");
+          },
+        },
+      }),
+    });
     ({ handlers } = createRolodexMcpServer({ store, google }));
 
     const result = await handlers.rolodex_sync_google({ direction: "both" });
