@@ -6,9 +6,12 @@ import {
   applyPullToStore,
   contactToPersonBody,
   createGoogleSync,
+  deleteContactEverywhere,
   findExistingMatch,
   mapPersonToContact,
   mergeLocalOnlyFields,
+  type DeletableStore,
+  type GoogleSync,
   type PeopleApiClient,
   type PersonLite,
 } from "./google-sync.js";
@@ -33,9 +36,9 @@ function baseContact(overrides: Partial<Contact> = {}): Contact {
 }
 
 /** A full, correctly-typed PeopleApiClient for pull()-only tests — throwing
- * stubs for createContact/updateContact make it obvious (a real assertion
- * failure, not `undefined` silently propagating) if a pull()-only test
- * accidentally exercises a push() code path. */
+ * stubs for createContact/updateContact/deleteContact make it obvious (a
+ * real assertion failure, not `undefined` silently propagating) if a
+ * pull()-only test accidentally exercises a push()/delete code path. */
 function fakePeopleClient(list: PeopleApiClient["people"]["connections"]["list"]): PeopleApiClient {
   return {
     people: {
@@ -45,6 +48,9 @@ function fakePeopleClient(list: PeopleApiClient["people"]["connections"]["list"]
       },
       updateContact: () => {
         throw new Error("updateContact should not be called by a pull()-only test");
+      },
+      deleteContact: () => {
+        throw new Error("deleteContact should not be called by a pull()-only test");
       },
     },
   };
@@ -324,7 +330,7 @@ describe("createGoogleSync().push()", () => {
     });
     const updateContact = vi.fn();
     const list = vi.fn();
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
 
     const result = await sync.push(baseContact({ name: "Ada Lovelace" }));
 
@@ -340,7 +346,7 @@ describe("createGoogleSync().push()", () => {
     });
     const createContact = vi.fn();
     const list = vi.fn();
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
 
     const result = await sync.push(
       baseContact({ name: "Ada Lovelace", googleResourceName: "people/existing", googleEtag: 'W/"old"' }),
@@ -364,7 +370,7 @@ describe("createGoogleSync().push()", () => {
     const updateContact = vi.fn().mockRejectedValue(conflictErr);
     const createContact = vi.fn();
     const list = vi.fn();
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
 
     await expect(
       sync.push(baseContact({ name: "Ada Lovelace", googleResourceName: "people/existing", googleEtag: 'W/"stale"' })),
@@ -380,7 +386,7 @@ describe("createGoogleSync().push()", () => {
       data: { resourceName: "people/recreated", metadata: { sources: [{ etag: 'W/"e3"' }] } },
     });
     const list = vi.fn();
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
 
     const result = await sync.push(
       baseContact({ name: "Ada Lovelace", googleResourceName: "people/gone", googleEtag: 'W/"old"' }),
@@ -396,7 +402,7 @@ describe("createGoogleSync().push()", () => {
     const updateContact = vi.fn().mockRejectedValue(serverErr);
     const createContact = vi.fn();
     const list = vi.fn();
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
 
     await expect(
       sync.push(baseContact({ name: "Ada Lovelace", googleResourceName: "people/existing", googleEtag: 'W/"x"' })),
@@ -409,9 +415,119 @@ describe("createGoogleSync().push()", () => {
     const createContact = vi.fn().mockResolvedValue({ data: {} });
     const updateContact = vi.fn();
     const list = vi.fn();
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
 
     await expect(sync.push(baseContact({ name: "Ada Lovelace" }))).rejects.toThrow(/resourceName/);
+  });
+});
+
+describe("createGoogleSync().deleteContact()", () => {
+  async function seededSecrets() {
+    const secrets = createInMemorySecretsAdapter();
+    await secrets.set(GOOGLE_OAUTH_CLIENT_KEY, JSON.stringify({ clientId: "cid", clientSecret: "csecret" }));
+    await secrets.set(GOOGLE_OAUTH_TOKEN_KEY, JSON.stringify({ access_token: "at", refresh_token: "rt" }));
+    return secrets;
+  }
+
+  it("calls the real client's deleteContact with the resourceName", async () => {
+    const secrets = await seededSecrets();
+    const deleteContact = vi.fn().mockResolvedValue(undefined);
+    const sync = createGoogleSync({
+      secrets,
+      createPeopleClient: () => ({
+        people: { connections: { list: vi.fn() }, createContact: vi.fn(), updateContact: vi.fn(), deleteContact },
+      }),
+    });
+
+    await sync.deleteContact("people/gone");
+    expect(deleteContact).toHaveBeenCalledWith({ resourceName: "people/gone" });
+  });
+
+  it("treats a 404 (already gone) as success, not an error", async () => {
+    const secrets = await seededSecrets();
+    const notFoundErr = Object.assign(new Error("not found"), { code: 404 });
+    const deleteContact = vi.fn().mockRejectedValue(notFoundErr);
+    const sync = createGoogleSync({
+      secrets,
+      createPeopleClient: () => ({
+        people: { connections: { list: vi.fn() }, createContact: vi.fn(), updateContact: vi.fn(), deleteContact },
+      }),
+    });
+
+    await expect(sync.deleteContact("people/already-gone")).resolves.toBeUndefined();
+  });
+
+  it("rethrows any other error", async () => {
+    const secrets = await seededSecrets();
+    const serverErr = Object.assign(new Error("Internal error."), { code: 500 });
+    const deleteContact = vi.fn().mockRejectedValue(serverErr);
+    const sync = createGoogleSync({
+      secrets,
+      createPeopleClient: () => ({
+        people: { connections: { list: vi.fn() }, createContact: vi.fn(), updateContact: vi.fn(), deleteContact },
+      }),
+    });
+
+    await expect(sync.deleteContact("people/x")).rejects.toThrow("Internal error.");
+  });
+});
+
+describe("deleteContactEverywhere", () => {
+  function fakeStore(contact: Contact | undefined): { store: DeletableStore; deleteCalls: string[] } {
+    const deleteCalls: string[] = [];
+    const store: DeletableStore = {
+      get: (id) => (contact && contact.id === id ? contact : undefined),
+      delete: (id) => {
+        deleteCalls.push(id);
+        return Boolean(contact && contact.id === id);
+      },
+    };
+    return { store, deleteCalls };
+  }
+
+  it("returns deleted:false and never calls delete on either side when the contact doesn't exist locally", async () => {
+    const { store, deleteCalls } = fakeStore(undefined);
+    const deleteContact = vi.fn();
+    const google: Pick<GoogleSync, "deleteContact"> = { deleteContact };
+
+    const summary = await deleteContactEverywhere("missing-id", store, google);
+
+    expect(summary).toEqual({ deleted: false });
+    expect(deleteCalls).toEqual([]);
+    expect(deleteContact).not.toHaveBeenCalled();
+  });
+
+  it("deletes locally only, without calling Google, when the contact has no googleResourceName", async () => {
+    const contact = baseContact({ id: "local-only" });
+    const { store } = fakeStore(contact);
+    const deleteContact = vi.fn();
+
+    const summary = await deleteContactEverywhere("local-only", store, { deleteContact });
+
+    expect(summary).toEqual({ deleted: true });
+    expect(deleteContact).not.toHaveBeenCalled();
+  });
+
+  it("deletes locally AND calls Google's deleteContact when the contact is linked", async () => {
+    const contact = baseContact({ id: "linked", googleResourceName: "people/c1" });
+    const { store } = fakeStore(contact);
+    const deleteContact = vi.fn().mockResolvedValue(undefined);
+
+    const summary = await deleteContactEverywhere("linked", store, { deleteContact });
+
+    expect(summary).toEqual({ deleted: true });
+    expect(deleteContact).toHaveBeenCalledWith("people/c1");
+  });
+
+  it("still reports deleted:true (local delete is not rolled back) when the Google-side delete fails, and surfaces the error", async () => {
+    const contact = baseContact({ id: "linked", googleResourceName: "people/c1" });
+    const { store } = fakeStore(contact);
+    const deleteContact = vi.fn().mockRejectedValue(new Error("Google isn't connected yet"));
+
+    const summary = await deleteContactEverywhere("linked", store, { deleteContact });
+
+    expect(summary.deleted).toBe(true);
+    expect(summary.googleDeleteError).toMatch(/isn't connected/);
   });
 });
 

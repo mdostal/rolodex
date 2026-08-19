@@ -10,7 +10,7 @@ import { Store } from "../lib/store.js";
 import type { Contact, Interaction } from "../lib/types.js";
 import { createSecretsAdapter, isPortunusAvailable as defaultIsPortunusAvailable, type CreateSecretsAdapterOptions, type SecretsAdapter } from "../lib/secrets-adapter.js";
 import { checkSecretsCapability } from "../lib/secrets-check.js";
-import { applyPullToStore, createGoogleSync } from "../lib/google-sync.js";
+import { applyPullToStore, createGoogleSync, deleteContactEverywhere } from "../lib/google-sync.js";
 import { connectGoogleAccount as defaultConnectGoogleAccount, type ConnectGoogleAccountOptions } from "../lib/google-oauth-flow.js";
 import {
   checkDbPathWritable,
@@ -749,12 +749,26 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
           }
 
           if (req.method === "DELETE") {
-            const contact = s.get(id);
-            if (!contact) {
+            // deleteContactEverywhere() does its own s.get(id)/not-found
+            // check — a separate one here would just be a second query for
+            // no benefit.
+            const summary = await deleteContactEverywhere(id, s, googleSync);
+            if (!summary.deleted) {
               sendJson(res, 404, { error: "not found" });
               return;
             }
-            s.delete(id);
+            if (summary.googleDeleteError) {
+              // Best-effort, non-blocking per the google-two-way-sync epic's
+              // design (decision 4) — the local delete already succeeded
+              // and is not rolled back for this. A 204 genuinely cannot
+              // carry a body to put a warning in, so this is logged
+              // server-side instead, the same way this codebase already
+              // logs other best-effort side-channel failures (e.g.
+              // withInMemoryFallback's console.warn).
+              console.warn(
+                `rolodex: deleted contact ${id} locally, but its linked Google contact could not be deleted: ${summary.googleDeleteError}`,
+              );
+            }
             // 204 genuinely has no body — bypassing sendJson() here rather
             // than sending it JSON.stringify(null)'s "null" text, which
             // would violate the no-body requirement of a 204 response.

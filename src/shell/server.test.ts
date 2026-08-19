@@ -953,6 +953,35 @@ describe("DELETE /api/contacts/:id", () => {
     const stillThere = await getJson(baseUrl + `/api/contacts/${keepId}`);
     expect(stillThere.status).toBe(200);
   });
+
+  it("a Google-linked contact still deletes locally (204) even when the best-effort Google-side delete fails, and logs the failure", async () => {
+    // No real Google OAuth is configured in this test server, so a contact
+    // that's (directly, via googleResourceName in the POST body — not a
+    // real sync) linked to Google will genuinely fail deleteContact()'s
+    // "Google isn't connected yet" check. That's exactly the real,
+    // naturally-occurring shape of a best-effort failure — no fake
+    // GoogleSync injection needed to exercise it.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { baseUrl } = await startReady();
+      const created = await postJson(baseUrl + "/api/contacts", {
+        name: "Ada Lovelace",
+        googleResourceName: "people/fake123",
+      });
+      const id = (created.body as { id: string }).id;
+
+      const { status, body } = await deleteRequest(baseUrl + `/api/contacts/${id}`);
+      expect(status).toBe(204);
+      expect(body).toBeUndefined();
+
+      const after = await getJson(baseUrl + `/api/contacts/${id}`);
+      expect(after.status).toBe(404);
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`${id}.*isn't connected`, "s")));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe("malformed JSON request bodies", () => {
