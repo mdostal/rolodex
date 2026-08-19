@@ -446,6 +446,7 @@
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
+    const getWizardSummary = () => api("/api/wizard/summary");
     const getAppearanceSettings = () => api("/api/settings/appearance");
     const putAppearanceSettings = (payload) =>
       api("/api/settings/appearance", {
@@ -860,46 +861,6 @@
         console.error(err);
       }
 
-      // The Google section of the settings popover — a "Reconnect Google"
-      // entry point for re-establishing a revoked/expired connection without
-      // rerunning the first-run wizard. Reuses the exact same server route
-      // (POST /api/wizard/google/connect) and connecting/cancel/success/error
-      // UX pattern already proven by wizard.html's runConnect(), just adapted
-      // to live inline in a popover section instead of a full wizard step.
-      // The actions area starts empty — wireGoogleSection() (called right
-      // after this is dropped into the DOM) renders the idle button into it,
-      // so there is exactly one place that creates that button and attaches
-      // its listener, rather than this template and wireGoogleSection() both
-      // doing it.
-      // The Autostart section — only ever rendered when GET /api/settings/
-      // autostart reports supported:true, i.e. running inside the packaged
-      // Electron app (src/electron/main.ts injects the real
-      // app.setLoginItemSettings-backed implementation; a plain `npm run
-      // shell` dev server has no OS concept of "autostart" at all, so there
-      // is nothing useful to show there — omitted entirely rather than
-      // shown disabled).
-      function autostartSectionHtml(enabled) {
-        return (
-          '<div class="log-interaction-form" id="autostart-section">' +
-          '<h3 class="settings-section-title">Startup</h3>' +
-          '<label class="checkbox-field">' +
-          '<input type="checkbox" id="autostart-toggle"' + (enabled ? " checked" : "") + " />" +
-          " Start rolodex at login" +
-          "</label>" +
-          "</div>"
-        );
-      }
-
-      function googleSectionHtml() {
-        return (
-          '<div class="log-interaction-form" id="google-section">' +
-          '<h3 class="settings-section-title">Google</h3>' +
-          '<div id="google-reconnect-status" class="status-line" aria-live="polite"></div>' +
-          '<div class="form-actions" id="google-reconnect-actions"></div>' +
-          "</div>"
-        );
-      }
-
       function wireSettingsPanel() {
         const anchor = document.getElementById("settings-anchor");
         const toggleBtn = document.getElementById("settings-toggle");
@@ -1008,90 +969,6 @@
               errorBanner.textContent = "Couldn't save: " + err.message;
             } finally {
               saveBtn.disabled = false;
-            }
-          });
-        }
-
-        function showGoogleStatus(kind, html) {
-          // Guards every caller against a panel that closed (and cleared
-          // wrap.innerHTML) while a reconnect was in flight — closePanel()
-          // aborts the controller, but the fetch's catch handler can still
-          // run one microtask later, after these nodes are already gone.
-          const el = document.getElementById("google-reconnect-status");
-          if (!el) return;
-          el.className = "status-line" + (kind ? " " + kind : "");
-          el.innerHTML = html;
-        }
-
-        function setGoogleActionsIdle() {
-          const actions = document.getElementById("google-reconnect-actions");
-          if (!actions) return;
-          actions.innerHTML = '<button type="button" class="secondary" id="reconnect-google-btn">Reconnect Google</button>';
-          document.getElementById("reconnect-google-btn").addEventListener("click", runReconnect);
-        }
-
-        function setGoogleActionsConnecting() {
-          const actions = document.getElementById("google-reconnect-actions");
-          if (!actions) return;
-          actions.innerHTML = '<button type="button" class="secondary" id="reconnect-google-cancel">Cancel</button>';
-          document.getElementById("reconnect-google-cancel").addEventListener("click", () => {
-            if (reconnectController) reconnectController.abort();
-          });
-        }
-
-        // Runs the real OAuth loopback consent flow via the same
-        // POST /api/wizard/google/connect route the wizard's Google-connect
-        // step uses (src/shell/server.ts), and the same abort-propagation
-        // guarantee: aborting `controller` here aborts this fetch, which
-        // (per api()'s plain `await fetch(...)`) rejects with an AbortError
-        // that this function distinguishes from a real failure below — the
-        // server side of that guarantee (req.on("close") -> AbortSignal ->
-        // connectGoogleAccount) is entirely inside the shared route and does
-        // not change based on which UI called it.
-        async function runReconnect() {
-          showGoogleStatus(
-            "checking",
-            '<span class="spinner" aria-hidden="true"></span> Connecting… waiting for you to finish in your browser.',
-          );
-          setGoogleActionsConnecting();
-          const controller = new AbortController();
-          reconnectController = controller;
-          try {
-            await api("/api/wizard/google/connect", { method: "POST", signal: controller.signal });
-            reconnectController = null;
-            showGoogleStatus("success", "&#10003; Google account connected.");
-            setGoogleActionsIdle();
-          } catch (err) {
-            reconnectController = null;
-            if (err && err.name === "AbortError") {
-              showGoogleStatus("", "Connection canceled. You can try connecting again whenever you're ready.");
-            } else {
-              showGoogleStatus("error", escapeHtml((err && err.message) || "Something went wrong connecting your Google account."));
-            }
-            setGoogleActionsIdle();
-          }
-        }
-
-        function wireGoogleSection() {
-          setGoogleActionsIdle();
-        }
-
-        function wireAutostartSection() {
-          const toggle = document.getElementById("autostart-toggle");
-          if (!toggle) return;
-          toggle.addEventListener("change", async () => {
-            const desired = toggle.checked;
-            toggle.disabled = true;
-            try {
-              await putAutostartSettings({ enabled: desired });
-            } catch (err) {
-              // Revert the checkbox on failure rather than showing a
-              // checked/unchecked state that doesn't match what's actually
-              // registered with the OS.
-              toggle.checked = !desired;
-              console.error(err);
-            } finally {
-              toggle.disabled = false;
             }
           });
         }
@@ -1278,6 +1155,153 @@
       });
     }
 
+    // The Autostart section — only ever rendered when GET /api/settings/
+    // autostart reports supported:true, i.e. running inside the packaged
+    // Electron app (src/electron/main.ts injects the real
+    // app.setLoginItemSettings-backed implementation; a plain `npm run
+    // shell` dev server has no OS concept of "autostart" at all, so there
+    // is nothing useful to show there — omitted entirely rather than shown
+    // disabled).
+    function autostartSectionHtml(enabled) {
+      return (
+        '<div class="log-interaction-form" id="autostart-section">' +
+        '<h3 class="settings-section-title">Startup</h3>' +
+        '<label class="checkbox-field">' +
+        '<input type="checkbox" id="autostart-toggle"' + (enabled ? " checked" : "") + " />" +
+        " Start rolodex at login" +
+        "</label>" +
+        "</div>"
+      );
+    }
+
+    function wireAutostartSection() {
+      const toggle = document.getElementById("autostart-toggle");
+      if (!toggle) return;
+      toggle.addEventListener("change", async () => {
+        const desired = toggle.checked;
+        toggle.disabled = true;
+        try {
+          await putAutostartSettings({ enabled: desired });
+        } catch (err) {
+          // Revert the checkbox on failure rather than showing a
+          // checked/unchecked state that doesn't match what's actually
+          // registered with the OS.
+          toggle.checked = !desired;
+          console.error(err);
+        } finally {
+          toggle.disabled = false;
+        }
+      });
+    }
+
+    // The Google section — a real three-state account status line (Signed
+    // in / Client configured, not signed in / Not configured — computed
+    // server-side from GET /api/wizard/summary's googleConfigured +
+    // googleSignedIn, since googleConfigured alone can't distinguish
+    // "configured but never signed in" from "fully connected") plus a
+    // "Reconnect Google" entry point for establishing/re-establishing the
+    // connection without rerunning the first-run wizard. Reuses the exact
+    // same server route (POST /api/wizard/google/connect) and
+    // connecting/cancel/success/error UX pattern already proven by
+    // wizard.html's runConnect(). The reconnect-actions area starts empty —
+    // wireGoogleSection() (called right after this is dropped into the DOM)
+    // renders the idle button into it, so there is exactly one place that
+    // creates that button and attaches its listener.
+    function googleAccountStatusText(status) {
+      if (status === "signed-in") return { kind: "success", text: "✓ Signed in." };
+      if (status === "configured") return { kind: "", text: "Client configured, not signed in yet." };
+      return { kind: "", text: "Not configured." };
+    }
+    function googleSectionHtml(status) {
+      const initial = googleAccountStatusText(status);
+      return (
+        '<div class="log-interaction-form" id="google-section">' +
+        '<h3 class="settings-section-title">Google account</h3>' +
+        '<div class="status-line' + (initial.kind ? " " + initial.kind : "") + '" id="google-account-status">' + initial.text + "</div>" +
+        '<div id="google-reconnect-status" class="status-line" aria-live="polite"></div>' +
+        '<div class="form-actions" id="google-reconnect-actions"></div>' +
+        "</div>"
+      );
+    }
+
+    // AbortController for an in-flight "Reconnect Google" request, if any —
+    // tracked at module scope (not just inside runReconnect()'s own
+    // closure) purely so a future caller could abort it from elsewhere; the
+    // settings page itself doesn't need to abort on navigate-away today
+    // since showGoogleStatus()'s own `if (!el) return` guard already makes
+    // a stale in-flight update after leaving the page a safe no-op, not a
+    // crash.
+    let reconnectController = null;
+
+    function showGoogleStatus(kind, html) {
+      const el = document.getElementById("google-reconnect-status");
+      if (!el) return;
+      el.className = "status-line" + (kind ? " " + kind : "");
+      el.innerHTML = html;
+    }
+
+    function setGoogleActionsIdle() {
+      const actions = document.getElementById("google-reconnect-actions");
+      if (!actions) return;
+      actions.innerHTML = '<button type="button" class="secondary" id="reconnect-google-btn">Reconnect Google</button>';
+      document.getElementById("reconnect-google-btn").addEventListener("click", runReconnect);
+    }
+
+    function setGoogleActionsConnecting() {
+      const actions = document.getElementById("google-reconnect-actions");
+      if (!actions) return;
+      actions.innerHTML = '<button type="button" class="secondary" id="reconnect-google-cancel">Cancel</button>';
+      document.getElementById("reconnect-google-cancel").addEventListener("click", () => {
+        if (reconnectController) reconnectController.abort();
+      });
+    }
+
+    // Runs the real OAuth loopback consent flow via the same
+    // POST /api/wizard/google/connect route the wizard's Google-connect
+    // step uses (src/shell/server.ts), and the same abort-propagation
+    // guarantee: aborting `controller` here aborts this fetch, which (per
+    // api()'s plain `await fetch(...)`) rejects with an AbortError that
+    // this function distinguishes from a real failure below — the server
+    // side of that guarantee (req.on("close") -> AbortSignal ->
+    // connectGoogleAccount) is entirely inside the shared route and does
+    // not change based on which UI called it.
+    async function runReconnect() {
+      showGoogleStatus(
+        "checking",
+        '<span class="spinner" aria-hidden="true"></span> Connecting… waiting for you to finish in your browser.',
+      );
+      setGoogleActionsConnecting();
+      const controller = new AbortController();
+      reconnectController = controller;
+      try {
+        await api("/api/wizard/google/connect", { method: "POST", signal: controller.signal });
+        reconnectController = null;
+        showGoogleStatus("success", "&#10003; Google account connected.");
+        setGoogleActionsIdle();
+        // A successful connect means a fresh token was just stored — update
+        // the account-status line in place rather than re-fetching the
+        // whole wizard summary just for this one field.
+        const statusEl = document.getElementById("google-account-status");
+        if (statusEl) {
+          const signedIn = googleAccountStatusText("signed-in");
+          statusEl.className = "status-line" + (signedIn.kind ? " " + signedIn.kind : "");
+          statusEl.textContent = signedIn.text;
+        }
+      } catch (err) {
+        reconnectController = null;
+        if (err && err.name === "AbortError") {
+          showGoogleStatus("", "Connection canceled. You can try connecting again whenever you're ready.");
+        } else {
+          showGoogleStatus("error", escapeHtml((err && err.message) || "Something went wrong connecting your Google account."));
+        }
+        setGoogleActionsIdle();
+      }
+    }
+
+    function wireGoogleSection() {
+      setGoogleActionsIdle();
+    }
+
     function rowHtml(c) {
       const meta = verdictMeta(c.verdict);
       const next = c.nextStep || "";
@@ -1319,6 +1343,12 @@
         "</section>" +
         '<section>' +
         '<div id="appearance-section-body">Loading&hellip;</div>' +
+        "</section>" +
+        '<section>' +
+        '<div id="autostart-section-body"></div>' +
+        "</section>" +
+        '<section>' +
+        '<div id="google-section-body">Loading&hellip;</div>' +
         "</section>" +
         "</div>";
 
@@ -1391,6 +1421,27 @@
       }
       document.getElementById("appearance-section-body").innerHTML = appearanceSectionHtml(appearance.theme, appearance.iconId);
       wireAppearanceSection(appearance.theme, appearance.iconId);
+
+      let autostart = { supported: false, enabled: false };
+      try {
+        autostart = await getAutostartSettings();
+      } catch (err) {
+        console.error(err);
+      }
+      if (autostart.supported) {
+        document.getElementById("autostart-section-body").innerHTML = autostartSectionHtml(autostart.enabled);
+        wireAutostartSection();
+      }
+
+      let googleStatus = "not-configured";
+      try {
+        const summary = await getWizardSummary();
+        googleStatus = summary.googleSignedIn ? "signed-in" : summary.googleConfigured ? "configured" : "not-configured";
+      } catch (err) {
+        console.error(err);
+      }
+      document.getElementById("google-section-body").innerHTML = googleSectionHtml(googleStatus);
+      wireGoogleSection();
     }
 
     // ---- Detail view ----------------------------------------------------------
