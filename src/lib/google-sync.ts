@@ -53,8 +53,11 @@ const GOOGLE_OAUTH_CLIENT_KEY = "google.oauth.client";
 export const GOOGLE_OAUTH_TOKEN_KEY = "google.oauth.token";
 
 /** People API field mask requested on every `connections.list` call — keep in
- * sync with the fields mapPersonToContact() actually reads. */
-const PERSON_FIELDS = "names,organizations,emailAddresses,phoneNumbers";
+ * sync with the fields mapPersonToContact() actually reads. `metadata` is
+ * requested explicitly (not assumed to come back for free) since it's what
+ * carries `sources[].etag` — the value push()'s updateContact call needs for
+ * Google's own optimistic-concurrency check. */
+const PERSON_FIELDS = "names,organizations,emailAddresses,phoneNumbers,metadata";
 
 /** Max page size the People API accepts for `people.connections.list`. */
 const PAGE_SIZE = 1000;
@@ -71,6 +74,12 @@ export interface PersonLite {
   organizations?: { name?: string | null; title?: string | null }[] | null;
   emailAddresses?: { value?: string | null }[] | null;
   phoneNumbers?: { value?: string | null }[] | null;
+  /** Carries `sources[].etag` — the per-person concurrency token push()'s
+   * updateContact call sends back to Google. A person can in principle have
+   * more than one `sources` entry; mapPersonToContact() takes the first one
+   * that actually has an etag rather than assuming a specific source count
+   * or exact `type` value to match on. */
+  metadata?: { sources?: { type?: string | null; etag?: string | null }[] | null } | null;
 }
 
 /** The slice of the real `people_v1.People` client (as returned by
@@ -164,6 +173,7 @@ export function mapPersonToContact(person: PersonLite): Contact {
   const resourceName = person.resourceName ?? undefined;
   const name = person.names?.[0]?.displayName?.trim();
   const email = person.emailAddresses?.[0]?.value ?? undefined;
+  const etag = person.metadata?.sources?.find((s) => s.etag)?.etag ?? undefined;
   const now = new Date().toISOString();
   return {
     // Falls back to a fresh uuid only in the (real-world-never-happens)
@@ -182,6 +192,7 @@ export function mapPersonToContact(person: PersonLite): Contact {
     phone: person.phoneNumbers?.[0]?.value ?? undefined,
     verdict: "none",
     googleResourceName: resourceName,
+    googleEtag: etag,
     createdAt: now,
     updatedAt: now,
   };
