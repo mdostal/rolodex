@@ -29,8 +29,12 @@ import { createSecretsAdapter, type SecretsAdapter } from "./secrets-adapter.js"
 export interface GoogleSync {
   /** Pull all connections into normalized Contacts (verdict/angle stay local). */
   pull(): Promise<Contact[]>;
-  /** Push a local Contact to Google (create or update by resourceName). */
-  push(c: Contact): Promise<{ resourceName: string }>;
+  /** Push a local Contact to Google (create or update by resourceName).
+   * Returns the resourceName/etag the caller must persist back onto the
+   * local row via Store.upsert() — using the OLD etag for a second push
+   * without saving the new one would spuriously fail the next call's
+   * conflict check against Google's now-updated etag. */
+  push(c: Contact): Promise<{ resourceName: string; etag?: string }>;
 }
 
 /** SecretsAdapter key for the pasted Google OAuth client credentials, stored
@@ -70,7 +74,12 @@ type OAuth2ClientLike = InstanceType<typeof google.auth.OAuth2>;
  * module reads (the real `people_v1.Schema$Person` has dozens more). */
 export interface PersonLite {
   resourceName?: string | null;
-  names?: { displayName?: string | null }[] | null;
+  /** `displayName` is read-only on the real API (computed server-side from
+   * the structured name parts) — pull() reads it, but a write must set
+   * `givenName`/`familyName` instead; see contactToPersonBody()'s doc
+   * comment for how this repo splits (or deliberately doesn't split) a
+   * single Contact.name string across them. */
+  names?: { displayName?: string | null; givenName?: string | null; familyName?: string | null }[] | null;
   organizations?: { name?: string | null; title?: string | null }[] | null;
   emailAddresses?: { value?: string | null }[] | null;
   phoneNumbers?: { value?: string | null }[] | null;
@@ -97,7 +106,39 @@ export interface PeopleApiClient {
         pageToken?: string;
       }): Promise<{ data: { connections?: PersonLite[] | null; nextPageToken?: string | null } }>;
     };
+    /** Real googleapis method is people.people.createContact — sibling of
+     * `connections`, not nested under it. */
+    createContact(params: { requestBody: PersonLite }): Promise<{ data: PersonLite }>;
+    /** Real googleapis method is people.people.updateContact.
+     * `updatePersonFields` is the field-mask naming exactly which top-level
+     * fields this call overwrites; fields the mask doesn't name are left
+     * untouched server-side even if the request body happens to omit them. */
+    updateContact(params: {
+      resourceName: string;
+      updatePersonFields: string;
+      requestBody: PersonLite;
+    }): Promise<{ data: PersonLite }>;
   };
+}
+
+/** The subset of a real googleapis error's shape push() needs to
+ * distinguish "etag mismatch, real conflict" (400) from "resourceName no
+ * longer exists on Google's side" (404) from anything else (rethrown
+ * as-is). Real GaxiosError instances expose the HTTP status under one of
+ * several property names depending on googleapis version — checked in
+ * order rather than assumed, so this isn't pinned to one exact shape. */
+function httpStatusOf(err: unknown): number | undefined {
+  const e = err as { code?: unknown; status?: unknown; response?: { status?: unknown } };
+  const candidate = e.code ?? e.status ?? e.response?.status;
+  return typeof candidate === "number" ? candidate : undefined;
+}
+
+/** Same source mapPersonToContact() reads googleEtag from, reused here for
+ * push()'s createContact/updateContact responses — the fresh etag those
+ * calls return has to be persisted back onto the local row (by the caller,
+ * via Store.upsert()) or the next push() will send a now-stale value. */
+function extractEtag(person: PersonLite): string | undefined {
+  return person.metadata?.sources?.find((s) => s.etag)?.etag ?? undefined;
 }
 
 export interface CreateGoogleSyncOptions {
@@ -173,7 +214,7 @@ export function mapPersonToContact(person: PersonLite): Contact {
   const resourceName = person.resourceName ?? undefined;
   const name = person.names?.[0]?.displayName?.trim();
   const email = person.emailAddresses?.[0]?.value ?? undefined;
-  const etag = person.metadata?.sources?.find((s) => s.etag)?.etag ?? undefined;
+  const etag = extractEtag(person);
   const now = new Date().toISOString();
   return {
     // Falls back to a fresh uuid only in the (real-world-never-happens)
@@ -198,6 +239,74 @@ export function mapPersonToContact(person: PersonLite): Contact {
   };
 }
 
+/**
+ * Inverse of mapPersonToContact() — builds the write-side Person body
+ * push() sends to createContact/updateContact. Only ever writes the same
+ * fields pull() reads (names/organizations/emailAddresses/phoneNumbers) —
+ * verdict/angle/nextStep/tags/met/what never leave the local DB, matching
+ * mergeLocalOnlyFields()'s contract in the outbound direction too.
+ *
+ * Name-splitting decision: Google's `names[].displayName` is read-only:
+ * writes must go through `givenName`/`familyName` instead, and rolodex's
+ * Contact model has no such split — it's one `name` string. Rather than
+ * guess where to split it (naive last-space splitting mangles multi-word
+ * family names, suffixes, single names, etc. — a real "no silent guesses"
+ * violation), the whole string goes into `givenName` alone, leaving
+ * `familyName` unset. Google renders a person's displayName correctly from
+ * givenName alone; the only real cost is that Google Contacts' own
+ * family-name-based sorting/grouping won't have anything to key off for a
+ * contact pushed from here.
+ */
+export function contactToPersonBody(c: Contact): PersonLite {
+  const body: PersonLite = {
+    names: [{ givenName: c.name }],
+  };
+  if (c.org || c.role) body.organizations = [{ name: c.org ?? undefined, title: c.role ?? undefined }];
+  if (c.email) body.emailAddresses = [{ value: c.email }];
+  if (c.phone) body.phoneNumbers = [{ value: c.phone }];
+  return body;
+}
+
+/** Shared auth bootstrap for both pull() and push() — reads the stored
+ * OAuth client/token, wires the same "persist a silent refresh back to the
+ * keychain" hook either call might trigger, and returns a ready-to-use
+ * People API client. Pulled out of pull() (unchanged behavior/error
+ * messages) so push() doesn't duplicate it. */
+async function getAuthenticatedClient(
+  secrets: SecretsAdapter,
+  createPeopleClient: (auth: OAuth2ClientLike) => PeopleApiClient,
+): Promise<PeopleApiClient> {
+  const clientRaw = await secrets.get(GOOGLE_OAUTH_CLIENT_KEY);
+  if (!clientRaw) {
+    throw new Error(
+      "Google isn't connected yet — save an OAuth client from the setup wizard's Google-connect step (or Settings) before syncing.",
+    );
+  }
+  const { clientId, clientSecret } = parseStoredClient(clientRaw);
+
+  const tokenRaw = await secrets.get(GOOGLE_OAUTH_TOKEN_KEY);
+  if (!tokenRaw) {
+    throw new Error(
+      "Google sign-in hasn't happened yet — no OAuth token is stored (the consent flow is coming soon). Complete Google sign-in, then sync again.",
+    );
+  }
+  const token = parseStoredToken(tokenRaw);
+
+  const auth = new google.auth.OAuth2(clientId, clientSecret);
+  // Persist a token refreshed during this call back to the keychain (not
+  // just kept in-memory for this one call) — otherwise every call after the
+  // stored access_token expires would silently re-derive a fresh one from
+  // refresh_token without ever updating what's stored, and the keychain's
+  // copy would drift stale forever. Wired before setCredentials()/use so it
+  // also covers a refresh triggered by the very first request this client
+  // makes.
+  auth.on("tokens", (tokens) => {
+    void secrets.set(GOOGLE_OAUTH_TOKEN_KEY, JSON.stringify(tokens));
+  });
+  auth.setCredentials(token);
+  return createPeopleClient(auth);
+}
+
 /** Factory — real impl wires googleapis with the owner's OAuth (read back
  * from SecretsAdapter, never re-collected here). */
 export function createGoogleSync(opts: CreateGoogleSyncOptions = {}): GoogleSync {
@@ -206,35 +315,7 @@ export function createGoogleSync(opts: CreateGoogleSyncOptions = {}): GoogleSync
 
   return {
     async pull() {
-      const clientRaw = await secrets.get(GOOGLE_OAUTH_CLIENT_KEY);
-      if (!clientRaw) {
-        throw new Error(
-          "Google isn't connected yet — save an OAuth client from the setup wizard's Google-connect step (or Settings) before syncing.",
-        );
-      }
-      const { clientId, clientSecret } = parseStoredClient(clientRaw);
-
-      const tokenRaw = await secrets.get(GOOGLE_OAUTH_TOKEN_KEY);
-      if (!tokenRaw) {
-        throw new Error(
-          "Google sign-in hasn't happened yet — no OAuth token is stored (the consent flow is coming soon). Complete Google sign-in, then sync again.",
-        );
-      }
-      const token = parseStoredToken(tokenRaw);
-
-      const auth = new google.auth.OAuth2(clientId, clientSecret);
-      // Persist a token refreshed during this pull() back to the keychain
-      // (not just kept in-memory for this one call) — otherwise every call
-      // after the stored access_token expires would silently re-derive a
-      // fresh one from refresh_token without ever updating what's stored,
-      // and the keychain's copy would drift stale forever. Wired before
-      // setCredentials()/use so it also covers a refresh triggered by the
-      // very first request this client makes.
-      auth.on("tokens", (tokens) => {
-        void secrets.set(GOOGLE_OAUTH_TOKEN_KEY, JSON.stringify(tokens));
-      });
-      auth.setCredentials(token);
-      const client = createPeopleClient(auth);
+      const client = await getAuthenticatedClient(secrets, createPeopleClient);
 
       const contacts: Contact[] = [];
       let pageToken: string | undefined;
@@ -253,11 +334,47 @@ export function createGoogleSync(opts: CreateGoogleSyncOptions = {}): GoogleSync
 
       return contacts;
     },
-    async push(_c) {
-      // Explicitly out of scope for this story — see structured-outline.md's
-      // GoogleSync interface note: "push(c: Contact): Promise<{ resourceName:
-      // string }>;  // stays a stub".
-      throw new Error("not implemented — People API create/updateContact");
+    async push(c) {
+      const client = await getAuthenticatedClient(secrets, createPeopleClient);
+      const body = contactToPersonBody(c);
+
+      const create = async (): Promise<{ resourceName: string; etag?: string }> => {
+        const { data } = await client.people.createContact({ requestBody: body });
+        // A created contact always gets a real resourceName back from a
+        // successful call — treated as a genuine invariant, not silently
+        // cast past, since a caller trusting an empty resourceName would
+        // then write a broken link into the local row.
+        if (!data.resourceName) {
+          throw new Error(`Google's createContact response for "${c.name}" didn't include a resourceName.`);
+        }
+        return { resourceName: data.resourceName, etag: extractEtag(data) };
+      };
+
+      if (!c.googleResourceName) return create();
+
+      try {
+        const { data } = await client.people.updateContact({
+          resourceName: c.googleResourceName,
+          updatePersonFields: "names,organizations,emailAddresses,phoneNumbers",
+          requestBody: { ...body, metadata: { sources: [{ etag: c.googleEtag ?? undefined }] } },
+        });
+        return { resourceName: data.resourceName ?? c.googleResourceName, etag: extractEtag(data) };
+      } catch (err) {
+        const status = httpStatusOf(err);
+        if (status === 400) {
+          throw new Error(
+            `"${c.name}" changed on Google since your last sync (its saved version no longer matches) — pull, then push again.`,
+          );
+        }
+        if (status === 404) {
+          // The linked Google contact is gone — re-create rather than
+          // treat the local row as orphaned. Google is never authoritative
+          // for existence here; only the local row is (see the
+          // google-two-way-sync epic's design discussion, decision 4).
+          return create();
+        }
+        throw err;
+      }
     },
   };
 }
