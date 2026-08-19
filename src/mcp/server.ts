@@ -58,6 +58,10 @@ interface SyncGoogleArgs {
   direction: "pull" | "push" | "both";
 }
 
+interface DeleteArgs {
+  contactId: string;
+}
+
 /** Handlers exposed alongside the McpServer they're registered on, so tests
  * can call them directly (in-process, no transport) rather than round-tripping
  * through stdio JSON-RPC just to exercise the logic. See createRolodexMcpServer's
@@ -69,6 +73,7 @@ export interface RolodexMcpHandlers {
   rolodex_followups: (args: FollowupsArgs, extra?: unknown) => Promise<CallToolResult>;
   rolodex_log_interaction: (args: LogInteractionArgs, extra?: unknown) => Promise<CallToolResult>;
   rolodex_sync_google: (args: SyncGoogleArgs, extra?: unknown) => Promise<CallToolResult>;
+  rolodex_delete: (args: DeleteArgs, extra?: unknown) => Promise<CallToolResult>;
 }
 
 export interface RolodexMcpServerOptions {
@@ -241,6 +246,22 @@ export function createRolodexMcpServer(
     syncHandler,
   );
 
+  const deleteHandler = withErrorHandling<DeleteArgs>(async (args) => {
+    const existing = store.get(args.contactId);
+    if (!existing) {
+      return errorResult(`no contact found with id ${args.contactId}`);
+    }
+    store.delete(args.contactId);
+    return textResult({ deleted: true, id: args.contactId, name: existing.name });
+  });
+
+  server.tool(
+    "rolodex_delete",
+    "Permanently delete a contact and its interaction history. This is destructive and cannot be undone — there is no undo, no trash/archive. Only call this when the user has explicitly and unambiguously asked to delete or remove a specific contact, never as a side effect of a search, an update, or your own inference. If you're unsure which contact they mean, or whether they actually want it gone (as opposed to just deprioritized — that's what verdict is for), ask first rather than guessing.",
+    { contactId: z.string() },
+    deleteHandler,
+  );
+
   return {
     server,
     handlers: {
@@ -249,6 +270,7 @@ export function createRolodexMcpServer(
       rolodex_followups: followupsHandler,
       rolodex_log_interaction: logInteractionHandler,
       rolodex_sync_google: syncHandler,
+      rolodex_delete: deleteHandler,
     },
   };
 }

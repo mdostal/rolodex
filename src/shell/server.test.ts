@@ -80,6 +80,15 @@ async function putJson(url: string, payload?: unknown): Promise<{ status: number
   return { status: res.status, body };
 }
 
+async function deleteRequest(url: string): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(url, { method: "DELETE" });
+  // A real 204 has no body at all — res.json() on an empty body throws,
+  // which the .catch() here treats the same as "no body", matching every
+  // other helper's shape rather than needing a special case at call sites.
+  const body = await res.json().catch(() => undefined);
+  return { status: res.status, body };
+}
+
 /** Sends a raw, deliberately-malformed JSON body (not run through
  * JSON.stringify — postJson()/patchJson() can only ever send valid JSON). */
 async function postRawBody(
@@ -897,6 +906,52 @@ describe("POST/GET /api/contacts/:id/interactions", () => {
     expect(getRes.status).toBe(404);
     const postRes = await postJson(baseUrl + "/api/contacts/does-not-exist/interactions", { note: "x" });
     expect(postRes.status).toBe(404);
+  });
+});
+
+describe("DELETE /api/contacts/:id", () => {
+  it("deletes an existing contact and returns 204 with no body", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+
+    const { status, body } = await deleteRequest(baseUrl + `/api/contacts/${id}`);
+    expect(status).toBe(204);
+    expect(body).toBeUndefined();
+
+    const after = await getJson(baseUrl + `/api/contacts/${id}`);
+    expect(after.status).toBe(404);
+  });
+
+  it("also deletes the contact's interaction history", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+    await postJson(baseUrl + `/api/contacts/${id}/interactions`, { note: "Called once" });
+
+    await deleteRequest(baseUrl + `/api/contacts/${id}`);
+
+    const historyRes = await getJson(baseUrl + `/api/contacts/${id}/interactions`);
+    expect(historyRes.status).toBe(404);
+  });
+
+  it("returns 404 for an unknown contact id", async () => {
+    const { baseUrl } = await startReady();
+    const { status } = await deleteRequest(baseUrl + "/api/contacts/does-not-exist");
+    expect(status).toBe(404);
+  });
+
+  it("does not remove other contacts", async () => {
+    const { baseUrl } = await startReady();
+    const keep = await postJson(baseUrl + "/api/contacts", { name: "Grace Hopper" });
+    const gone = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const keepId = (keep.body as { id: string }).id;
+    const goneId = (gone.body as { id: string }).id;
+
+    await deleteRequest(baseUrl + `/api/contacts/${goneId}`);
+
+    const stillThere = await getJson(baseUrl + `/api/contacts/${keepId}`);
+    expect(stillThere.status).toBe(200);
   });
 });
 

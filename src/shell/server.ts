@@ -747,6 +747,21 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
             sendJson(res, 200, contact);
             return;
           }
+
+          if (req.method === "DELETE") {
+            const contact = s.get(id);
+            if (!contact) {
+              sendJson(res, 404, { error: "not found" });
+              return;
+            }
+            s.delete(id);
+            // 204 genuinely has no body — bypassing sendJson() here rather
+            // than sending it JSON.stringify(null)'s "null" text, which
+            // would violate the no-body requirement of a 204 response.
+            res.writeHead(204);
+            res.end();
+            return;
+          }
         }
 
         // /api/contacts/:id/verdict and /api/contacts/:id/next-step
