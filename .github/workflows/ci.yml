@@ -17,4 +17,11 @@ jobs:
 
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      # --maxWorkers=2: shared CI runners have less real, uncontended CPU
+      # than local dev machines assume — under full default parallelism,
+      # JSDOM-heavy tests (src/shell/wizard.test.ts's timer-polling
+      # waitFor() helper) have intermittently timed out here even with a
+      # generous per-wait budget, while always passing locally and on
+      # retry. Capping worker count gives each file more real wall-clock
+      # time instead of repeatedly guessing at larger timeouts.
+      - run: npm test -- --maxWorkers=2

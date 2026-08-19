@@ -42,7 +42,17 @@ import { getSecretsBackendChoiceSync } from "./secrets-backend-config.js";
 // suite run, without anything actually being hung — confirmed by CI
 // reporting "Test timed out in 5000ms" specifically, not a waitFor()
 // message, on every failing test in this file.
-vi.setConfig({ testTimeout: 20000 });
+//
+// Bumped again (20000 -> 60000): this is a PER-TEST total budget, not a
+// per-waitFor() one — "back targets match the reorder" alone drives ~11
+// sequential goForward()/goBack()/waitFor() calls, each internally capped
+// at 10s. 20000ms gave headroom for roughly two slow waits before hitting
+// this ceiling; under real CI contention (confirmed via a genuine CI
+// failure, not assumed) that's not enough slack for eleven. Real CI
+// concurrency was also reduced separately (ci.yml/release.yml's
+// `--maxWorkers=2`) rather than trying to fix this by raising numbers
+// alone — the two mitigations are independent, not redundant.
+vi.setConfig({ testTimeout: 60000 });
 
 let dir: string;
 let server: Server | undefined;
