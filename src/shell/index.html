@@ -254,6 +254,15 @@
     .settings-page { max-width: 640px; }
     .settings-page h1 { margin: 0 0 4px; font-size: 1.4rem; }
     .settings-page .settings-subtitle { margin: 0 0 24px; color: var(--muted); font-size: 0.9rem; }
+    .settings-path-value {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.82rem; background: var(--chip-bg); border-radius: 6px;
+      padding: 8px 10px; word-break: break-all; margin-bottom: 10px;
+    }
+    .settings-note {
+      margin-top: 10px; font-size: 0.85rem; color: var(--muted);
+      background: var(--chip-bg); border-radius: 6px; padding: 8px 10px;
+    }
     .settings-anchor { position: relative; display: inline-block; margin-right: 8px; }
     .settings-panel {
       position: absolute; top: calc(100% + 8px); right: 0; z-index: 20;
@@ -447,6 +456,14 @@
         body: JSON.stringify(payload),
       });
     const getWizardSummary = () => api("/api/wizard/summary");
+    const getDbLocation = () => api("/api/wizard/database");
+    const postDbLocation = (dbPath) =>
+      api("/api/wizard/database", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: dbPath }),
+      });
+    const postDbLocationReset = () => api("/api/wizard/database/reset", { method: "POST" });
     const getAppearanceSettings = () => api("/api/settings/appearance");
     const putAppearanceSettings = (payload) =>
       api("/api/settings/appearance", {
@@ -1302,6 +1319,92 @@
       setGoogleActionsIdle();
     }
 
+    // The Database location section — new this epic, not migrated from
+    // anywhere. Reuses the wizard's own GET/POST /api/wizard/database +
+    // POST .../reset routes verbatim (same writable-check gate: a rejected
+    // candidate never overwrites a working override). Unlike the wizard,
+    // this can never take effect live — `Store`/`secrets` are both
+    // memoized for the server process's lifetime (see the epic's design
+    // discussion) — so a successful change/reset shows a persistent
+    // "restart to apply" note instead of implying anything happened
+    // immediately.
+    function databaseSectionHtml() {
+      return (
+        '<div class="log-interaction-form" id="database-section">' +
+        '<h3 class="settings-section-title">Database location</h3>' +
+        '<div class="settings-path-value" id="db-path-display">Checking&hellip;</div>' +
+        '<div class="status-line" id="db-status" aria-live="polite"></div>' +
+        '<div class="form-actions">' +
+        '<button type="button" class="secondary" id="db-change-toggle">Change&hellip;</button>' +
+        '<button type="button" class="secondary" id="db-reset" hidden>Reset to default</button>' +
+        "</div>" +
+        '<div class="form-field" id="db-change-panel" hidden>' +
+        '<label for="db-path-input">New location (full file path)</label>' +
+        '<input type="text" id="db-path-input" autocomplete="off" spellcheck="false" />' +
+        '<div class="form-actions"><button type="button" id="db-path-apply">Check this location</button></div>' +
+        "</div>" +
+        '<div class="settings-note" id="db-apply-note" hidden>Applies next launch — restart rolodex to switch.</div>' +
+        "</div>"
+      );
+    }
+
+    function wireDatabaseSection() {
+      const display = document.getElementById("db-path-display");
+      const status = document.getElementById("db-status");
+      const resetBtn = document.getElementById("db-reset");
+      const changeToggle = document.getElementById("db-change-toggle");
+      const changePanel = document.getElementById("db-change-panel");
+      const pathInput = document.getElementById("db-path-input");
+      const applyNote = document.getElementById("db-apply-note");
+
+      function paint(result) {
+        display.textContent = result.path;
+        resetBtn.hidden = result.isDefault;
+        if (result.writable) {
+          status.className = "status-line success";
+          status.textContent = "✓ This location is writable.";
+        } else {
+          status.className = "status-line error";
+          status.textContent =
+            "This location isn't writable — choose a different folder or use the default." +
+            (result.error ? " " + result.error : "");
+        }
+      }
+
+      changeToggle.addEventListener("click", () => {
+        changePanel.hidden = !changePanel.hidden;
+        if (!changePanel.hidden) pathInput.focus();
+      });
+
+      document.getElementById("db-path-apply").addEventListener("click", async () => {
+        const candidate = pathInput.value.trim();
+        if (!candidate) return;
+        status.className = "status-line";
+        status.textContent = "Checking…";
+        const result = await postDbLocation(candidate);
+        paint(result);
+        if (result.writable) {
+          applyNote.hidden = false;
+          pathInput.value = "";
+          changePanel.hidden = true;
+        }
+      });
+
+      resetBtn.addEventListener("click", async () => {
+        if (!confirm("Reset the database location to the default path? This only changes where rolodex looks for data — it doesn't move or delete anything.")) return;
+        status.className = "status-line";
+        status.textContent = "Checking…";
+        const result = await postDbLocationReset();
+        paint(result);
+        applyNote.hidden = false;
+      });
+
+      getDbLocation().then(paint).catch((err) => {
+        status.className = "status-line error";
+        status.textContent = "Couldn't load: " + err.message;
+      });
+    }
+
     function rowHtml(c) {
       const meta = verdictMeta(c.verdict);
       const next = c.nextStep || "";
@@ -1350,6 +1453,7 @@
         '<section>' +
         '<div id="google-section-body">Loading&hellip;</div>' +
         "</section>" +
+        '<section>' + databaseSectionHtml() + "</section>" +
         "</div>";
 
       let saved = { windowDays: 30, graceDays: 14 };
@@ -1442,6 +1546,8 @@
       }
       document.getElementById("google-section-body").innerHTML = googleSectionHtml(googleStatus);
       wireGoogleSection();
+
+      wireDatabaseSection();
     }
 
     // ---- Detail view ----------------------------------------------------------
