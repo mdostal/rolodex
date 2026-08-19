@@ -900,67 +900,6 @@
         );
       }
 
-      // The Appearance section — a theme toggle plus a 10-thumbnail grid over
-      // the app-icon candidates preserved at .pHive/design/app-icon/renditions/
-      // (see that epic's brief for how they were generated). Selecting either
-      // control PUTs the full {theme, iconId} pair (server.ts's route wants
-      // both together, matching what GET / injects on every load) and applies
-      // immediately client-side via applyAppearance() below — the server-side
-      // injection in GET / is what makes a plain reload/reopen correct too,
-      // this is just for not needing one.
-      const ICON_CANDIDATE_COUNT = 10;
-      function appearanceSectionHtml(theme, iconId) {
-        const themeButtons = ["default", "brass"]
-          .map(
-            (t) =>
-              '<button type="button" class="secondary theme-option" data-theme-option="' + t + '" ' +
-              'aria-pressed="' + (t === theme) + '">' + (t === "default" ? "Default" : "Brass") + "</button>",
-          )
-          .join("");
-        const iconButtons = Array.from({ length: ICON_CANDIDATE_COUNT }, (_, i) => i + 1)
-          .map(
-            (n) =>
-              '<button type="button" class="icon-option" data-icon-id="' + n + '" ' +
-              'aria-pressed="' + (n === iconId) + '" aria-label="Icon option ' + n + '">' +
-              '<img src="/assets/icon-c' + n + '-32.png" alt="" width="32" height="32" /></button>',
-          )
-          .join("");
-        return (
-          '<div class="log-interaction-form" id="appearance-section">' +
-          '<h3 class="settings-section-title">Appearance</h3>' +
-          '<div class="form-error-banner" id="appearance-error" hidden></div>' +
-          '<div class="form-field">' +
-          '<label id="appearance-theme-label">Theme</label>' +
-          '<div class="theme-toggle" role="group" aria-labelledby="appearance-theme-label">' + themeButtons + "</div>" +
-          "</div>" +
-          '<div class="form-field">' +
-          '<label id="appearance-icon-label">App icon</label>' +
-          '<div class="icon-grid" role="group" aria-labelledby="appearance-icon-label">' + iconButtons + "</div>" +
-          "</div>" +
-          "</div>"
-        );
-      }
-
-      // Rewrites the <head> favicon links and the <html> data-theme attribute
-      // in place — the same values GET / would inject on a fresh load, just
-      // applied without one. Browsers cache favicons aggressively, so a tab
-      // that's already open may not visibly repaint until its next
-      // navigation/reload; that's a known browser limitation, not a bug here.
-      function applyAppearance(theme, iconId) {
-        if (theme === "brass") document.documentElement.setAttribute("data-theme", "brass");
-        else document.documentElement.removeAttribute("data-theme");
-        const linkSwaps = [
-          ['link[rel="icon"][sizes="any"]', "/assets/icon-c" + iconId + ".ico"],
-          ['link[rel="icon"][sizes="32x32"]', "/assets/icon-c" + iconId + "-32.png"],
-          ['link[rel="icon"][sizes="16x16"]', "/assets/icon-c" + iconId + "-16.png"],
-          ['link[rel="apple-touch-icon"]', "/assets/icon-c" + iconId + "-180.png"],
-        ];
-        for (const [selector, href] of linkSwaps) {
-          const el = document.querySelector(selector);
-          if (el) el.setAttribute("href", href);
-        }
-      }
-
       function wireSettingsPanel() {
         const anchor = document.getElementById("settings-anchor");
         const toggleBtn = document.getElementById("settings-toggle");
@@ -1157,49 +1096,11 @@
           });
         }
 
-        // Tracks the panel's current appearance selection so a save PUTs the
-        // full {theme, iconId} pair even though theme and icon are two
-        // separate button groups — the server route (and GET /'s injection)
-        // always wants both together.
         function wireAppearanceSection(theme, iconId) {
-          let current = { theme, iconId };
-          const errorBanner = document.getElementById("appearance-error");
-
-          function setPressedState() {
-            document.querySelectorAll(".theme-option").forEach((btn) => {
-              btn.setAttribute("aria-pressed", String(btn.dataset.themeOption === current.theme));
-            });
-            document.querySelectorAll(".icon-option").forEach((btn) => {
-              btn.setAttribute("aria-pressed", String(Number(btn.dataset.iconId) === current.iconId));
-            });
-          }
-
-          async function save(next) {
-            const prev = current;
-            current = next;
-            setPressedState();
-            applyAppearance(current.theme, current.iconId);
-            try {
-              await putAppearanceSettings(current);
-              errorBanner.hidden = true;
-            } catch (err) {
-              // Revert on failure — the popover stays open with the prior
-              // selection restored, matching the follow-up form's
-              // keep-panel-open-with-error behavior on save failure.
-              current = prev;
-              setPressedState();
-              applyAppearance(current.theme, current.iconId);
-              errorBanner.hidden = false;
-              errorBanner.textContent = "Couldn't save: " + err.message;
-            }
-          }
-
-          document.querySelectorAll(".theme-option").forEach((btn) => {
-            btn.addEventListener("click", () => save({ theme: btn.dataset.themeOption, iconId: current.iconId }));
-          });
-          document.querySelectorAll(".icon-option").forEach((btn) => {
-            btn.addEventListener("click", () => save({ theme: current.theme, iconId: Number(btn.dataset.iconId) }));
-          });
+          // Popover-era body intentionally emptied — the real implementation
+          // now lives at top level (see near settingsFormHtml) and is shared
+          // with renderSettings(). This function is dead (wireSettingsPanel
+          // is never called) and removed entirely in story 6.
         }
 
         async function openPanel() {
@@ -1272,6 +1173,111 @@
       );
     }
 
+    // The Appearance section — a theme toggle plus a 10-thumbnail grid over
+    // the app-icon candidates preserved at .pHive/design/app-icon/renditions/
+    // (see that epic's brief for how they were generated). Selecting either
+    // control PUTs the full {theme, iconId} pair (server.ts's route wants
+    // both together, matching what GET / injects on every load) and applies
+    // immediately client-side via applyAppearance() below — the server-side
+    // injection in GET / is what makes a plain reload/reopen correct too,
+    // this is just for not needing one.
+    const ICON_CANDIDATE_COUNT = 10;
+    function appearanceSectionHtml(theme, iconId) {
+      const themeButtons = ["default", "brass"]
+        .map(
+          (t) =>
+            '<button type="button" class="secondary theme-option" data-theme-option="' + t + '" ' +
+            'aria-pressed="' + (t === theme) + '">' + (t === "default" ? "Default" : "Brass") + "</button>",
+        )
+        .join("");
+      const iconButtons = Array.from({ length: ICON_CANDIDATE_COUNT }, (_, i) => i + 1)
+        .map(
+          (n) =>
+            '<button type="button" class="icon-option" data-icon-id="' + n + '" ' +
+            'aria-pressed="' + (n === iconId) + '" aria-label="Icon option ' + n + '">' +
+            '<img src="/assets/icon-c' + n + '-32.png" alt="" width="32" height="32" /></button>',
+        )
+        .join("");
+      return (
+        '<div class="log-interaction-form" id="appearance-section">' +
+        '<h3 class="settings-section-title">Appearance</h3>' +
+        '<div class="form-error-banner" id="appearance-error" hidden></div>' +
+        '<div class="form-field">' +
+        '<label id="appearance-theme-label">Theme</label>' +
+        '<div class="theme-toggle" role="group" aria-labelledby="appearance-theme-label">' + themeButtons + "</div>" +
+        "</div>" +
+        '<div class="form-field">' +
+        '<label id="appearance-icon-label">App icon</label>' +
+        '<div class="icon-grid" role="group" aria-labelledby="appearance-icon-label">' + iconButtons + "</div>" +
+        "</div>" +
+        "</div>"
+      );
+    }
+
+    // Rewrites the <head> favicon links and the <html> data-theme attribute
+    // in place — the same values GET / would inject on a fresh load, just
+    // applied without one. Browsers cache favicons aggressively, so a tab
+    // that's already open may not visibly repaint until its next
+    // navigation/reload; that's a known browser limitation, not a bug here.
+    function applyAppearance(theme, iconId) {
+      if (theme === "brass") document.documentElement.setAttribute("data-theme", "brass");
+      else document.documentElement.removeAttribute("data-theme");
+      const linkSwaps = [
+        ['link[rel="icon"][sizes="any"]', "/assets/icon-c" + iconId + ".ico"],
+        ['link[rel="icon"][sizes="32x32"]', "/assets/icon-c" + iconId + "-32.png"],
+        ['link[rel="icon"][sizes="16x16"]', "/assets/icon-c" + iconId + "-16.png"],
+        ['link[rel="apple-touch-icon"]', "/assets/icon-c" + iconId + "-180.png"],
+      ];
+      for (const [selector, href] of linkSwaps) {
+        const el = document.querySelector(selector);
+        if (el) el.setAttribute("href", href);
+      }
+    }
+
+    // Tracks the settings page's current appearance selection so a save PUTs
+    // the full {theme, iconId} pair even though theme and icon are two
+    // separate button groups — the server route (and GET /'s injection)
+    // always wants both together.
+    function wireAppearanceSection(theme, iconId) {
+      let current = { theme, iconId };
+      const errorBanner = document.getElementById("appearance-error");
+
+      function setPressedState() {
+        document.querySelectorAll(".theme-option").forEach((btn) => {
+          btn.setAttribute("aria-pressed", String(btn.dataset.themeOption === current.theme));
+        });
+        document.querySelectorAll(".icon-option").forEach((btn) => {
+          btn.setAttribute("aria-pressed", String(Number(btn.dataset.iconId) === current.iconId));
+        });
+      }
+
+      async function save(next) {
+        const prev = current;
+        current = next;
+        setPressedState();
+        applyAppearance(current.theme, current.iconId);
+        try {
+          await putAppearanceSettings(current);
+          errorBanner.hidden = true;
+        } catch (err) {
+          // Revert on failure, matching the follow-up form's
+          // keep-the-page-usable-with-error behavior on save failure.
+          current = prev;
+          setPressedState();
+          applyAppearance(current.theme, current.iconId);
+          errorBanner.hidden = false;
+          errorBanner.textContent = "Couldn't save: " + err.message;
+        }
+      }
+
+      document.querySelectorAll(".theme-option").forEach((btn) => {
+        btn.addEventListener("click", () => save({ theme: btn.dataset.themeOption, iconId: current.iconId }));
+      });
+      document.querySelectorAll(".icon-option").forEach((btn) => {
+        btn.addEventListener("click", () => save({ theme: current.theme, iconId: Number(btn.dataset.iconId) }));
+      });
+    }
+
     function rowHtml(c) {
       const meta = verdictMeta(c.verdict);
       const next = c.nextStep || "";
@@ -1293,8 +1299,9 @@
     // same router/topbar/#content pattern renderList/renderDetail/renderForm
     // already use, not a separate served page (see the settings-account-
     // screen epic's design discussion for why). Sections land here one epic
-    // story at a time; today it's Follow-up only, migrated as-is from the
-    // popover's settingsFormHtml() (now top-level, shared).
+    // story at a time; today it's Follow-up + Appearance, migrated as-is
+    // from the popover's own HTML-builder/wiring functions (now top-level,
+    // shared with the still-present-but-dead popover code).
     async function renderSettings() {
       setTopbar({
         left: '<button class="back-link" id="back-link">&larr; Contacts</button>',
@@ -1309,6 +1316,9 @@
         '<section aria-labelledby="follow-up-heading">' +
         '<h2 class="settings-section-title" id="follow-up-heading">Follow-up window</h2>' +
         '<div id="follow-up-section-body">Loading&hellip;</div>' +
+        "</section>" +
+        '<section>' +
+        '<div id="appearance-section-body">Loading&hellip;</div>' +
         "</section>" +
         "</div>";
 
@@ -1372,6 +1382,15 @@
           saveBtn.disabled = false;
         }
       });
+
+      let appearance = { theme: "default", iconId: 6 };
+      try {
+        appearance = await getAppearanceSettings();
+      } catch (err) {
+        console.error(err);
+      }
+      document.getElementById("appearance-section-body").innerHTML = appearanceSectionHtml(appearance.theme, appearance.iconId);
+      wireAppearanceSection(appearance.theme, appearance.iconId);
     }
 
     // ---- Detail view ----------------------------------------------------------
