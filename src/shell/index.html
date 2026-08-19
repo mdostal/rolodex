@@ -294,6 +294,40 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* Toast/notification component — a single #toast-region living outside
+       #content (static markup, not router-managed) so it survives every
+       navigation. Transient one-off events only; standing state stays in
+       its own inline .status-line — see the ui-feedback-states epic's
+       design discussion for the full toast-vs-inline split. */
+    #toast-region {
+      position: fixed; bottom: 20px; right: 20px; z-index: 100;
+      display: flex; flex-direction: column-reverse; gap: 10px;
+      width: 320px; max-width: calc(100vw - 40px); pointer-events: none;
+    }
+    .toast {
+      display: flex; align-items: flex-start; gap: 10px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 14px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+      animation: toast-in 0.18s ease-out; pointer-events: auto;
+    }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @media (prefers-reduced-motion: reduce) {
+      .toast { animation: none; }
+    }
+    .toast .toast-icon { flex: 0 0 auto; font-size: 1rem; line-height: 1.3; }
+    .toast.success { border-left: 3px solid var(--ok-fg); }
+    .toast.success .toast-icon { color: var(--ok-fg); }
+    .toast.error { border-left: 3px solid var(--danger); }
+    .toast.error .toast-icon { color: var(--danger); }
+    .toast.info { border-left: 3px solid var(--accent); }
+    .toast.info .toast-icon { color: var(--accent); }
+    .toast .toast-body { flex: 1 1 auto; font-size: 0.88rem; line-height: 1.4; }
+    .toast .toast-close {
+      all: unset; cursor: pointer; color: var(--muted); font-size: 0.85rem; line-height: 1;
+      padding: 2px; flex: 0 0 auto;
+    }
+    .toast .toast-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
     /* Interaction history */
     .interaction-history { list-style: none; margin: 0; padding: 0; }
     .interaction-row {
@@ -392,6 +426,8 @@
   <main id="main">
     <div id="content"></div>
   </main>
+
+  <div id="toast-region" role="region" aria-label="Notifications"></div>
 
   <script>
     "use strict";
@@ -533,6 +569,41 @@
       return String(s ?? "").replace(/[&<>"']/g, (c) => ({
         "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
       }[c]));
+    }
+
+    // ---- toast --------------------------------------------------------------
+    // Transient one-off events only (sync/push results, delete failure, a
+    // save success/failure) — standing state (form validation, "restart to
+    // apply" notes, the Google account status line) stays in its own inline
+    // .status-line. #toast-region lives in the static body markup, outside
+    // #content, so toasts survive every navigation instead of needing a
+    // bridge variable like the old lastSyncMessage hack.
+    const TOAST_ICON = { success: "✓", error: "⚠", info: "ℹ" };
+    const TOAST_DURATION_MS = 4000;
+    function showToast(message, kind) {
+      const region = document.getElementById("toast-region");
+      const el = document.createElement("div");
+      el.className = "toast " + kind;
+      // role="alert" already implies an assertive live region on its own —
+      // an explicit error toast should interrupt regardless of where focus
+      // currently is (a delete/save failure). role="status" implies polite,
+      // the right default for success/info.
+      el.setAttribute("role", kind === "error" ? "alert" : "status");
+      el.innerHTML =
+        '<span class="toast-icon" aria-hidden="true">' + (TOAST_ICON[kind] || "") + "</span>" +
+        '<span class="toast-body"></span>' +
+        '<button type="button" class="toast-close" aria-label="Dismiss">&times;</button>';
+      // .textContent, not innerHTML — message is arbitrary (often an
+      // err.message) and must never be interpreted as markup.
+      el.querySelector(".toast-body").textContent = message;
+      let timer = null;
+      function dismiss() {
+        if (timer) clearTimeout(timer);
+        el.remove();
+      }
+      el.querySelector(".toast-close").addEventListener("click", dismiss);
+      timer = setTimeout(dismiss, TOAST_DURATION_MS);
+      region.appendChild(el);
     }
 
     // ---- router -----------------------------------------------------------

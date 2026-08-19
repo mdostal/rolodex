@@ -1,5 +1,15 @@
-updated_at: "2026-08-19T00:00:00Z"
+updated_at: "2026-08-20T00:00:00Z"
 briefs:
+  - topic: "toast-component"
+    surface_kind: "component"
+    brief_path: ".pHive/design/toast-component/brief.md"
+    wireframe_path: ".pHive/design/toast-component/wireframe.html"
+    export_paths: []
+    rendered_review: "https://claude.ai/code/artifact/e7acf8e4-dc52-4f00-8861-a18135574566"
+    selected_rendition: 1
+    source: "plan-delegated"
+    created_at: "2026-08-20T00:00:00Z"
+    linked_story: []
   - topic: "settings-account-screen"
     surface_kind: "screen"
     brief_path: ".pHive/design/settings-account-screen/brief.md"
