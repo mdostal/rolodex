@@ -140,8 +140,6 @@
     .search-clear:hover { background: var(--row-hover); }
     #result-summary { color: var(--muted); font-size: 0.9rem; margin: -8px 0 16px; }
     .header-actions { display: flex; align-items: center; gap: 10px; }
-    .sync-status { font-size: 0.9rem; color: var(--ok-fg); min-height: 1.2em; margin: 0 0 16px; }
-    .sync-status.sync-error { color: var(--danger); }
     .empty-state {
       min-height: 360px;
       display: flex;
@@ -204,9 +202,12 @@
     .verdict-picker [role="radio"][aria-checked="true"] {
       background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600;
     }
-    .autosave-status {
-      font-size: 0.85rem; color: var(--ok-fg); min-height: 1.2em; margin: 0 0 20px;
-    }
+    /* Verdict/next-step reuse the shared .status-line component (see
+       below) — this just restores the bottom spacing .autosave-status
+       used to carry directly, scoped to these two spots rather than
+       baked into .status-line's shared base (which is also used in
+       tighter contexts, e.g. inside Settings' section cards). */
+    #verdict-status, #next-step-status { margin: 0 0 20px; }
     .next-step-field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
     .next-step-field input {
       width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
@@ -279,12 +280,17 @@
     }
     .icon-option img { display: block; border-radius: 4px; }
     .icon-option[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-bg); }
-    /* Reconnect Google status line — mirrors wizard.html's own
-       .status-line/.spinner pattern (same UX, adapted to fit inline in a
-       popover section instead of a full wizard step). */
+    /* Shared standing-state status line — mirrors wizard.html's own
+       .status-line/.spinner pattern. One component for every inline
+       status message in the app (was three near-duplicate classes:
+       .status-line/.sync-status/.autosave-status — the last of which had
+       no .error variant at all, so a failed autosave literally rendered
+       in this success color). Transient one-off events use the toast
+       component instead — see showToast() above. */
     .status-line { font-size: 0.88rem; display: flex; align-items: center; gap: 8px; min-height: 1.2em; }
     .status-line.error { color: var(--danger); }
     .status-line.success { color: var(--ok-fg); }
+    .status-line.checking { color: var(--muted); }
     .spinner {
       width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border);
       border-top-color: var(--accent); animation: spin 0.8s linear infinite; flex: 0 0 auto;
@@ -516,12 +522,6 @@
         body: JSON.stringify(payload),
       });
 
-    // Set by the "Sync now" handler, displayed once by the very next
-    // renderList() (the sync handler re-renders the list to pick up any
-    // newly-pulled contacts, which would otherwise wipe out an inline status
-    // message written into the markup it just replaced).
-    let lastSyncMessage = null;
-
     // ---- shared data ----------------------------------------------------------
     const VERDICTS = [
       { value: "strong", icon: "●", label: "Strong" },
@@ -678,32 +678,28 @@
         "</div>" +
         "</div>" +
         '<div id="result-summary" aria-live="polite"></div>' +
-        '<div class="sync-status" id="sync-status" aria-live="polite"></div>' +
         '<div id="list-body"></div>';
 
       document.getElementById("add-top").addEventListener("click", () => navigate("#/new"));
       document.getElementById("settings-toggle").addEventListener("click", () => navigate("#/settings"));
 
-      const syncStatusEl = document.getElementById("sync-status");
-      if (lastSyncMessage) {
-        syncStatusEl.textContent = lastSyncMessage;
-        lastSyncMessage = null;
-      }
       document.getElementById("sync-now").addEventListener("click", async () => {
         const btn = document.getElementById("sync-now");
+        const originalLabel = btn.textContent;
         btn.disabled = true;
-        syncStatusEl.className = "sync-status";
-        syncStatusEl.textContent = "Syncing with Google Contacts…";
+        btn.textContent = "Syncing…";
         try {
           const result = await syncGoogle();
-          lastSyncMessage =
-            "Synced " + result.pulled + " contact" + (result.pulled === 1 ? "" : "s") +
-            " from Google (" + result.created + " new, " + result.updated + " updated).";
           await renderList();
+          showToast(
+            "Synced " + result.pulled + " contact" + (result.pulled === 1 ? "" : "s") +
+            " from Google (" + result.created + " new, " + result.updated + " updated).",
+            "success",
+          );
         } catch (err) {
-          syncStatusEl.className = "sync-status sync-error";
-          syncStatusEl.textContent = "Sync failed: " + err.message;
+          showToast("Sync failed: " + err.message, "error");
           btn.disabled = false;
+          btn.textContent = originalLabel;
         }
       });
       document.getElementById("push-google").addEventListener("click", async () => {
@@ -712,33 +708,29 @@
         // confirmation, unlike the non-destructive "Sync now" pull.
         if (!confirm("Push every local contact to Google Contacts? This may create or overwrite contacts there.")) return;
         const btn = document.getElementById("push-google");
+        const originalLabel = btn.textContent;
         btn.disabled = true;
-        syncStatusEl.className = "sync-status";
-        syncStatusEl.textContent = "Pushing to Google Contacts…";
+        btn.textContent = "Pushing…";
         try {
           const result = await pushGoogle();
           let message =
             "Pushed " + result.pushed + " contact" + (result.pushed === 1 ? "" : "s") +
             " to Google (" + result.created + " new, " + result.updated + " updated).";
-          if (result.errors.length) {
-            message += " " + result.errors.length + " failed — see below.";
-          }
-          lastSyncMessage = message;
           await renderList();
           if (result.errors.length) {
-            syncStatusEl.className = "sync-status sync-error";
-            syncStatusEl.textContent =
-              "Some contacts couldn't be pushed: " +
-              // Assigned via .textContent below, not innerHTML — no
-              // escapeHtml() needed here (it would double-escape entities);
-              // .textContent never interprets its value as markup.
-              result.errors.map((e) => e.name + " (" + e.error + ")").join("; ");
+            showToast(
+              message + " " + result.errors.length + " failed: " +
+              result.errors.map((e) => e.name + " (" + e.error + ")").join("; "),
+              "error",
+            );
+          } else {
+            showToast(message, "success");
           }
         } catch (err) {
-          syncStatusEl.className = "sync-status sync-error";
-          syncStatusEl.textContent = "Push failed: " + err.message;
+          showToast("Push failed: " + err.message, "error");
         } finally {
           btn.disabled = false;
+          btn.textContent = originalLabel;
         }
       });
 
@@ -1573,7 +1565,7 @@
           navigate("#/");
         } catch (err) {
           btn.disabled = false;
-          alert("Couldn't delete: " + err.message);
+          showToast("Couldn't delete: " + err.message, "error");
         }
       });
 
@@ -1602,11 +1594,11 @@
         '<div class="col">' +
         '<h2 id="verdict-heading">Verdict</h2>' +
         '<div class="verdict-picker" role="radiogroup" aria-labelledby="verdict-heading" id="verdict-picker"></div>' +
-        '<div class="autosave-status" id="verdict-status" aria-live="polite"></div>' +
+        '<div class="status-line" id="verdict-status" aria-live="polite"></div>' +
         '<div class="next-step-field">' +
         '<label for="next-step-input">Next step</label>' +
         '<input id="next-step-input" type="text" value="' + escapeHtml(contact.nextStep || "") + '" />' +
-        '<div class="autosave-status" id="next-step-status" aria-live="polite"></div>' +
+        '<div class="status-line" id="next-step-status" aria-live="polite"></div>' +
         "</div>" +
         '<div class="interactions-panel">' +
         '<div class="interactions-header">' +
@@ -1653,14 +1645,17 @@
         current = value;
         draw();
         picker.querySelector('[data-value="' + value + '"]').focus();
+        status.className = "status-line";
         status.textContent = "Saving…";
         try {
           await patchVerdict(contact.id, value);
-          status.textContent = "Saved";
-          setTimeout(() => { if (status.textContent === "Saved") status.textContent = ""; }, 2000);
+          status.className = "status-line";
+          status.textContent = "";
+          showToast("Saved.", "success");
         } catch (err) {
           current = previous;
           draw();
+          status.className = "status-line error";
           status.textContent = "Failed to save: " + err.message;
         }
       }
@@ -1689,13 +1684,16 @@
       async function commit() {
         const value = input.value;
         if (value === lastSaved) return;
+        status.className = "status-line";
         status.textContent = "Saving…";
         try {
           await patchNextStep(contact.id, value);
           lastSaved = value;
-          status.textContent = "Saved";
-          setTimeout(() => { if (status.textContent === "Saved") status.textContent = ""; }, 2000);
+          status.className = "status-line";
+          status.textContent = "";
+          showToast("Saved.", "success");
         } catch (err) {
+          status.className = "status-line error";
           status.textContent = "Failed to save: " + err.message;
         }
       }
