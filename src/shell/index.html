@@ -28,6 +28,7 @@
       --row-hover: #f4f5f8;
       --chip-bg: #eef0f4;
       --accent-fg: #fff;
+      --disabled: #c9c9d1;
     }
     /* Brass theme — colors only, no font changes (kept to the system-font
        stack so this stays a fully local/offline app). Tokens are taken
@@ -110,7 +111,7 @@
     button.secondary { background: transparent; color: var(--fg); }
     button.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
     button.danger:hover { background: var(--danger); color: #fff; }
-    button:disabled { background: #c9c9d1; border-color: #c9c9d1; cursor: not-allowed; }
+    button:disabled { background: var(--disabled); border-color: var(--disabled); cursor: not-allowed; }
     button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
       outline: 2px solid var(--accent); outline-offset: 2px;
     }
@@ -355,7 +356,7 @@
       color: var(--muted); font-size: 0.9rem; padding: 8px 0;
     }
     .not-found-banner {
-      background: #fdecea; color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
+      background: var(--danger-bg); color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
     }
 
     /* Form */
@@ -395,7 +396,7 @@
     }
     .chip button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .form-error-banner {
-      background: #fdecea; color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
+      background: var(--danger-bg); color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
     }
     .form-footer {
       /* Deliberately NOT position: sticky/fixed. The page itself is the only

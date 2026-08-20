@@ -28,6 +28,7 @@
       --ok-bg: #e7f6ec;
       --ok-fg: #1e7b34;
       --card-bg: #fafafc;
+      --disabled: #c9c9d1;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
@@ -189,7 +190,7 @@
       color: #fff; padding: 8px 16px; min-height: 32px; cursor: pointer;
     }
     button.secondary { background: transparent; color: var(--fg); }
-    button:disabled { background: #c9c9d1; border-color: #c9c9d1; cursor: not-allowed; color: #fff; }
+    button:disabled { background: var(--disabled); border-color: var(--disabled); cursor: not-allowed; color: #fff; }
     button:focus-visible, input:focus-visible, a:focus-visible, [tabindex]:focus-visible {
       outline: 2px solid var(--accent); outline-offset: 2px;
     }
