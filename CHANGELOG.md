@@ -31,6 +31,7 @@
 - The delete-contact failure path used the browser's native `alert()`, the only one anywhere in the app — replaced with the same toast every other error uses.
 - The first real v0.5.0 release build failed on two platforms before anything public shipped: a tracked audit-log filename containing a colon made `git checkout` fail outright on Windows runners (NTFS reserves `:`), and the Linux `.deb` build failed for lacking an author email in `package.json`. Fixed before any release shipped it.
 - `npm run dev`/`cli`/`shell`/`test` used Unix-only `NODE_OPTIONS=... <cmd>` shell syntax, which doesn't work on Windows — CI never caught it because `ci.yml` only runs on `ubuntu-latest`; the release workflow's first-ever Windows run of `npm test` did. Switched to `cross-env` for all four.
+- With the syntax fix above, `npm test` ran for real on Windows for the first time and surfaced genuine platform-specific test bugs (SQLite file handles not closed before test cleanup unlinks the db; a few permission/backend-default checks assuming POSIX or macOS). Rather than block this release on a full Windows test-compat pass, the release workflow now only runs the test suite on `ubuntu-latest` (already the OS `ci.yml` gates on) — `windows-latest` and `macos-latest` still build/package the app, just without re-running tests there. Real Windows test support is follow-up work, not done here.
 
 ## [0.4.0] - 2026-08-12
 
