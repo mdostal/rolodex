@@ -407,7 +407,8 @@ normal filesystem permissions.
 
 Done (across `standalone-app-foundation`, `followups-view`,
 `mcp-tool-bodies`, `google-oauth-flow`, `electron-packaging`,
-`google-two-way-sync`, and `settings-account-screen`):
+`google-two-way-sync`, `settings-account-screen`, and
+`ui-feedback-states`):
 - [x] Desktop shell + local server, bound to loopback, real `Store` wired in.
 - [x] `Store` bodies: `list`, `upsert`, `get`, `setVerdict`, `setNextStep`,
       `logInteraction`, `listInteractions`, `search` (FTS5 + LIKE fallback),
@@ -459,6 +460,25 @@ Done (across `standalone-app-foundation`, `followups-view`,
       three-state status check (Not configured / Client configured, not
       signed in yet / Signed in), replacing a bare Reconnect button with no
       status at all.
+- [x] Comprehensive loading/error/toast UI states (`ui-feedback-states`
+      epic) — a shared toast component (`showToast(message, kind)`,
+      success/error/info, ~4s auto-dismiss + manual close, correct ARIA:
+      `role="alert"` for errors so they interrupt regardless of focus,
+      `role="status"` for success/info) for transient one-off events —
+      Sync/Push results, delete failure (replacing the app's one native
+      `alert()`), verdict/next-step save success. Standing state (form
+      validation, the Database/Secrets-backend "restart to apply" notes,
+      the Google account status line) stays inline by design — see the
+      epic's design discussion for the full toast-vs-inline split. Three
+      previously `console.error`-only failures (the needs-follow-up count
+      fetch, Autostart save, Secrets-backend save) now surface visibly.
+      The contact detail view and edit form gained real loading states
+      (previously showed nothing while their fetch was in flight). Fixed
+      a real bug where a failed verdict/next-step autosave rendered in
+      the *success* color (three near-duplicate status CSS classes
+      unified into one `.status-line` component), and a dead-code bug
+      where the "contact not found" banner was set then immediately
+      discarded by an unconditional `navigate()` on the very next line.
 
 Remaining gaps:
 - [ ] Code signing / notarization — explicitly deferred as part of the
@@ -484,8 +504,6 @@ Remaining gaps:
       backs this; it's agent behavior on top of the existing tools.
 - [ ] Full at-rest database encryption — see "Single-user, no in-app login"
       above; not planned as an in-app feature.
-- [ ] Comprehensive loading/error/toast state coverage across the Contact UI
-      beyond each slice's basic error handling.
 - [ ] Pantheon plugin integration — a dormant, unwired stub exists (see
       [`docs/PANTHEON.md`](PANTHEON.md)) with no real wiring into either
       repo; explicitly deferred until Pantheon's own plugin system settles.

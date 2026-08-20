@@ -8,10 +8,13 @@
  * user would: click buttons, fill inputs, edit location.hash directly to
  * simulate navigation.
  *
- * Scope: the Settings screen and its six sections — the new client-side
- * surface this epic added. The pre-existing list/detail/form views have no
- * jsdom coverage of their own yet (this file doesn't change that); Settings
- * gets it here because this epic is what built it.
+ * Scope: the Settings screen and its six sections (settings-account-screen
+ * epic), plus the shared toast component and the loading/error-state fixes
+ * built on top of it (ui-feedback-states epic) — the toast component
+ * itself, the flows migrated onto it, the previously-silent failures now
+ * surfaced through it, the detail/edit-form loading states, and the
+ * not-found dead-code fix. Not a claim of exhaustive list/detail/form
+ * coverage beyond what each epic actually touched.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -67,15 +70,25 @@ async function start(opts: { isPortunusAvailable?: () => Promise<boolean> } = {}
 }
 
 /** Loads the real index.html from a real running server into jsdom and runs
- * its inline script — same technique as wizard.test.ts's loadWizard(). */
-async function loadApp(baseUrl: string): Promise<JSDOM> {
+ * its inline script — same technique as wizard.test.ts's loadWizard().
+ *
+ * `wrapFetch`, when given, wraps the real fetch *before* the page's own
+ * boot-time render() call fires — the only way to affect its very first
+ * requests, since page-script globals (render/renderList/showToast/...)
+ * don't attach to `dom.window` the way DOM elements and event listeners
+ * do (dom.window.eval() runs as indirect eval, whose top-level function
+ * declarations don't become window properties the way a real <script> tag
+ * would) — every test in this file drives the page through real DOM
+ * events and real HTTP instead of calling page-script functions directly. */
+async function loadApp(baseUrl: string, wrapFetch?: (real: typeof fetch) => typeof fetch): Promise<JSDOM> {
   const html = await (await fetch(baseUrl + "/")).text();
   const dom = new JSDOM(html, { url: baseUrl + "/", runScripts: "outside-only", pretendToBeVisual: true });
   const win = dom.window as unknown as { fetch: typeof fetch; location: Location; confirm: () => boolean };
-  win.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+  const passthroughFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" || input instanceof URL ? new URL(input, win.location.href).toString() : input;
     return fetch(url as string, init);
   }) as typeof fetch;
+  win.fetch = wrapFetch ? wrapFetch(passthroughFetch) : passthroughFetch;
   // jsdom's window.confirm has no real implementation (returns false and
   // warns) — tests that need a specific answer override this directly.
   win.confirm = () => true;
@@ -106,6 +119,36 @@ function byId(dom: JSDOM, id: string): HTMLElement {
   const el = dom.window.document.getElementById(id);
   if (!el) throw new Error(`no element with id="${id}"`);
   return el as HTMLElement;
+}
+
+async function createContact(baseUrl: string, name: string): Promise<{ id: string }> {
+  const res = await fetch(baseUrl + "/api/contacts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  return (await res.json()) as { id: string };
+}
+
+/** Temporarily makes every request whose URL contains `urlSubstring` reject
+ * (or resolve after `delayMs`, if given) — used to exercise real failure
+ * and loading-state paths without a fake/mocked server. Returns a restore()
+ * that must be called to put the real fetch back. */
+function interceptFetch(dom: JSDOM, urlSubstring: string, opts: { reject?: boolean; delayMs?: number } = {}): { restore: () => void } {
+  const win = dom.window as unknown as { fetch: typeof fetch };
+  const realFetch = win.fetch;
+  win.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+    if (!url.includes(urlSubstring)) return realFetch(input, init);
+    if (opts.reject) return Promise.reject(new Error("simulated network failure"));
+    if (opts.delayMs) return new Promise((resolve) => setTimeout(() => resolve(realFetch(input, init)), opts.delayMs));
+    return realFetch(input, init);
+  }) as typeof fetch;
+  return { restore: () => { win.fetch = realFetch; } };
+}
+
+function toasts(dom: JSDOM): HTMLElement[] {
+  return Array.from(dom.window.document.querySelectorAll("#toast-region .toast")) as HTMLElement[];
 }
 
 /** Navigates via a real hashchange (not a direct render() call) — jsdom
@@ -298,5 +341,156 @@ describe("Settings screen — Secrets backend", () => {
 
     const result = await (await fetch(baseUrl + "/api/wizard/secrets-backends")).json();
     expect(result).toMatchObject({ currentBackend: "portunus" });
+  });
+});
+
+describe("Toast component", () => {
+  it("error kind: role=alert, supports manual dismiss", async () => {
+    const baseUrl = await start();
+    const dom = await loadApp(baseUrl);
+    await waitFor(() => !!dom.window.document.getElementById("sync-now"), "list rendered");
+
+    // Sync now with no Google connected is a real, reliable error trigger —
+    // see loadApp()'s docstring for why this file drives toasts through
+    // real UI actions rather than calling showToast() directly.
+    byId(dom, "sync-now").dispatchEvent(new dom.window.Event("click", { bubbles: true }));
+    await waitFor(() => toasts(dom).length === 1, "error toast appears");
+    const toast = toasts(dom)[0]!;
+    expect(toast.getAttribute("role")).toBe("alert");
+    expect(toast.className).toContain("error");
+
+    toast.querySelector(".toast-close")!.dispatchEvent(new dom.window.Event("click", { bubbles: true }));
+    await waitFor(() => toasts(dom).length === 0, "manually dismissed");
+  });
+
+  it("success kind: role=status, and auto-dismisses on its own after a few seconds", async () => {
+    const baseUrl = await start();
+    const contact = await createContact(baseUrl, "Ada Lovelace");
+    const dom = await loadApp(baseUrl);
+    dom.window.location.hash = "#/contact/" + contact.id;
+    await waitFor(() => !!dom.window.document.getElementById("verdict-picker"), "detail rendered");
+
+    dom.window.document.querySelector('[data-value="strong"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true }));
+    await waitFor(() => toasts(dom).length === 1, "success toast appears");
+    const toast = toasts(dom)[0]!;
+    expect(toast.getAttribute("role")).toBe("status");
+    expect(toast.className).toContain("success");
+    expect(toast.querySelector(".toast-body")!.textContent).toBe("Saved.");
+
+    // No manual dismiss this time — proves the ~4s auto-dismiss timer for
+    // real, not just that a close button works.
+    await waitFor(() => toasts(dom).length === 0, "auto-dismissed", 6000);
+  });
+});
+
+describe("List view — toast-migrated flows", () => {
+  it("Sync now failure (no Google connected) surfaces as an error toast and resets the button", async () => {
+    const baseUrl = await start();
+    const dom = await loadApp(baseUrl);
+    await waitFor(() => !!dom.window.document.getElementById("sync-now"), "list rendered");
+
+    byId(dom, "sync-now").dispatchEvent(new dom.window.Event("click", { bubbles: true }));
+    await waitFor(() => toasts(dom).length === 1, "sync error toast appears");
+    expect(toasts(dom)[0]!.getAttribute("role")).toBe("alert");
+    expect(toasts(dom)[0]!.querySelector(".toast-body")!.textContent).toMatch(/Sync failed/);
+    await waitFor(() => (byId(dom, "sync-now") as HTMLButtonElement).disabled === false, "button re-enabled");
+    expect(byId(dom, "sync-now").textContent).toBe("Sync now");
+  });
+
+  it("a delete failure surfaces as an error toast, not a native alert()", async () => {
+    const baseUrl = await start();
+    const contact = await createContact(baseUrl, "Ada Lovelace");
+    const dom = await loadApp(baseUrl);
+    dom.window.location.hash = "#/contact/" + contact.id;
+    await waitFor(() => dom.window.document.querySelector("h1")?.textContent === "Ada Lovelace", "detail rendered");
+
+    // jsdom's window.alert is unimplemented (throws/warns by default) — if
+    // the old alert() path were still reachable this test would fail loudly
+    // rather than silently, which is exactly what we want to prove it isn't.
+    let alertCalled = false;
+    (dom.window as unknown as { alert: () => void; confirm: () => boolean }).alert = () => { alertCalled = true; };
+    (dom.window as unknown as { confirm: () => boolean }).confirm = () => true;
+
+    // Reject only the DELETE call specifically — a plain substring match on
+    // the contact's URL would also catch the GET this page already made.
+    const win = dom.window as unknown as { fetch: typeof fetch };
+    const realFetch = win.fetch;
+    win.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+      if (url.includes("/api/contacts/" + contact.id) && init?.method === "DELETE") return Promise.reject(new Error("simulated delete failure"));
+      return realFetch(input, init);
+    }) as typeof fetch;
+
+    byId(dom, "delete-top").dispatchEvent(new dom.window.Event("click", { bubbles: true }));
+    await waitFor(() => toasts(dom).length === 1, "delete-failure toast appears");
+    expect(toasts(dom)[0]!.getAttribute("role")).toBe("alert");
+    expect(toasts(dom)[0]!.querySelector(".toast-body")!.textContent).toMatch(/Couldn't delete/);
+    expect(alertCalled).toBe(false);
+    win.fetch = realFetch;
+  });
+
+  it("the previously-silent needs-follow-up fetch failure now surfaces as an error toast", async () => {
+    const baseUrl = await start();
+    // Injected before boot (loadApp's wrapFetch), so the page's own very
+    // first render()->renderList() call is what hits the failure — the
+    // real first-load scenario this fix targets, not a synthetic re-render.
+    const dom = await loadApp(baseUrl, (real) => ((input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+      if (url.includes("needs-follow-up")) return Promise.reject(new Error("simulated network failure"));
+      return real(input, init);
+    }));
+
+    await waitFor(() => toasts(dom).length === 1, "follow-up error toast appears");
+    expect(toasts(dom)[0]!.querySelector(".toast-body")!.textContent).toMatch(/Couldn't load follow-up count/);
+    // Degrades gracefully — the toggle keeps its unknown-count label rather
+    // than crashing the rest of the list render.
+    expect(byId(dom, "followup-toggle").textContent).toBe("Needs follow-up");
+  });
+});
+
+describe("Contact detail/edit — loading state and not-found fix", () => {
+  it("shows a real loading placeholder while the detail fetch is in flight, then the real content", async () => {
+    const baseUrl = await start();
+    const contact = await createContact(baseUrl, "Ada Lovelace");
+    const dom = await loadApp(baseUrl);
+
+    const { restore } = interceptFetch(dom, "/api/contacts/" + contact.id, { delayMs: 300 });
+    dom.window.location.hash = "#/contact/" + contact.id;
+    await waitFor(() => {
+      const html = dom.window.document.getElementById("content")!.innerHTML;
+      return html.includes("spinner") && html.includes("Loading");
+    }, "loading placeholder shown");
+
+    await waitFor(() => dom.window.document.querySelector("h1")?.textContent === "Ada Lovelace", "real content rendered", 6000);
+    restore();
+  });
+
+  it("navigating to an unknown contact shows the not-found banner without auto-navigating away, and the back-link works", async () => {
+    const baseUrl = await start();
+    const dom = await loadApp(baseUrl);
+
+    dom.window.location.hash = "#/contact/does-not-exist";
+    await waitFor(
+      () => dom.window.document.querySelector(".not-found-banner")?.textContent === "Contact not found — it may have been removed.",
+      "not-found banner rendered",
+    );
+    // The old bug auto-navigated away before this could ever be observed —
+    // asserting the hash is unchanged is the regression check.
+    expect(dom.window.location.hash).toBe("#/contact/does-not-exist");
+
+    byId(dom, "back-link").dispatchEvent(new dom.window.Event("click", { bubbles: true }));
+    await waitFor(() => dom.window.document.querySelector("h1")?.textContent === "Contacts", "back to list");
+  });
+
+  it("the same not-found fix applies to the edit-form route", async () => {
+    const baseUrl = await start();
+    const dom = await loadApp(baseUrl);
+
+    dom.window.location.hash = "#/contact/does-not-exist/edit";
+    await waitFor(
+      () => dom.window.document.querySelector(".not-found-banner")?.textContent === "Contact not found — it may have been removed.",
+      "not-found banner rendered",
+    );
+    expect(dom.window.location.hash).toBe("#/contact/does-not-exist/edit");
   });
 });
