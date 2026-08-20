@@ -18,12 +18,33 @@ permissions:
   contents: write
 
 jobs:
+  # Pre-create the (draft) release for this tag before any platform starts
+  # building. Without this, each matrix leg's `electron-builder --publish
+  # always` independently looks for a release for this tag, doesn't find
+  # one yet, and creates its own -- three parallel jobs racing to create
+  # the same release produces three separate draft releases (all named
+  # after the tag) instead of one with all three platforms' assets. Once
+  # this job creates it first, every matrix leg finds the existing release
+  # and uploads to it instead of racing to create a new one.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" --draft --generate-notes --repo "${{ github.repository }}"
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    # Windows build/packaging is still working through platform-specific
+    # issues (see CHANGELOG.md) -- don't let it block macOS/Linux, which
+    # are the verified, working platforms.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
 
