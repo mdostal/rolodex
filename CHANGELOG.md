@@ -30,6 +30,7 @@
 - Navigating to a deleted/unknown contact silently bounced back to the contact list before the "not found" message could ever actually be seen (it was set, then instantly discarded by an unconditional redirect on the very next line) — now shown for real, with a working back-link.
 - The delete-contact failure path used the browser's native `alert()`, the only one anywhere in the app — replaced with the same toast every other error uses.
 - The first real v0.5.0 release build failed on two platforms before anything public shipped: a tracked audit-log filename containing a colon made `git checkout` fail outright on Windows runners (NTFS reserves `:`), and the Linux `.deb` build failed for lacking an author email in `package.json`. Fixed before any release shipped it.
+- `npm run dev`/`cli`/`shell`/`test` used Unix-only `NODE_OPTIONS=... <cmd>` shell syntax, which doesn't work on Windows — CI never caught it because `ci.yml` only runs on `ubuntu-latest`; the release workflow's first-ever Windows run of `npm test` did. Switched to `cross-env` for all four.
 
 ## [0.4.0] - 2026-08-12
 
