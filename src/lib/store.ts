@@ -9,6 +9,22 @@ const FOLLOW_UP_CONFIG_KEY = "followUp.config";
 /** Defaults getFollowUpConfig() lazily seeds when no settings row exists yet. */
 const FOLLOW_UP_DEFAULTS = { windowDays: 30, graceDays: 14 } as const;
 
+/** Settings-table key for the appearance config (theme/iconId), JSON-encoded
+ * as a single row — same pattern as FOLLOW_UP_CONFIG_KEY. */
+const APPEARANCE_CONFIG_KEY = "appearance.config";
+
+/** Defaults getAppearance() lazily seeds when no settings row exists yet.
+ * iconId 6 / theme "default" is what's actually shipped today (candidate 6,
+ * the plain blue/gray palette) — this is a no-op default, not a new look. */
+const APPEARANCE_DEFAULTS: AppearanceConfig = { theme: "default", iconId: 6 };
+
+export type AppearanceTheme = "default" | "brass";
+
+export interface AppearanceConfig {
+  theme: AppearanceTheme;
+  iconId: number;
+}
+
 /**
  * Owns-your-data store. SQLite with an FTS5 full-text index so search is real
  * (name/org/what/angle/tags), not a LIKE scan. The DB path defaults to a
@@ -28,7 +44,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS contacts (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, org TEXT, role TEXT, email TEXT, phone TEXT,
         met TEXT, what TEXT, angle TEXT, verdict TEXT NOT NULL DEFAULT 'none',
-        nextStep TEXT, tags TEXT, googleResourceName TEXT,
+        nextStep TEXT, tags TEXT, googleResourceName TEXT, googleEtag TEXT,
         createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS interactions (
@@ -39,6 +55,17 @@ export class Store {
         key TEXT PRIMARY KEY, value TEXT NOT NULL
       );
     `);
+    // SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — a database
+    // file created before googleEtag existed needs this run once to reach
+    // the shape the CREATE TABLE above already gives a brand-new database.
+    // Catching specifically "duplicate column" (not a broad catch-all, per
+    // this file's own convention below for fts5) keeps a genuine unrelated
+    // failure from being silently swallowed here.
+    try {
+      this.db.exec("ALTER TABLE contacts ADD COLUMN googleEtag TEXT");
+    } catch (err) {
+      if (!(err instanceof Error) || !err.message.includes("duplicate column")) throw err;
+    }
     // FTS5 is a separate statement, in a separate try/catch, deliberately:
     // node:sqlite's bundled SQLite build on this repo's Node (22.12) has no
     // fts5 module compiled in at all ("no such module: fts5", confirmed even
@@ -94,13 +121,14 @@ export class Store {
     // key collision drives the UPDATE branch, not a duplicate row.
     this.db
       .prepare(
-        `INSERT INTO contacts (id, name, org, role, email, phone, met, what, angle, verdict, nextStep, tags, googleResourceName, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO contacts (id, name, org, role, email, phone, met, what, angle, verdict, nextStep, tags, googleResourceName, googleEtag, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name, org = excluded.org, role = excluded.role, email = excluded.email,
            phone = excluded.phone, met = excluded.met, what = excluded.what, angle = excluded.angle,
            verdict = excluded.verdict, nextStep = excluded.nextStep, tags = excluded.tags,
-           googleResourceName = excluded.googleResourceName, createdAt = excluded.createdAt, updatedAt = excluded.updatedAt`,
+           googleResourceName = excluded.googleResourceName, googleEtag = excluded.googleEtag,
+           createdAt = excluded.createdAt, updatedAt = excluded.updatedAt`,
       )
       .run(
         id,
@@ -116,6 +144,7 @@ export class Store {
         c.nextStep ?? null,
         tags,
         c.googleResourceName ?? null,
+        c.googleEtag ?? null,
         createdAt,
         now,
       );
@@ -137,6 +166,27 @@ export class Store {
   get(id: string): Contact | undefined {
     const row = this.db.prepare("SELECT * FROM contacts WHERE id = ?").get(id);
     return row ? rowToContact(row) : undefined;
+  }
+
+  /** Deletes a contact and its interaction history. Explicit interactions
+   * delete rather than relying on the schema's `ON DELETE CASCADE` — that
+   * constraint is inert unless `PRAGMA foreign_keys = ON` is set, which this
+   * class deliberately doesn't do (see the constructor's PRAGMA list); doing
+   * the delete explicitly here avoids a global FK-enforcement change just for
+   * this one method. Returns whether a contact was actually found and
+   * deleted, so callers (the DELETE route) can tell a real delete apart from
+   * a no-op on an already-gone/never-existed id. */
+  delete(id: string): boolean {
+    this.db.prepare("DELETE FROM interactions WHERE contactId = ?").run(id);
+    const info = this.db.prepare("DELETE FROM contacts WHERE id = ?").run(id);
+
+    try {
+      this.db.exec("INSERT INTO contacts_fts(contacts_fts) VALUES('rebuild')");
+    } catch (err) {
+      console.warn("rolodex: FTS reindex skipped (fts5 unavailable)", err);
+    }
+
+    return info.changes > 0;
   }
 
   /**
@@ -237,6 +287,24 @@ export class Store {
 
   setFollowUpConfig(cfg: { windowDays: number; graceDays: number }): void {
     this.setSetting(FOLLOW_UP_CONFIG_KEY, JSON.stringify(cfg));
+  }
+
+  /** Appearance config (theme/iconId), stored as one JSON-encoded settings
+   * row under APPEARANCE_CONFIG_KEY. Lazily seeds APPEARANCE_DEFAULTS on
+   * first read, same as getFollowUpConfig(). Validation of theme/iconId
+   * values is the caller's responsibility (server.ts's route), matching how
+   * setFollowUpConfig() also persists whatever it's given unchecked. */
+  getAppearance(): AppearanceConfig {
+    const raw = this.getSetting(APPEARANCE_CONFIG_KEY, "");
+    if (!raw) {
+      this.setAppearance(APPEARANCE_DEFAULTS);
+      return { ...APPEARANCE_DEFAULTS };
+    }
+    return JSON.parse(raw) as AppearanceConfig;
+  }
+
+  setAppearance(cfg: AppearanceConfig): void {
+    this.setSetting(APPEARANCE_CONFIG_KEY, JSON.stringify(cfg));
   }
 
   /**
@@ -362,6 +430,7 @@ interface ContactRow {
   nextStep: string | null;
   tags: string | null;
   googleResourceName: string | null;
+  googleEtag: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -402,6 +471,7 @@ function rowToContact(row: unknown): Contact {
     nextStep: r.nextStep ?? undefined,
     tags: r.tags ? (JSON.parse(r.tags) as string[]) : undefined,
     googleResourceName: r.googleResourceName ?? undefined,
+    googleEtag: r.googleEtag ?? undefined,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   };

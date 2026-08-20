@@ -1,15 +1,26 @@
 {
   "name": "rolodex",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": false,
   "license": "MIT",
   "description": "Open-source relationship rolodex you run locally as a standalone app: own your contacts (SQLite), sync with Google Contacts, and search/log through a real UI. MCP is a secondary integration surface, letting your AI agents read, search, and update the same rolodex.",
   "type": "module",
-  "bin": { "rolodex-mcp": "dist/mcp/server.js" },
-  "engines": { "node": ">=22.0.0" },
-  "repository": { "type": "git", "url": "git+https://github.com/mdostal/rolodex.git" },
+  "main": "dist/electron/main.js",
+  "bin": {
+    "rolodex-mcp": "dist/mcp/server.js",
+    "rolodex": "dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mdostal/rolodex.git"
+  },
   "homepage": "https://github.com/mdostal/rolodex#readme",
-  "bugs": { "url": "https://github.com/mdostal/rolodex/issues" },
+  "bugs": {
+    "url": "https://github.com/mdostal/rolodex/issues"
+  },
   "author": "Mathew Dostal",
   "keywords": [
     "crm",
@@ -33,10 +44,46 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "NODE_OPTIONS=--experimental-sqlite tsx src/mcp/server.ts",
+    "cli": "NODE_OPTIONS=--experimental-sqlite tsx src/cli/index.ts",
     "shell": "NODE_OPTIONS=--experimental-sqlite tsx src/shell/server.ts",
-    "shell:build": "tsc -p tsconfig.json && cp src/shell/index.html dist/shell/index.html && cp src/shell/wizard.html dist/shell/wizard.html && mkdir -p dist/shell/assets && cp src/shell/assets/favicon.svg dist/shell/assets/favicon.svg",
+    "shell:build": "tsc -p tsconfig.json && cp src/shell/index.html dist/shell/index.html && cp src/shell/wizard.html dist/shell/wizard.html && mkdir -p dist/shell/assets && cp -r src/shell/assets/. dist/shell/assets/",
+    "electron": "npm run shell:build && electron .",
+    "electron:package": "npm run shell:build && electron-builder --publish=never",
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--experimental-sqlite vitest run"
+  },
+  "build": {
+    "appId": "com.mdostal.rolodex",
+    "productName": "rolodex",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.test.js",
+      "!dist/**/*.test.d.ts"
+    ],
+    "mac": {
+      "target": ["dmg"],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "identity": null
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon.ico"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "build/icon.png",
+      "category": "Office"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "mdostal",
+      "repo": "rolodex"
+    }
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -44,9 +91,13 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^22.0.0",
-    "typescript": "^5.6.0",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^28.1.0",
     "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
     "vitest": "^3.2.4"
   }
 }

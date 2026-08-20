@@ -1,12 +1,14 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRolodexServer, type RolodexServerOptions } from "./server.js";
 import { createInMemorySecretsAdapter } from "../lib/secrets-adapter.js";
-import type { SecretsAdapter } from "../lib/secrets-adapter.js";
+import type { CreateSecretsAdapterOptions, SecretsAdapter } from "../lib/secrets-adapter.js";
+import { getSecretsBackendChoiceSync, setSecretsBackendChoice } from "./secrets-backend-config.js";
 import { Store } from "../lib/store.js";
+import { GOOGLE_OAUTH_TOKEN_KEY } from "../lib/google-sync.js";
 
 let dir: string;
 let server: Server | undefined;
@@ -75,6 +77,15 @@ async function putJson(url: string, payload?: unknown): Promise<{ status: number
     headers: payload !== undefined ? { "content-type": "application/json" } : undefined,
     body: payload !== undefined ? JSON.stringify(payload) : undefined,
   });
+  const body = await res.json().catch(() => undefined);
+  return { status: res.status, body };
+}
+
+async function deleteRequest(url: string): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(url, { method: "DELETE" });
+  // A real 204 has no body at all — res.json() on an empty body throws,
+  // which the .catch() here treats the same as "no body", matching every
+  // other helper's shape rather than needing a special case at call sites.
   const body = await res.json().catch(() => undefined);
   return { status: res.status, body };
 }
@@ -419,26 +430,24 @@ describe("Settings popover 'Reconnect Google' entry point", () => {
 
 // checkSecretsCapability() (src/lib/secrets-check.ts) short-circuits to
 // `{ ok: false, backend: "none", error: "No secure keychain is available in
-// this session." }` on any non-Darwin platform BEFORE it ever calls the
-// factory it was given — deliberately, and pinned by its own unit test
-// (src/lib/secrets-check.test.ts: "...without touching the factory"). That
-// means these HTTP-level tests can't actually reach an injected fake
-// adapter's "success"/"failure" outcome except on macOS: on Linux (where CI
-// runs) every one of these requests gets the platform short-circuit
-// response regardless of which secretsCapabilityFactory was passed to
-// start(). Assert the outcome that's actually true for whichever platform
-// the suite happens to run on, rather than hardcoding the macOS-only path.
+// this session." }` on a non-Darwin platform ONLY when using the real,
+// unconfigured default factory (i.e. genuine production usage with no
+// injection) — see secrets-check.ts's own comment on this. Every test below
+// explicitly injects its own secretsCapabilityFactory (or relies on
+// start()'s own default injection of createInMemorySecretsAdapter()), so
+// the platform short-circuit never applies to any of them — behavior is
+// deterministic regardless of which platform the suite happens to run on.
+// (An earlier version of this file's tests branched on process.platform
+// here, working around a real bug where the short-circuit fired even for
+// injected factories, defeating dependency injection on non-Darwin CI —
+// fixed in secrets-check.ts; these tests now assert the corrected,
+// platform-independent behavior directly.)
 describe("POST /api/wizard/secrets-check", () => {
-  it("reflects a successful probe (200, ok:true) when a real backend is available on this platform", async () => {
+  it("reflects a successful probe (200, ok:true) against the injected backend", async () => {
     const { baseUrl } = await start({ secretsCapabilityFactory: () => createInMemorySecretsAdapter() });
     const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check");
-    if (process.platform === "darwin") {
-      expect(status).toBe(200);
-      expect(body).toMatchObject({ ok: true, backend: "macOS Keychain" });
-    } else {
-      expect(status).toBe(422);
-      expect(body).toMatchObject({ ok: false, backend: "none" });
-    }
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ ok: true, backend: "macOS Keychain" });
   });
 
   it("reflects a failing probe (422, ok:false, with an error message) — real, not simulated success", async () => {
@@ -453,21 +462,300 @@ describe("POST /api/wizard/secrets-check", () => {
     const { baseUrl } = await start({ secretsCapabilityFactory: failingFactory });
     const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check");
     expect(status).toBe(422);
-    if (process.platform === "darwin") {
-      expect(body).toMatchObject({ ok: false, backend: "macOS Keychain" });
-      expect((body as { error?: string }).error).toContain("permission");
-    } else {
-      // The injected failing factory is never reached — the platform
-      // short-circuit answers first — so the surfaced error is the generic
-      // "no backend on this platform" message, not the simulated EACCES.
-      expect(body).toMatchObject({ ok: false, backend: "none" });
-      expect((body as { error?: string }).error).toContain("No secure keychain");
+    expect(body).toMatchObject({ ok: false, backend: "macOS Keychain" });
+    expect((body as { error?: string }).error).toContain("permission");
+  });
+
+  // This story's addition: the route now reads `backend` out of the POST
+  // body and threads it through to checkSecretsCapability(). "portunus" is
+  // deliberately used for most of these (rather than "keychain") because
+  // checkSecretsCapability() only applies the non-Darwin "no secure
+  // keychain" short-circuit to the keychain backend — a Portunus probe runs
+  // the real factory/round-trip logic on every platform the suite happens
+  // to run on, so these assertions don't need to branch on
+  // process.platform the way the keychain-probing tests above do.
+  it("passes body.backend through to the capability factory, and the response reflects the Portunus-specific label", async () => {
+    let seenBackend: unknown;
+    const factory = (opts?: CreateSecretsAdapterOptions) => {
+      seenBackend = opts?.backend;
+      return createInMemorySecretsAdapter();
+    };
+    const { baseUrl } = await start({ secretsCapabilityFactory: factory });
+    const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check", { backend: "portunus" });
+    expect(seenBackend).toBe("portunus");
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ ok: true, backend: "Portunus" });
+  });
+
+  it("a failing probe against the portunus backend (via body.backend) returns the Portunus label and Portunus-specific error text, never keychain vocabulary", async () => {
+    const failingFactory = () => {
+      const failing: SecretsAdapter = {
+        async get() { return undefined; },
+        async set() { throw new Error("portunus: unknown reference {{secret:x}}"); },
+        async delete() {},
+      };
+      return failing;
+    };
+    const { baseUrl } = await start({ secretsCapabilityFactory: failingFactory });
+    const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check", { backend: "portunus" });
+    expect(status).toBe(422);
+    expect(body).toMatchObject({ ok: false, backend: "Portunus" });
+    const err = (body as { error?: string }).error ?? "";
+    expect(err.toLowerCase()).not.toContain("keychain");
+    expect(err).toBe("No matching Portunus reference was found.");
+  });
+
+  it("omitting backend from the request body defaults the factory call to \"keychain\" — byte-identical to before this parameter existed", async () => {
+    let seenBackend: unknown = "(factory never called)";
+    const factory = (opts?: CreateSecretsAdapterOptions) => {
+      seenBackend = opts?.backend;
+      return createInMemorySecretsAdapter();
+    };
+    const { baseUrl } = await start({ secretsCapabilityFactory: factory });
+    await postJson(baseUrl + "/api/wizard/secrets-check");
+    expect(seenBackend).toBe("keychain");
+  });
+
+  it("an unrecognized body.backend value falls back to \"keychain\" rather than crashing", async () => {
+    const { baseUrl } = await start({ secretsCapabilityFactory: () => createInMemorySecretsAdapter() });
+    const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-check", { backend: "not-a-real-backend" });
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ ok: true, backend: "macOS Keychain" });
+  });
+});
+
+// pfb-04: GET /api/wizard/secrets-backends tells the wizard's Secrets screen
+// whether Portunus is available at all (a lightweight `portunus --version`
+// probe, injectable via RolodexServerOptions.isPortunusAvailable so these
+// tests don't depend on whether the machine running them happens to have a
+// real `portunus` binary on PATH).
+describe("GET /api/wizard/secrets-backends", () => {
+  it("reports portunusAvailable:true when the injected probe resolves true", async () => {
+    const { baseUrl } = await start({ isPortunusAvailable: async () => true });
+    const { status, body } = await getJson(baseUrl + "/api/wizard/secrets-backends");
+    expect(status).toBe(200);
+    expect(body).toEqual({ portunusAvailable: true, currentBackend: "keychain" });
+  });
+
+  it("reports portunusAvailable:false when the injected probe resolves false", async () => {
+    const { baseUrl } = await start({ isPortunusAvailable: async () => false });
+    const { status, body } = await getJson(baseUrl + "/api/wizard/secrets-backends");
+    expect(status).toBe(200);
+    expect(body).toEqual({ portunusAvailable: false, currentBackend: "keychain" });
+  });
+
+  it("defaults to the real isPortunusAvailable() probe when not injected, and never throws regardless of what's actually installed on this machine", async () => {
+    const { baseUrl } = await start();
+    const { status, body } = await getJson(baseUrl + "/api/wizard/secrets-backends");
+    expect(status).toBe(200);
+    expect(typeof (body as { portunusAvailable: unknown }).portunusAvailable).toBe("boolean");
+  });
+
+  it("reports currentBackend:portunus once that choice has actually been persisted for this homeDir", async () => {
+    const { baseUrl } = await start({ isPortunusAvailable: async () => true });
+    await postJson(baseUrl + "/api/wizard/secrets-backend-choice", { backend: "portunus" });
+    const { body } = await getJson(baseUrl + "/api/wizard/secrets-backends");
+    expect(body).toMatchObject({ currentBackend: "portunus" });
+  });
+});
+
+// pfb-04: POST /api/wizard/secrets-backend-choice persists the wizard's
+// Secrets-screen choice via setSecretsBackendChoice(), which
+// getSecretsBackendChoiceSync(homeDir) later reads back synchronously at the
+// next `secrets` construction (see secrets-backend-config.ts).
+describe("POST /api/wizard/secrets-backend-choice", () => {
+  it("persists 'portunus' and it's readable back via getSecretsBackendChoiceSync()", async () => {
+    const { baseUrl } = await start();
+    const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-backend-choice", { backend: "portunus" });
+    expect(status).toBe(200);
+    expect(body).toEqual({ ok: true, backend: "portunus" });
+    expect(getSecretsBackendChoiceSync(dir)).toBe("portunus");
+  });
+
+  it("persists 'keychain' explicitly (e.g. switching back) and it's readable back too", async () => {
+    const { baseUrl } = await start();
+    await postJson(baseUrl + "/api/wizard/secrets-backend-choice", { backend: "portunus" });
+    const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-backend-choice", { backend: "keychain" });
+    expect(status).toBe(200);
+    expect(body).toEqual({ ok: true, backend: "keychain" });
+    expect(getSecretsBackendChoiceSync(dir)).toBe("keychain");
+  });
+
+  it("rejects an unrecognized backend value with 400 and does not persist it", async () => {
+    const { baseUrl } = await start();
+    const { status, body } = await postJson(baseUrl + "/api/wizard/secrets-backend-choice", { backend: "not-a-real-backend" });
+    expect(status).toBe(400);
+    expect((body as { error?: string }).error).toBeTruthy();
+    expect(getSecretsBackendChoiceSync(dir)).toBe("keychain");
+  });
+
+  it("rejects a missing backend field with 400", async () => {
+    const { baseUrl } = await start();
+    const { status } = await postJson(baseUrl + "/api/wizard/secrets-backend-choice", {});
+    expect(status).toBe(400);
+  });
+
+  it("with malformed JSON returns 400, not 500", async () => {
+    const { baseUrl } = await start();
+    const { status } = await postRawBody(baseUrl + "/api/wizard/secrets-backend-choice", "POST", "{not valid json");
+    expect(status).toBe(400);
+  });
+});
+
+// pfb-04: server.ts's `secrets` construction call site
+// (`opts.secrets ?? secretsAdapterFactory({ backend: getSecretsBackendChoiceSync(homeDir) })`).
+// These tests bypass the shared `start()` helper above (which always forces
+// an explicit `secrets` value, short-circuiting this call site entirely) and
+// call createRolodexServer() directly, so the factory/backend wiring is
+// actually exercised.
+describe("`secrets` construction: backend resolution via getSecretsBackendChoiceSync (pfb-04)", () => {
+  async function startBare(opts: Partial<RolodexServerOptions> = {}): Promise<{ baseUrl: string; server: Server }> {
+    const s = createRolodexServer({
+      homeDir: dir,
+      secretsCapabilityFactory: () => createInMemorySecretsAdapter(),
+      ...opts,
+    });
+    await new Promise<void>((resolve) => s.listen(0, resolve));
+    const address = s.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    return { baseUrl: `http://127.0.0.1:${port}`, server: s };
+  }
+
+  it("defaults to 'keychain' when nothing has been persisted (fresh install)", async () => {
+    let seenBackend: unknown;
+    const factory = (opts?: CreateSecretsAdapterOptions) => {
+      seenBackend = opts?.backend;
+      return createInMemorySecretsAdapter();
+    };
+    const { server } = await startBare({ secretsAdapterFactory: factory });
+    try {
+      expect(seenBackend).toBe("keychain");
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("resolves to 'portunus' once that choice has been persisted for this homeDir", async () => {
+    await setSecretsBackendChoice("portunus", dir);
+    let seenBackend: unknown;
+    const factory = (opts?: CreateSecretsAdapterOptions) => {
+      seenBackend = opts?.backend;
+      return createInMemorySecretsAdapter();
+    };
+    const { server } = await startBare({ secretsAdapterFactory: factory });
+    try {
+      expect(seenBackend).toBe("portunus");
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("falls back to 'keychain' and does NOT crash server construction when wizard-config.json is corrupt", async () => {
+    mkdirSync(path.join(dir, ".local/share/rolodex"), { recursive: true });
+    writeFileSync(path.join(dir, ".local/share/rolodex/wizard-config.json"), "{ not valid json at all");
+    let seenBackend: unknown;
+    const factory = (opts?: CreateSecretsAdapterOptions) => {
+      seenBackend = opts?.backend;
+      return createInMemorySecretsAdapter();
+    };
+    let result: { baseUrl: string; server: Server } | undefined;
+    await expect(
+      (async () => {
+        result = await startBare({ secretsAdapterFactory: factory });
+      })(),
+    ).resolves.toBeUndefined();
+    try {
+      expect(seenBackend).toBe("keychain");
+    } finally {
+      if (result) await new Promise((resolve) => result!.server.close(resolve));
+    }
+  });
+
+  it("opts.secrets, when given, bypasses secretsAdapterFactory entirely (unaffected by this story)", async () => {
+    let called = false;
+    const factory = () => {
+      called = true;
+      return createInMemorySecretsAdapter();
+    };
+    const { server } = await startBare({ secrets: createInMemorySecretsAdapter(), secretsAdapterFactory: factory });
+    try {
+      expect(called).toBe(false);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  // The core acceptance criterion: "User selects Portunus, check succeeds,
+  // proceeds -> choice persisted to wizard-config.json BEFORE navigating to
+  // 'google', and the subsequent Google-connect screen's secrets.set()
+  // calls are verified (via a real or injected check) to actually use the
+  // Portunus backend." Per this story's deliberate synchronous-read-at-
+  // construction-time design (secrets-backend-config.ts's top-of-file
+  // docstring, resolving grill finding F3), the persisted choice takes
+  // effect starting at the NEXT time `secrets` is constructed for this
+  // homeDir — not as a live hot-swap mid-process — so this test genuinely
+  // exercises that exact contract: persist through the real wizard route,
+  // then construct a fresh server for the same homeDir and prove ITS
+  // Google-connect route's secrets.set() call lands on the Portunus-
+  // resolved adapter, via a tagged fake that both records which `backend`
+  // secretsAdapterFactory was asked for AND is independently readable back.
+  it("a Portunus choice persisted via the real wizard route is what the next `secrets` construction for this homeDir resolves to — and that adapter is what the Google-connect route's secrets.set() call actually uses", async () => {
+    const { baseUrl } = await start({ isPortunusAvailable: async () => true });
+    const avail = await getJson(baseUrl + "/api/wizard/secrets-backends");
+    expect(avail.body).toEqual({ portunusAvailable: true, currentBackend: "keychain" });
+
+    const choice = await postJson(baseUrl + "/api/wizard/secrets-backend-choice", { backend: "portunus" });
+    expect(choice.status).toBe(200);
+    expect(choice.body).toEqual({ ok: true, backend: "portunus" });
+    expect(getSecretsBackendChoiceSync(dir)).toBe("portunus");
+
+    function taggedAdapter(tag: string): SecretsAdapter & { tag: string } {
+      const store = new Map<string, string>();
+      return {
+        tag,
+        async get(key) {
+          return store.get(key);
+        },
+        async set(key, value) {
+          store.set(key, value);
+        },
+        async delete(key) {
+          store.delete(key);
+        },
+      };
+    }
+
+    let builtBackend: unknown;
+    let capturedAdapter: (SecretsAdapter & { tag: string }) | undefined;
+    const { server, baseUrl: baseUrl2 } = await startBare({
+      secretsAdapterFactory: (opts?: CreateSecretsAdapterOptions) => {
+        builtBackend = opts?.backend;
+        capturedAdapter = taggedAdapter(opts?.backend ?? "keychain");
+        return capturedAdapter;
+      },
+    });
+    try {
+      expect(builtBackend).toBe("portunus");
+      expect(capturedAdapter?.tag).toBe("portunus");
+
+      const saved = await postJson(baseUrl2 + "/api/wizard/google", { clientId: "gid", clientSecret: "gsecret" });
+      expect(saved.status).toBe(200);
+
+      // Definitive proof: read the value back directly off the exact tagged
+      // adapter instance secretsAdapterFactory returned — not some other
+      // adapter — confirming the Google-connect route's secrets.set() call
+      // really went through the Portunus-resolved `secrets`.
+      const stored = await capturedAdapter!.get("google.oauth.client");
+      expect(stored).toBeDefined();
+      expect(JSON.parse(stored!)).toEqual({ clientId: "gid", clientSecret: "gsecret" });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
     }
   });
 });
 
 describe("GET /api/wizard/summary", () => {
-  it("reports dbPath, googleConfigured, and the secrets probe result", async () => {
+  it("reports dbPath, googleConfigured, googleSignedIn:false (no token yet), and the secrets probe result", async () => {
     const { baseUrl } = await start();
     await postJson(baseUrl + "/api/wizard/google", { clientId: "id", clientSecret: "secret" });
     const { status, body } = await getJson(baseUrl + "/api/wizard/summary");
@@ -475,13 +763,27 @@ describe("GET /api/wizard/summary", () => {
     expect(body).toMatchObject({
       dbPath: `${dir}/.local/share/rolodex/rolodex.db`,
       googleConfigured: true,
+      googleSignedIn: false,
     });
+    // start()'s own default injects createInMemorySecretsAdapter() (see this
+    // file's start() helper), so this is deterministic regardless of
+    // platform — no real Darwin-only keychain involved.
     const secrets = (body as { secrets: { ok: boolean; backend: string } }).secrets;
-    if (process.platform === "darwin") {
-      expect(secrets).toMatchObject({ ok: true, backend: "macOS Keychain" });
-    } else {
-      expect(secrets).toMatchObject({ ok: false, backend: "none" });
-    }
+    expect(secrets).toMatchObject({ ok: true, backend: "macOS Keychain" });
+  });
+
+  it("reports googleSignedIn:true once an OAuth token is actually stored — distinct from just having client credentials saved", async () => {
+    const { baseUrl, secrets } = await start();
+    await postJson(baseUrl + "/api/wizard/google", { clientId: "id", clientSecret: "secret" });
+    await secrets.set(GOOGLE_OAUTH_TOKEN_KEY, JSON.stringify({ access_token: "at", refresh_token: "rt" }));
+    const { body } = await getJson(baseUrl + "/api/wizard/summary");
+    expect(body).toMatchObject({ googleConfigured: true, googleSignedIn: true });
+  });
+
+  it("reports googleConfigured:false and googleSignedIn:false when nothing has been saved yet", async () => {
+    const { baseUrl } = await start();
+    const { body } = await getJson(baseUrl + "/api/wizard/summary");
+    expect(body).toMatchObject({ googleConfigured: false, googleSignedIn: false });
   });
 });
 
@@ -630,6 +932,117 @@ describe("POST/GET /api/contacts/:id/interactions", () => {
   });
 });
 
+describe("DELETE /api/contacts/:id", () => {
+  it("deletes an existing contact and returns 204 with no body", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+
+    const { status, body } = await deleteRequest(baseUrl + `/api/contacts/${id}`);
+    expect(status).toBe(204);
+    expect(body).toBeUndefined();
+
+    const after = await getJson(baseUrl + `/api/contacts/${id}`);
+    expect(after.status).toBe(404);
+  });
+
+  it("also deletes the contact's interaction history", async () => {
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+    await postJson(baseUrl + `/api/contacts/${id}/interactions`, { note: "Called once" });
+
+    await deleteRequest(baseUrl + `/api/contacts/${id}`);
+
+    const historyRes = await getJson(baseUrl + `/api/contacts/${id}/interactions`);
+    expect(historyRes.status).toBe(404);
+  });
+
+  it("returns 404 for an unknown contact id", async () => {
+    const { baseUrl } = await startReady();
+    const { status } = await deleteRequest(baseUrl + "/api/contacts/does-not-exist");
+    expect(status).toBe(404);
+  });
+
+  it("does not remove other contacts", async () => {
+    const { baseUrl } = await startReady();
+    const keep = await postJson(baseUrl + "/api/contacts", { name: "Grace Hopper" });
+    const gone = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const keepId = (keep.body as { id: string }).id;
+    const goneId = (gone.body as { id: string }).id;
+
+    await deleteRequest(baseUrl + `/api/contacts/${goneId}`);
+
+    const stillThere = await getJson(baseUrl + `/api/contacts/${keepId}`);
+    expect(stillThere.status).toBe(200);
+  });
+
+  it("a Google-linked contact still deletes locally (204) even when the best-effort Google-side delete fails, and logs the failure", async () => {
+    // No real Google OAuth is configured in this test server, so a contact
+    // that's (directly, via googleResourceName in the POST body — not a
+    // real sync) linked to Google will genuinely fail deleteContact()'s
+    // "Google isn't connected yet" check. That's exactly the real,
+    // naturally-occurring shape of a best-effort failure — no fake
+    // GoogleSync injection needed to exercise it.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { baseUrl } = await startReady();
+      const created = await postJson(baseUrl + "/api/contacts", {
+        name: "Ada Lovelace",
+        googleResourceName: "people/fake123",
+      });
+      const id = (created.body as { id: string }).id;
+
+      const { status, body } = await deleteRequest(baseUrl + `/api/contacts/${id}`);
+      expect(status).toBe(204);
+      expect(body).toBeUndefined();
+
+      const after = await getJson(baseUrl + `/api/contacts/${id}`);
+      expect(after.status).toBe(404);
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`${id}.*isn't connected`, "s")));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe("POST /api/sync/google/push", () => {
+  it("returns 409 before the wizard is complete", async () => {
+    const { baseUrl } = await start();
+    const { status, body } = await postJson(baseUrl + "/api/sync/google/push");
+    expect(status).toBe(409);
+    expect(body).toEqual({ error: "setup not complete" });
+  });
+
+  it("with no contacts, returns a zeroed summary and never touches Google", async () => {
+    const { baseUrl } = await startReady();
+    const { status, body } = await postJson(baseUrl + "/api/sync/google/push");
+    expect(status).toBe(200);
+    expect(body).toEqual({ pushed: 0, created: 0, updated: 0, errors: [] });
+  });
+
+  it("reports a per-contact error (not a 5xx) when Google isn't connected — one bad contact doesn't fail the batch", async () => {
+    // Same real, naturally-occurring failure shape as the DELETE route's
+    // Google-side test above: no OAuth client is configured in this test
+    // server, so push() genuinely throws its actionable "isn't connected"
+    // error — caught per-contact by pushAllToGoogle, not fatal to the call.
+    const { baseUrl } = await startReady();
+    const created = await postJson(baseUrl + "/api/contacts", { name: "Ada Lovelace" });
+    const id = (created.body as { id: string }).id;
+
+    const { status, body } = await postJson(baseUrl + "/api/sync/google/push");
+    expect(status).toBe(200);
+    const summary = body as { pushed: number; created: number; updated: number; errors: { contactId: string; name: string; error: string }[] };
+    expect(summary).toMatchObject({ pushed: 0, created: 0, updated: 0 });
+    expect(summary.errors).toEqual([{ contactId: id, name: "Ada Lovelace", error: expect.stringMatching(/isn't connected/) }]);
+
+    // The failed push must not have mutated the local row.
+    const after = await getJson(baseUrl + `/api/contacts/${id}`);
+    expect((after.body as { googleResourceName?: string }).googleResourceName).toBeUndefined();
+  });
+});
+
 describe("malformed JSON request bodies", () => {
   it("POST /api/contacts with malformed JSON returns 400, not 500", async () => {
     const { baseUrl } = await startReady();
@@ -744,6 +1157,176 @@ describe("GET/PUT /api/settings/follow-up", () => {
     const { baseUrl } = await startReady();
     const { status } = await postRawBody(baseUrl + "/api/settings/follow-up", "PUT", "{not valid json");
     expect(status).toBe(400);
+  });
+});
+
+describe("GET/PUT /api/settings/autostart", () => {
+  it("GET reports unsupported by default (no autostart option injected), even before the wizard is complete", async () => {
+    const { baseUrl } = await start();
+    const { status, body } = await getJson(baseUrl + "/api/settings/autostart");
+    expect(status).toBe(200);
+    expect(body).toEqual({ supported: false, enabled: false });
+  });
+
+  it("PUT returns 501 when unsupported and does not call any setter", async () => {
+    const { baseUrl } = await start();
+    const { status, body } = await putJson(baseUrl + "/api/settings/autostart", { enabled: true });
+    expect(status).toBe(501);
+    expect((body as { error?: string }).error).toBeTruthy();
+  });
+
+  it("GET/PUT reflect an injected autostart controller (the Electron-main-process shape)", async () => {
+    let enabled = false;
+    const setEnabled = vi.fn((v: boolean) => {
+      enabled = v;
+    });
+    server = createRolodexServer({
+      homeDir: dir,
+      secretsCapabilityFactory: () => createInMemorySecretsAdapter(),
+      autostart: { isSupported: true, getEnabled: () => enabled, setEnabled },
+    });
+    await new Promise<void>((resolve) => server!.listen(0, resolve));
+    const address = server!.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const before = await getJson(baseUrl + "/api/settings/autostart");
+    expect(before.body).toEqual({ supported: true, enabled: false });
+
+    const put = await putJson(baseUrl + "/api/settings/autostart", { enabled: true });
+    expect(put.status).toBe(200);
+    expect(put.body).toEqual({ supported: true, enabled: true });
+    expect(setEnabled).toHaveBeenCalledWith(true);
+
+    const after = await getJson(baseUrl + "/api/settings/autostart");
+    expect(after.body).toEqual({ supported: true, enabled: true });
+  });
+
+  it("PUT rejects a non-boolean enabled with 400", async () => {
+    server = createRolodexServer({
+      homeDir: dir,
+      secretsCapabilityFactory: () => createInMemorySecretsAdapter(),
+      autostart: { isSupported: true, getEnabled: () => false, setEnabled: () => {} },
+    });
+    await new Promise<void>((resolve) => server!.listen(0, resolve));
+    const address = server!.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const { status, body } = await putJson(baseUrl + "/api/settings/autostart", { enabled: "yes" });
+    expect(status).toBe(400);
+    expect((body as { error?: string }).error).toBeTruthy();
+  });
+
+  it("PUT with malformed JSON on an unsupported server still returns 501, not 400 or 500 — isSupported is checked before the body is even read", async () => {
+    const { baseUrl } = await start();
+    const { status } = await postRawBody(baseUrl + "/api/settings/autostart", "PUT", "{not valid json");
+    expect(status).toBe(501);
+  });
+
+  it("PUT with malformed JSON on a supported server returns 400, not 500", async () => {
+    server = createRolodexServer({
+      homeDir: dir,
+      secretsCapabilityFactory: () => createInMemorySecretsAdapter(),
+      autostart: { isSupported: true, getEnabled: () => false, setEnabled: () => {} },
+    });
+    await new Promise<void>((resolve) => server!.listen(0, resolve));
+    const address = server!.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const { status } = await postRawBody(baseUrl + "/api/settings/autostart", "PUT", "{not valid json");
+    expect(status).toBe(400);
+  });
+});
+
+describe("GET/PUT /api/settings/appearance", () => {
+  it("GET returns 409 before the wizard is complete", async () => {
+    const { baseUrl } = await start();
+    const { status } = await getJson(baseUrl + "/api/settings/appearance");
+    expect(status).toBe(409);
+  });
+
+  it("GET returns the lazily-seeded default/6 defaults on a fresh store", async () => {
+    const { baseUrl } = await startReady();
+    const { status, body } = await getJson(baseUrl + "/api/settings/appearance");
+    expect(status).toBe(200);
+    expect(body).toEqual({ theme: "default", iconId: 6 });
+  });
+
+  it("PUT persists a new config and GET reflects it afterward", async () => {
+    const { baseUrl } = await startReady();
+    const put = await putJson(baseUrl + "/api/settings/appearance", { theme: "brass", iconId: 3 });
+    expect(put.status).toBe(200);
+    expect(put.body).toEqual({ theme: "brass", iconId: 3 });
+
+    const get = await getJson(baseUrl + "/api/settings/appearance");
+    expect(get.body).toEqual({ theme: "brass", iconId: 3 });
+  });
+
+  it("PUT rejects invalid theme/iconId values with 400 and does not persist them", async () => {
+    const { baseUrl } = await startReady();
+
+    const cases: unknown[] = [
+      { theme: "sepia", iconId: 3 },
+      { theme: "brass", iconId: 0 },
+      { theme: "brass", iconId: 11 },
+      { theme: "brass", iconId: 1.5 },
+      { theme: "brass", iconId: "3" },
+      { theme: "brass" },
+      {},
+    ];
+    for (const payload of cases) {
+      const { status, body } = await putJson(baseUrl + "/api/settings/appearance", payload);
+      expect(status).toBe(400);
+      expect((body as { error?: string }).error).toBeTruthy();
+    }
+
+    const get = await getJson(baseUrl + "/api/settings/appearance");
+    expect(get.body).toEqual({ theme: "default", iconId: 6 });
+  });
+
+  it("PUT with malformed JSON returns 400, not 500", async () => {
+    const { baseUrl } = await startReady();
+    const { status } = await postRawBody(baseUrl + "/api/settings/appearance", "PUT", "{not valid json");
+    expect(status).toBe(400);
+  });
+});
+
+describe("GET / — appearance injection", () => {
+  it("serves the default theme/icon (no data-theme attribute, favicon.ico links) with no settings row", async () => {
+    const { baseUrl } = await startReady();
+    const res = await fetch(baseUrl + "/");
+    const html = await res.text();
+    // The CSS itself legitimately contains the literal substring
+    // data-theme="brass" as an attribute-selector — assert on the actual
+    // <html> opening tag, not a bare substring match.
+    expect(html).toContain('<html lang="en">');
+    expect(html).not.toContain('<html lang="en" data-theme="brass">');
+    expect(html).toContain("/assets/icon-c6.ico");
+    expect(html).toContain("/assets/icon-c6-32.png");
+    expect(html).toContain("/assets/icon-c6-16.png");
+    expect(html).toContain("/assets/icon-c6-180.png");
+  });
+
+  it("injects data-theme and the selected icon's asset paths once appearance is saved", async () => {
+    const { baseUrl } = await startReady();
+    await putJson(baseUrl + "/api/settings/appearance", { theme: "brass", iconId: 4 });
+
+    const res = await fetch(baseUrl + "/");
+    const html = await res.text();
+    expect(html).toContain('<html lang="en" data-theme="brass">');
+    expect(html).toContain("/assets/icon-c4.ico");
+    expect(html).toContain("/assets/icon-c4-32.png");
+    expect(html).toContain("/assets/icon-c4-16.png");
+    expect(html).toContain("/assets/icon-c4-180.png");
+  });
+
+  it("does not inject appearance into wizard.html before setup is complete", async () => {
+    const { baseUrl } = await start();
+    const res = await fetch(baseUrl + "/");
+    const html = await res.text();
+    expect(html).not.toContain('<html lang="en" data-theme="brass">');
   });
 });
 

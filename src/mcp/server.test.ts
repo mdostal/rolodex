@@ -144,6 +144,56 @@ describe("rolodex_log_interaction", () => {
   });
 });
 
+describe("rolodex_delete", () => {
+  it("deletes an existing contact", async () => {
+    const contact = parseResult(await handlers.rolodex_upsert({ name: "Ada Lovelace" })) as { id: string };
+
+    const result = await handlers.rolodex_delete({ contactId: contact.id });
+    const payload = parseResult(result) as { deleted: boolean; id: string; name: string };
+    expect(payload).toEqual({ deleted: true, id: contact.id, name: "Ada Lovelace" });
+    expect(store.get(contact.id)).toBeUndefined();
+  });
+
+  it("also deletes the contact's interaction history", async () => {
+    const contact = parseResult(await handlers.rolodex_upsert({ name: "Ada Lovelace" })) as { id: string };
+    await handlers.rolodex_log_interaction({ contactId: contact.id, note: "Called once" });
+
+    await handlers.rolodex_delete({ contactId: contact.id });
+
+    expect(store.listInteractions(contact.id)).toHaveLength(0);
+  });
+
+  it("returns isError for an unknown contact id, without throwing", async () => {
+    const result = await handlers.rolodex_delete({ contactId: "does-not-exist" });
+    expect(result.isError).toBe(true);
+  });
+
+  it("deletes locally (deleted:true) and surfaces a googleDeleteWarning when the linked Google delete fails", async () => {
+    // In-memory secrets, deliberately unseeded — google.deleteContact()
+    // will genuinely fail with "Google isn't connected yet", the same
+    // real, naturally-occurring failure src/shell/server.test.ts's
+    // equivalent DELETE-route test exercises. Explicit google injection
+    // here (not the module-level `handlers`) so this never touches the
+    // real macOS keychain the default createGoogleSync() would reach for.
+    const google = createGoogleSync({ secrets: createInMemorySecretsAdapter() });
+    ({ handlers } = createRolodexMcpServer({ store, google }));
+
+    const contact = parseResult(
+      await handlers.rolodex_upsert({ name: "Ada Lovelace" }),
+    ) as { id: string };
+    // googleResourceName isn't settable via rolodex_upsert's own args (by
+    // design — see its zod schema), so it's set directly on the row the
+    // same way a real sync would have.
+    store.upsert({ ...store.get(contact.id)!, googleResourceName: "people/fake123" });
+
+    const result = await handlers.rolodex_delete({ contactId: contact.id });
+    const payload = parseResult(result) as { deleted: boolean; googleDeleteWarning?: string };
+    expect(payload.deleted).toBe(true);
+    expect(payload.googleDeleteWarning).toMatch(/isn't connected/);
+    expect(store.get(contact.id)).toBeUndefined();
+  });
+});
+
 describe("rolodex_sync_google", () => {
   async function seededSecrets() {
     const secrets = createInMemorySecretsAdapter();
@@ -182,7 +232,20 @@ describe("rolodex_sync_google", () => {
         ],
       },
     });
-    const fakeClient: PeopleApiClient = { people: { connections: { list } } };
+    const fakeClient: PeopleApiClient = {
+      people: {
+        connections: { list },
+        createContact: () => {
+          throw new Error("not used in this test");
+        },
+        updateContact: () => {
+          throw new Error("not used in this test");
+        },
+        deleteContact: () => {
+          throw new Error("not used in this test");
+        },
+      },
+    };
     const google = createGoogleSync({ secrets, createPeopleClient: () => fakeClient });
 
     ({ handlers } = createRolodexMcpServer({ store, google }));
@@ -202,37 +265,70 @@ describe("rolodex_sync_google", () => {
     });
   });
 
-  it("direction 'both' runs the pull half for real and notes push wasn't performed", async () => {
+  it("direction 'both' runs pull then push for real, returning { pull, push }", async () => {
     const secrets = await seededSecrets();
     const list = async () => ({ data: { connections: [{ resourceName: "people/1", names: [{ displayName: "One" }] }] } });
-    const google = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list } } }) });
+    const createContact = () => {
+      throw new Error("not used in this test — the pulled contact already has a googleResourceName");
+    };
+    const updateContact = async () => ({
+      data: { resourceName: "people/1", metadata: { sources: [{ etag: 'W/"e2"' }] } },
+    });
+    const google = createGoogleSync({
+      secrets,
+      createPeopleClient: () => ({
+        people: {
+          connections: { list },
+          createContact,
+          updateContact,
+          deleteContact: () => {
+            throw new Error("not used in this test");
+          },
+        },
+      }),
+    });
     ({ handlers } = createRolodexMcpServer({ store, google }));
 
     const result = await handlers.rolodex_sync_google({ direction: "both" });
     expect(result.isError).toBeUndefined();
-    const summary = parseResult(result) as { pulled: number; created: number; updated: number; pushed: boolean };
-    expect(summary).toMatchObject({ pulled: 1, created: 1, updated: 0, pushed: false });
+    const summary = parseResult(result) as {
+      pull: { pulled: number; created: number; updated: number };
+      push: { pushed: number; created: number; updated: number; errors: unknown[] };
+    };
+    expect(summary.pull).toMatchObject({ pulled: 1, created: 1, updated: 0 });
+    // The contact just pulled already carries the googleResourceName Google
+    // gave it, so pushing it back is an update, not a create.
+    expect(summary.push).toEqual({ pushed: 1, created: 0, updated: 1, errors: [] });
     expect(store.list()).toHaveLength(1);
+    expect(store.list()[0]?.googleEtag).toBe('W/"e2"');
   });
 
-  it("direction 'push' returns isError:true without crashing and never calls pull/push", async () => {
+  it("direction 'push' pushes every local contact to Google, reporting created/updated/errors, and never calls pull", async () => {
+    const contact = parseResult(await handlers.rolodex_upsert({ name: "Ada Lovelace" })) as { id: string };
     let pullCalled = false;
+    const pushedIds: string[] = [];
     const google = {
       async pull() {
         pullCalled = true;
         return [];
       },
-      async push() {
+      async push(c: { id: string }) {
+        pushedIds.push(c.id);
+        return { resourceName: "people/new1", etag: 'W/"e1"' };
+      },
+      async deleteContact() {
         throw new Error("should never be called");
       },
     };
     ({ handlers } = createRolodexMcpServer({ store, google }));
 
     const result = await handlers.rolodex_sync_google({ direction: "push" });
-    expect(result.isError).toBe(true);
-    const parsed = parseResult(result) as { error: string };
-    expect(parsed.error).toMatch(/not implemented/i);
+    expect(result.isError).toBeUndefined();
+    const summary = parseResult(result) as { pushed: number; created: number; updated: number; errors: unknown[] };
+    expect(summary).toEqual({ pushed: 1, created: 1, updated: 0, errors: [] });
     expect(pullCalled).toBe(false);
+    expect(pushedIds).toEqual([contact.id]);
+    expect(store.get(contact.id)?.googleResourceName).toBe("people/new1");
   });
 });
 

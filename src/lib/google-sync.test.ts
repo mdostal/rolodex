@@ -4,12 +4,18 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyPullToStore,
+  contactToPersonBody,
   createGoogleSync,
+  deleteContactEverywhere,
   findExistingMatch,
   mapPersonToContact,
   mergeLocalOnlyFields,
+  pushAllToGoogle,
+  type DeletableStore,
+  type GoogleSync,
   type PeopleApiClient,
   type PersonLite,
+  type PushableStore,
 } from "./google-sync.js";
 import { createInMemorySecretsAdapter } from "./secrets-adapter.js";
 import { Store } from "./store.js";
@@ -28,6 +34,27 @@ function baseContact(overrides: Partial<Contact> = {}): Contact {
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
+  };
+}
+
+/** A full, correctly-typed PeopleApiClient for pull()-only tests — throwing
+ * stubs for createContact/updateContact/deleteContact make it obvious (a
+ * real assertion failure, not `undefined` silently propagating) if a
+ * pull()-only test accidentally exercises a push()/delete code path. */
+function fakePeopleClient(list: PeopleApiClient["people"]["connections"]["list"]): PeopleApiClient {
+  return {
+    people: {
+      connections: { list },
+      createContact: () => {
+        throw new Error("createContact should not be called by a pull()-only test");
+      },
+      updateContact: () => {
+        throw new Error("updateContact should not be called by a pull()-only test");
+      },
+      deleteContact: () => {
+        throw new Error("deleteContact should not be called by a pull()-only test");
+      },
+    },
   };
 }
 
@@ -56,6 +83,29 @@ describe("mapPersonToContact", () => {
       phone: "+1-555-0100",
       verdict: "none",
     });
+  });
+
+  it("captures metadata.sources[].etag as googleEtag", () => {
+    const person: PersonLite = {
+      resourceName: "people/c123",
+      names: [{ displayName: "Grace Hopper" }],
+      metadata: { sources: [{ type: "CONTACT", etag: 'W/"abc123"' }] },
+    };
+    expect(mapPersonToContact(person).googleEtag).toBe('W/"abc123"');
+  });
+
+  it("takes the first source that actually has an etag, when there are multiple sources", () => {
+    const person: PersonLite = {
+      resourceName: "people/c123",
+      names: [{ displayName: "Grace Hopper" }],
+      metadata: { sources: [{ type: "PROFILE", etag: null }, { type: "CONTACT", etag: 'W/"real"' }] },
+    };
+    expect(mapPersonToContact(person).googleEtag).toBe('W/"real"');
+  });
+
+  it("leaves googleEtag undefined when metadata/sources are absent", () => {
+    const contact = mapPersonToContact({ resourceName: "people/c1", names: [{ displayName: "X" }] });
+    expect(contact.googleEtag).toBeUndefined();
   });
 
   it("only reads the first entry in each repeated field", () => {
@@ -130,7 +180,7 @@ describe("createGoogleSync().pull()", () => {
           // no nextPageToken -> pagination stops
         },
       });
-    const fakeClient: PeopleApiClient = { people: { connections: { list } } };
+    const fakeClient: PeopleApiClient = fakePeopleClient(list);
 
     const sync = createGoogleSync({ secrets, createPeopleClient: () => fakeClient });
     const contacts = await sync.pull();
@@ -141,7 +191,7 @@ describe("createGoogleSync().pull()", () => {
     // nextPageToken. Both calls request the same resourceName/personFields.
     expect(list.mock.calls[0]![0]).toMatchObject({
       resourceName: "people/me",
-      personFields: "names,organizations,emailAddresses,phoneNumbers",
+      personFields: "names,organizations,emailAddresses,phoneNumbers,metadata",
       pageToken: undefined,
     });
     expect(list.mock.calls[1]![0]).toMatchObject({ pageToken: "page-2" });
@@ -150,7 +200,7 @@ describe("createGoogleSync().pull()", () => {
   it("returns an empty array when the account has no connections", async () => {
     const secrets = await seededSecrets();
     const list = vi.fn().mockResolvedValueOnce({ data: {} });
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list } } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => fakePeopleClient(list) });
     expect(await sync.pull()).toEqual([]);
   });
 
@@ -159,7 +209,7 @@ describe("createGoogleSync().pull()", () => {
     const list = vi.fn().mockResolvedValueOnce({
       data: { connections: [{ resourceName: "people/1", names: [{ displayName: "Solo" }] }] },
     });
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list } } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => fakePeopleClient(list) });
     const contacts = await sync.pull();
     expect(contacts).toHaveLength(1);
     expect(list).toHaveBeenCalledTimes(1);
@@ -167,35 +217,35 @@ describe("createGoogleSync().pull()", () => {
 
   it("throws an actionable error when no OAuth client is stored", async () => {
     const secrets = createInMemorySecretsAdapter();
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list: vi.fn() } } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => fakePeopleClient(vi.fn()) });
     await expect(sync.pull()).rejects.toThrow(/isn't connected/i);
   });
 
   it("throws an actionable error when the OAuth client is stored but corrupt", async () => {
     const secrets = createInMemorySecretsAdapter();
     await secrets.set(GOOGLE_OAUTH_CLIENT_KEY, "not json");
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list: vi.fn() } } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => fakePeopleClient(vi.fn()) });
     await expect(sync.pull()).rejects.toThrow(/corrupt/i);
   });
 
   it("throws an actionable error when the OAuth client is stored but incomplete", async () => {
     const secrets = createInMemorySecretsAdapter();
     await secrets.set(GOOGLE_OAUTH_CLIENT_KEY, JSON.stringify({ clientId: "only-id" }));
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list: vi.fn() } } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => fakePeopleClient(vi.fn()) });
     await expect(sync.pull()).rejects.toThrow(/incomplete/i);
   });
 
   it("throws an actionable error when the client is configured but no token is stored yet (sign-in not done)", async () => {
     const secrets = createInMemorySecretsAdapter();
     await secrets.set(GOOGLE_OAUTH_CLIENT_KEY, JSON.stringify({ clientId: "cid", clientSecret: "csecret" }));
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list: vi.fn() } } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => fakePeopleClient(vi.fn()) });
     await expect(sync.pull()).rejects.toThrow(/sign-in/i);
   });
 
   it("never calls the People client at all when credentials are missing", async () => {
     const secrets = createInMemorySecretsAdapter();
     const list = vi.fn();
-    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list } } }) });
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => fakePeopleClient(list) });
     await expect(sync.pull()).rejects.toThrow();
     expect(list).not.toHaveBeenCalled();
   });
@@ -217,7 +267,7 @@ describe("createGoogleSync().pull()", () => {
       secrets,
       createPeopleClient: (auth) => {
         capturedAuth = auth as unknown as { emit: (event: string, payload: unknown) => void };
-        return { people: { connections: { list } } };
+        return fakePeopleClient(list);
       },
     });
 
@@ -233,10 +283,324 @@ describe("createGoogleSync().pull()", () => {
   });
 });
 
+describe("contactToPersonBody", () => {
+  it("puts the whole name in givenName (never splits it) and maps org/role/email/phone", () => {
+    const body = contactToPersonBody(
+      baseContact({ name: "Ada Lovelace", org: "Analytical Engines", role: "Mathematician", email: "ada@example.com", phone: "+1-555-0100" }),
+    );
+    expect(body).toEqual({
+      names: [{ givenName: "Ada Lovelace" }],
+      organizations: [{ name: "Analytical Engines", title: "Mathematician" }],
+      emailAddresses: [{ value: "ada@example.com" }],
+      phoneNumbers: [{ value: "+1-555-0100" }],
+    });
+  });
+
+  it("omits organizations/emailAddresses/phoneNumbers entirely when unset, rather than sending empty arrays", () => {
+    const body = contactToPersonBody(baseContact({ name: "Ada Lovelace" }));
+    expect(body).toEqual({ names: [{ givenName: "Ada Lovelace" }] });
+  });
+
+  it("never includes local-only fields (verdict/angle/nextStep/tags/met/what) — Google has no fields for them", () => {
+    const body = contactToPersonBody(
+      baseContact({
+        name: "Ada Lovelace",
+        verdict: "strong",
+        angle: "warm intro",
+        nextStep: "follow up",
+        tags: ["vip"],
+        met: "conference",
+        what: "engineering",
+      }),
+    );
+    expect(JSON.stringify(body)).not.toMatch(/strong|warm intro|follow up|vip|conference|engineering/);
+  });
+});
+
 describe("createGoogleSync().push()", () => {
-  it("stays an unimplemented stub (explicitly out of scope for this story)", async () => {
-    const sync = createGoogleSync({ secrets: createInMemorySecretsAdapter() });
-    await expect(sync.push(baseContact())).rejects.toThrow(/not implemented/i);
+  async function seededSecrets() {
+    const secrets = createInMemorySecretsAdapter();
+    await secrets.set(GOOGLE_OAUTH_CLIENT_KEY, JSON.stringify({ clientId: "cid", clientSecret: "csecret" }));
+    await secrets.set(GOOGLE_OAUTH_TOKEN_KEY, JSON.stringify({ access_token: "at", refresh_token: "rt" }));
+    return secrets;
+  }
+
+  it("creates a new contact (no googleResourceName) via createContact, returning the new resourceName/etag", async () => {
+    const secrets = await seededSecrets();
+    const createContact = vi.fn().mockResolvedValue({
+      data: { resourceName: "people/new1", metadata: { sources: [{ etag: 'W/"e1"' }] } },
+    });
+    const updateContact = vi.fn();
+    const list = vi.fn();
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
+
+    const result = await sync.push(baseContact({ name: "Ada Lovelace" }));
+
+    expect(result).toEqual({ resourceName: "people/new1", etag: 'W/"e1"' });
+    expect(updateContact).not.toHaveBeenCalled();
+    expect(createContact).toHaveBeenCalledWith({ requestBody: { names: [{ givenName: "Ada Lovelace" }] } });
+  });
+
+  it("updates an existing linked contact via updateContact, sending the field mask and the stored etag", async () => {
+    const secrets = await seededSecrets();
+    const updateContact = vi.fn().mockResolvedValue({
+      data: { resourceName: "people/existing", metadata: { sources: [{ etag: 'W/"e2"' }] } },
+    });
+    const createContact = vi.fn();
+    const list = vi.fn();
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
+
+    const result = await sync.push(
+      baseContact({ name: "Ada Lovelace", googleResourceName: "people/existing", googleEtag: 'W/"old"' }),
+    );
+
+    expect(result).toEqual({ resourceName: "people/existing", etag: 'W/"e2"' });
+    expect(createContact).not.toHaveBeenCalled();
+    expect(updateContact).toHaveBeenCalledWith({
+      resourceName: "people/existing",
+      updatePersonFields: "names,organizations,emailAddresses,phoneNumbers",
+      requestBody: {
+        names: [{ givenName: "Ada Lovelace" }],
+        metadata: { sources: [{ etag: 'W/"old"' }] },
+      },
+    });
+  });
+
+  it("surfaces a clear, contact-named conflict error (not the raw API error) on a 400 — never silently overwrites", async () => {
+    const secrets = await seededSecrets();
+    const conflictErr = Object.assign(new Error("Precondition check failed."), { code: 400 });
+    const updateContact = vi.fn().mockRejectedValue(conflictErr);
+    const createContact = vi.fn();
+    const list = vi.fn();
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
+
+    await expect(
+      sync.push(baseContact({ name: "Ada Lovelace", googleResourceName: "people/existing", googleEtag: 'W/"stale"' })),
+    ).rejects.toThrow(/Ada Lovelace.*changed on Google/i);
+    expect(createContact).not.toHaveBeenCalled();
+  });
+
+  it("falls back to createContact (re-creates) when updateContact 404s — never treats the local row as orphaned", async () => {
+    const secrets = await seededSecrets();
+    const notFoundErr = Object.assign(new Error("Requested entity was not found."), { code: 404 });
+    const updateContact = vi.fn().mockRejectedValue(notFoundErr);
+    const createContact = vi.fn().mockResolvedValue({
+      data: { resourceName: "people/recreated", metadata: { sources: [{ etag: 'W/"e3"' }] } },
+    });
+    const list = vi.fn();
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
+
+    const result = await sync.push(
+      baseContact({ name: "Ada Lovelace", googleResourceName: "people/gone", googleEtag: 'W/"old"' }),
+    );
+
+    expect(result).toEqual({ resourceName: "people/recreated", etag: 'W/"e3"' });
+    expect(createContact).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows any other error unchanged (not a 400 or 404)", async () => {
+    const secrets = await seededSecrets();
+    const serverErr = Object.assign(new Error("Internal error."), { code: 500 });
+    const updateContact = vi.fn().mockRejectedValue(serverErr);
+    const createContact = vi.fn();
+    const list = vi.fn();
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
+
+    await expect(
+      sync.push(baseContact({ name: "Ada Lovelace", googleResourceName: "people/existing", googleEtag: 'W/"x"' })),
+    ).rejects.toThrow("Internal error.");
+    expect(createContact).not.toHaveBeenCalled();
+  });
+
+  it("throws a clear error if createContact's response is missing a resourceName, rather than returning a broken link", async () => {
+    const secrets = await seededSecrets();
+    const createContact = vi.fn().mockResolvedValue({ data: {} });
+    const updateContact = vi.fn();
+    const list = vi.fn();
+    const sync = createGoogleSync({ secrets, createPeopleClient: () => ({ people: { connections: { list }, createContact, updateContact, deleteContact: vi.fn() } }) });
+
+    await expect(sync.push(baseContact({ name: "Ada Lovelace" }))).rejects.toThrow(/resourceName/);
+  });
+});
+
+describe("createGoogleSync().deleteContact()", () => {
+  async function seededSecrets() {
+    const secrets = createInMemorySecretsAdapter();
+    await secrets.set(GOOGLE_OAUTH_CLIENT_KEY, JSON.stringify({ clientId: "cid", clientSecret: "csecret" }));
+    await secrets.set(GOOGLE_OAUTH_TOKEN_KEY, JSON.stringify({ access_token: "at", refresh_token: "rt" }));
+    return secrets;
+  }
+
+  it("calls the real client's deleteContact with the resourceName", async () => {
+    const secrets = await seededSecrets();
+    const deleteContact = vi.fn().mockResolvedValue(undefined);
+    const sync = createGoogleSync({
+      secrets,
+      createPeopleClient: () => ({
+        people: { connections: { list: vi.fn() }, createContact: vi.fn(), updateContact: vi.fn(), deleteContact },
+      }),
+    });
+
+    await sync.deleteContact("people/gone");
+    expect(deleteContact).toHaveBeenCalledWith({ resourceName: "people/gone" });
+  });
+
+  it("treats a 404 (already gone) as success, not an error", async () => {
+    const secrets = await seededSecrets();
+    const notFoundErr = Object.assign(new Error("not found"), { code: 404 });
+    const deleteContact = vi.fn().mockRejectedValue(notFoundErr);
+    const sync = createGoogleSync({
+      secrets,
+      createPeopleClient: () => ({
+        people: { connections: { list: vi.fn() }, createContact: vi.fn(), updateContact: vi.fn(), deleteContact },
+      }),
+    });
+
+    await expect(sync.deleteContact("people/already-gone")).resolves.toBeUndefined();
+  });
+
+  it("rethrows any other error", async () => {
+    const secrets = await seededSecrets();
+    const serverErr = Object.assign(new Error("Internal error."), { code: 500 });
+    const deleteContact = vi.fn().mockRejectedValue(serverErr);
+    const sync = createGoogleSync({
+      secrets,
+      createPeopleClient: () => ({
+        people: { connections: { list: vi.fn() }, createContact: vi.fn(), updateContact: vi.fn(), deleteContact },
+      }),
+    });
+
+    await expect(sync.deleteContact("people/x")).rejects.toThrow("Internal error.");
+  });
+});
+
+describe("deleteContactEverywhere", () => {
+  function fakeStore(contact: Contact | undefined): { store: DeletableStore; deleteCalls: string[] } {
+    const deleteCalls: string[] = [];
+    const store: DeletableStore = {
+      get: (id) => (contact && contact.id === id ? contact : undefined),
+      delete: (id) => {
+        deleteCalls.push(id);
+        return Boolean(contact && contact.id === id);
+      },
+    };
+    return { store, deleteCalls };
+  }
+
+  it("returns deleted:false and never calls delete on either side when the contact doesn't exist locally", async () => {
+    const { store, deleteCalls } = fakeStore(undefined);
+    const deleteContact = vi.fn();
+    const google: Pick<GoogleSync, "deleteContact"> = { deleteContact };
+
+    const summary = await deleteContactEverywhere("missing-id", store, google);
+
+    expect(summary).toEqual({ deleted: false });
+    expect(deleteCalls).toEqual([]);
+    expect(deleteContact).not.toHaveBeenCalled();
+  });
+
+  it("deletes locally only, without calling Google, when the contact has no googleResourceName", async () => {
+    const contact = baseContact({ id: "local-only" });
+    const { store } = fakeStore(contact);
+    const deleteContact = vi.fn();
+
+    const summary = await deleteContactEverywhere("local-only", store, { deleteContact });
+
+    expect(summary).toEqual({ deleted: true });
+    expect(deleteContact).not.toHaveBeenCalled();
+  });
+
+  it("deletes locally AND calls Google's deleteContact when the contact is linked", async () => {
+    const contact = baseContact({ id: "linked", googleResourceName: "people/c1" });
+    const { store } = fakeStore(contact);
+    const deleteContact = vi.fn().mockResolvedValue(undefined);
+
+    const summary = await deleteContactEverywhere("linked", store, { deleteContact });
+
+    expect(summary).toEqual({ deleted: true });
+    expect(deleteContact).toHaveBeenCalledWith("people/c1");
+  });
+
+  it("still reports deleted:true (local delete is not rolled back) when the Google-side delete fails, and surfaces the error", async () => {
+    const contact = baseContact({ id: "linked", googleResourceName: "people/c1" });
+    const { store } = fakeStore(contact);
+    const deleteContact = vi.fn().mockRejectedValue(new Error("Google isn't connected yet"));
+
+    const summary = await deleteContactEverywhere("linked", store, { deleteContact });
+
+    expect(summary.deleted).toBe(true);
+    expect(summary.googleDeleteError).toMatch(/isn't connected/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pushAllToGoogle — batch push, one contact at a time, per-contact failures
+// isolated into the errors array rather than aborting the whole batch.
+// ---------------------------------------------------------------------------
+describe("pushAllToGoogle", () => {
+  function fakeStore(initial: Contact[]): { store: PushableStore; upserted: Contact[] } {
+    const contacts = new Map(initial.map((c) => [c.id, c]));
+    const upserted: Contact[] = [];
+    const store: PushableStore = {
+      list: () => Array.from(contacts.values()),
+      upsert: (c) => {
+        contacts.set(c.id, c);
+        upserted.push(c);
+        return c;
+      },
+    };
+    return { store, upserted };
+  }
+
+  it("returns a zeroed summary and never calls push when there are no contacts", async () => {
+    const { store } = fakeStore([]);
+    const push = vi.fn();
+
+    const summary = await pushAllToGoogle(store, { push });
+
+    expect(summary).toEqual({ pushed: 0, created: 0, updated: 0, errors: [] });
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("creates a brand-new contact (no googleResourceName) and writes the returned resourceName/etag back to the store", async () => {
+    const contact = baseContact({ id: "new-1" });
+    const { store, upserted } = fakeStore([contact]);
+    const push = vi.fn().mockResolvedValue({ resourceName: "people/new1", etag: 'W/"e1"' });
+
+    const summary = await pushAllToGoogle(store, { push });
+
+    expect(summary).toEqual({ pushed: 1, created: 1, updated: 0, errors: [] });
+    expect(push).toHaveBeenCalledWith(contact);
+    expect(upserted).toEqual([{ ...contact, googleResourceName: "people/new1", googleEtag: 'W/"e1"' }]);
+  });
+
+  it("updates an already-linked contact (has googleResourceName) and counts it as updated, not created", async () => {
+    const contact = baseContact({ id: "linked-1", googleResourceName: "people/c1", googleEtag: 'W/"old"' });
+    const { store, upserted } = fakeStore([contact]);
+    const push = vi.fn().mockResolvedValue({ resourceName: "people/c1", etag: 'W/"new"' });
+
+    const summary = await pushAllToGoogle(store, { push });
+
+    expect(summary).toEqual({ pushed: 1, created: 0, updated: 1, errors: [] });
+    expect(upserted).toEqual([{ ...contact, googleResourceName: "people/c1", googleEtag: 'W/"new"' }]);
+  });
+
+  it("isolates a per-contact failure into the errors array — one bad contact doesn't abort the batch or touch the store", async () => {
+    const ok = baseContact({ id: "ok-1", name: "Grace Hopper" });
+    const bad = baseContact({ id: "bad-1", name: "Ada Lovelace" });
+    const { store, upserted } = fakeStore([ok, bad]);
+    const push = vi.fn(async (c: Contact) => {
+      if (c.id === "bad-1") throw new Error('"Ada Lovelace" changed on Google since your last sync');
+      return { resourceName: "people/ok1", etag: 'W/"e1"' };
+    });
+
+    const summary = await pushAllToGoogle(store, { push });
+
+    expect(summary.pushed).toBe(1);
+    expect(summary.created).toBe(1);
+    expect(summary.updated).toBe(0);
+    expect(summary.errors).toEqual([{ contactId: "bad-1", name: "Ada Lovelace", error: expect.stringMatching(/changed on Google/) }]);
+    expect(upserted).toEqual([{ ...ok, googleResourceName: "people/ok1", googleEtag: 'W/"e1"' }]);
   });
 });
 

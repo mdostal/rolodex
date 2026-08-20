@@ -1,0 +1,86 @@
+id: pfb-03-wizard-screen-reorder
+epic: portunus-secrets-backend
+title: Reorder the wizard so secrets check runs before Google-connect
+status: pending
+complexity: medium
+methodology: classic
+depends_on: []
+
+description: |
+  Pure mechanical reorder, deliberately isolated from any new backend-
+  choice UI (a separate story, pfb-04) so it can be reviewed on its own —
+  per TPM review's recommendation that this touches real, already-tested
+  navigation independent of the new UI logic and deserves isolated
+  verification.
+
+  Current order: welcome -> database -> google -> secrets -> finish.
+  New order: welcome -> database -> secrets -> google -> finish.
+
+  This is NOT a pure string-rename. STEPS' indices change, and each
+  screen's forward-handler reachedIndex bump must be recomputed against
+  the NEW target's new index, not assumed to "stay the same." An earlier
+  draft of this epic's design got this exact detail wrong (asserted all
+  three forward bumps stay numerically unchanged; a researcher-lens review
+  checked against the real code and found two of three actually change).
+  The corrected, verified table:
+
+    | Handler | Old target (idx) -> old bump | New target (idx) -> new bump |
+    |---|---|---|
+    | database forward | google (2) -> 2 | secrets (2) -> 2 (unchanged) |
+    | secrets forward | finish (4) -> 4 | google (3) -> 3 (CHANGED) |
+    | google skip/connect-success | secrets (3) -> 3 | finish (4) -> 4 (CHANGED) |
+
+  Back targets: secrets' back -> "database" (was "google"); google's
+  back -> "secrets" (was "database"); finish's back -> "google" (was
+  "secrets").
+
+acceptance_criteria:
+  - "Given STEPS, when read, then it is exactly [welcome, database, secrets, google, finish]"
+  - "Given the database screen's forward action, when triggered, then it navigates to 'secrets' and bumps reachedIndex to 2"
+  - "Given the secrets screen's forward action, when triggered, then it navigates to 'google' and bumps reachedIndex to 3 (not 4)"
+  - "Given the google screen's skip or connect-success action, when triggered, then it navigates to 'finish' and bumps reachedIndex to 4 (not 3)"
+  - "Given each screen's back button, when clicked, then secrets goes to database, google goes to secrets, and finish goes to google"
+  - "Given a user has completed only through the 'secrets' screen (reachedIndex=2), when they attempt to hash-jump directly to '#finish', then navigation is blocked exactly as it is today for any not-yet-reached screen — this is the specific regression the reorder must not introduce"
+  - "Given the wizard is completed once end-to-end after the reorder, when the user navigates back through every screen and forward again, then no screen becomes unreachable or double-counted"
+
+steps:
+  - id: implement
+    description: Reorder STEPS and update every navigate() target string and reachedIndex bump literal per the table above; no new UI content on any screen
+    agent: developer
+  - id: test
+    description: Extend wizard-flow tests covering every acceptance criterion above, specifically including the hash-jump-blocking regression test
+    agent: tester
+    depends_on: [implement]
+  - id: review
+    description: Line-by-line verification of every reachedIndex bump against the table in this story — this is exactly the kind of detail that was wrong once already in this epic's planning docs
+    agent: reviewer
+    depends_on: [test]
+  - id: integrate
+    description: Commit and push to feature branch
+    agent: developer
+    depends_on: [review]
+
+context:
+  codebase: /Users/mdostal/Documents/work/rolodex
+  key_files:
+    - path: src/shell/wizard.html
+      purpose: "STEPS array, reachedIndex, render()'s hash-jump-blocking check (search for 'reachedIndex'), and every navigate() call site this story touches"
+
+files_to_modify:
+  - file: src/shell/wizard.html
+    change: "reorder STEPS; update navigate() targets and reachedIndex bumps per the verified table above; update back-button targets"
+
+design_decisions:
+  - decision: "This is its own story, separate from adding the new Portunus choice UI"
+    rationale: "TPM review recommendation: the reorder touches tested, working navigation independent of new UI logic; isolating it lets a reviewer verify the mechanical reorder without also reasoning about new choice-UI behavior at the same time."
+
+risks:
+  - severity: medium
+    description: "Numeric reachedIndex literals are easy to get subtly wrong (already happened once during this epic's own planning) — a wrong bump could silently let a user skip a screen"
+    mitigation: "The exact, twice-verified table is inlined directly in this story; acceptance criteria require testing the hash-jump-blocking case explicitly, not just the happy-path click-through"
+
+references:
+  - path: .pHive/epics/portunus-secrets-backend/docs/design-discussion.md
+    relevant_excerpt: |
+      §3's F4 resolution, including the correction note describing exactly
+      how the first version of this table was wrong and how it was fixed.

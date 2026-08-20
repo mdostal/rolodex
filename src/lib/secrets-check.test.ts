@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { checkSecretsCapability, classifyKeychainError } from "./secrets-check.js";
-import { createInMemorySecretsAdapter, type CreateSecretsAdapterOptions, type SecretsAdapter } from "./secrets-adapter.js";
+import { classifyPortunusError, createInMemorySecretsAdapter, type CreateSecretsAdapterOptions, type SecretsAdapter } from "./secrets-adapter.js";
 
 describe("checkSecretsCapability()", () => {
   it("reports ok:true against a working backend, using a throwaway key it cleans up after itself", async () => {
@@ -63,13 +63,36 @@ describe("checkSecretsCapability()", () => {
     }
   });
 
-  it("reports ok:false with the 'no keychain' message on a non-darwin platform, without touching the factory", async () => {
-    const factory = vi.fn();
+  it("reports ok:false with the 'no keychain' message on a non-darwin platform, using the real default factory (production path, no injection)", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     try {
-      const result = await checkSecretsCapability(factory as unknown as () => SecretsAdapter);
+      // No factory argument — this is the real createSecretsAdapter default,
+      // matching how server.ts actually calls this in production
+      // (`opts.secretsCapabilityFactory ?? createSecretsAdapter`). The
+      // short-circuit below only ever applies to this real, unconfigured
+      // path.
+      const result = await checkSecretsCapability();
       expect(result).toEqual({ ok: false, backend: "none", error: "No secure keychain is available in this session." });
-      expect(factory).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("does NOT apply the non-darwin 'no keychain' short-circuit when a custom factory is explicitly injected — dependency injection must not be defeated by the host platform", async () => {
+    // Regression test for a real CI bug: every wizard.test.ts test hung
+    // because this exact short-circuit fired unconditionally on GitHub's
+    // Linux runner, even though the wizard's test harness explicitly
+    // injects createInMemorySecretsAdapter() (a platform-independent fake)
+    // specifically so its tests don't depend on the host's real keychain
+    // support at all. A test that substitutes its own factory must get that
+    // factory's real behavior, not a platform-gated stand-in answer.
+    const adapter = createInMemorySecretsAdapter();
+    const factory = vi.fn(() => adapter);
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      const result = await checkSecretsCapability(factory);
+      expect(result).toEqual({ ok: true, backend: "macOS Keychain" });
+      expect(factory).toHaveBeenCalled();
     } finally {
       vi.restoreAllMocks();
     }
@@ -133,6 +156,89 @@ describe("checkSecretsCapability()", () => {
       vi.useRealTimers();
       vi.restoreAllMocks();
     }
+  });
+});
+
+// The `backend` parameter (default "keychain") added by this story. Every
+// test above passes no second argument at all — that's the byte-identical
+// regression check for the default path — these cover the new explicit
+// "keychain" and "portunus" cases.
+describe("checkSecretsCapability(factory, backend)", () => {
+  it("passing backend explicitly as \"keychain\" behaves identically to omitting it", async () => {
+    const adapter = createInMemorySecretsAdapter();
+    const factory = () => adapter;
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    try {
+      const result = await checkSecretsCapability(factory, "keychain");
+      expect(result).toEqual({ ok: true, backend: "macOS Keychain" });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("threads backend through to factory({ backend, onFallback })", async () => {
+    let seenBackend: unknown;
+    const factory = (opts?: CreateSecretsAdapterOptions) => {
+      seenBackend = opts?.backend;
+      return createInMemorySecretsAdapter();
+    };
+    const result = await checkSecretsCapability(factory, "portunus");
+    expect(seenBackend).toBe("portunus");
+    expect(result).toEqual({ ok: true, backend: "Portunus" });
+  });
+
+  it("does NOT apply the non-darwin 'no secure keychain' short-circuit when probing portunus", async () => {
+    const adapter = createInMemorySecretsAdapter();
+    const factory = vi.fn(() => adapter);
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      const result = await checkSecretsCapability(factory, "portunus");
+      expect(factory).toHaveBeenCalled();
+      expect(result).toEqual({ ok: true, backend: "Portunus" });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a probed Portunus failure reports the Portunus label and classifyPortunusError() text, never keychain vocabulary", async () => {
+    const failing: SecretsAdapter = {
+      async get() { return undefined; },
+      async set() { throw new Error("portunus: unknown reference {{secret:wizard.secrets-check.x}}"); },
+      async delete() {},
+    };
+    const result = await checkSecretsCapability(() => failing, "portunus");
+    expect(result.ok).toBe(false);
+    expect(result.backend).toBe("Portunus");
+    expect(result.backend).not.toBe("macOS Keychain");
+    expect(result.error).toBe(classifyPortunusError(new Error("portunus: unknown reference {{secret:wizard.secrets-check.x}}")));
+    expect(result.error?.toLowerCase()).not.toContain("keychain");
+  });
+
+  it("a Portunus in-memory-fallback result uses classifyPortunusError(), not classifyKeychainError()", async () => {
+    const cause = new Error("spawn portunus ENOENT");
+    const factory = (opts?: CreateSecretsAdapterOptions) => {
+      opts?.onFallback?.(cause);
+      return createInMemorySecretsAdapter();
+    };
+    const result = await checkSecretsCapability(factory, "portunus");
+    expect(result.ok).toBe(false);
+    expect(result.backend).toBe("in-memory (fallback)");
+    expect(result.error).toBe(classifyPortunusError(cause));
+    expect(result.error).not.toBe(classifyKeychainError(cause));
+    expect(result.error?.toLowerCase()).not.toContain("keychain");
+  });
+
+  it("a Portunus round-trip mismatch reports Portunus-specific text, not the keychain-worded message", async () => {
+    const mismatched: SecretsAdapter = {
+      async get() { return "a-completely-different-value"; },
+      async set() {},
+      async delete() {},
+    };
+    const result = await checkSecretsCapability(() => mismatched, "portunus");
+    expect(result.ok).toBe(false);
+    expect(result.backend).toBe("Portunus");
+    expect(result.error).toContain("Portunus round-trip mismatch");
+    expect(result.error).not.toContain("Keychain round-trip mismatch");
   });
 });
 

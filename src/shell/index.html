@@ -4,7 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>rolodex</title>
-  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+  <link rel="icon" href="/assets/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16.png" />
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
   <meta name="description" content="Open-source relationship rolodex you run locally: own your contacts in SQLite, sync with Google Contacts, and search or log interactions through a real UI." />
   <meta property="og:title" content="rolodex" />
   <meta property="og:description" content="Open-source relationship rolodex you run locally: own your contacts in SQLite, sync with Google Contacts, and search or log interactions through a real UI." />
@@ -19,10 +22,56 @@
       --accent: #2f5ed9;
       --accent-bg: #eef2fd;
       --danger: #b3261e;
+      --danger-bg: #fdecea;
       --ok-bg: #e7f6ec;
       --ok-fg: #1e7b34;
       --row-hover: #f4f5f8;
       --chip-bg: #eef0f4;
+      --accent-fg: #fff;
+      --disabled: #c9c9d1;
+    }
+    /* Brass theme — colors only, no font changes (kept to the system-font
+       stack so this stays a fully local/offline app). Tokens are taken
+       verbatim from the app-icon-picker artifact, whose dark half the owner
+       specifically liked: a light paper palette here, and a deep-green/
+       brass-gold palette under prefers-color-scheme:dark below. This is one
+       theme-aware theme, not two separate selectable themes. --accent-fg is
+       the one token with no equivalent in that artifact — plain white
+       button text fails contrast against the lighter dark-mode gold, so it
+       flips to a dark ink there instead. */
+    :root[data-theme="brass"] {
+      --border: #c7c2ac;
+      --muted: #55605a;
+      --bg: #e8eae3;
+      --fg: #1c2420;
+      --accent: #92651e;
+      --accent-bg: rgba(146, 101, 30, 0.12);
+      --row-hover: #dee1d6;
+      --chip-bg: #f4f5ef;
+      --accent-fg: #f4f5ef;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root[data-theme="brass"] {
+        --border: #3a483e;
+        --muted: #a6b0a7;
+        --bg: #1a211d;
+        --fg: #e9eae3;
+        --accent: #d19b4c;
+        --accent-bg: rgba(209, 155, 76, 0.16);
+        --row-hover: #29342c;
+        --chip-bg: #212b24;
+        --accent-fg: #1a211d;
+      }
+      /* .verdict-* are bare text color on the page background, not pills
+         with their own background box — their light-mode colors (dark
+         green/amber/blue) read fine on a light page but go near-invisible
+         against brass dark mode's near-black --bg, so they get lightened
+         variants here. --danger/--ok-* (used only inside self-contained
+         colored boxes, e.g. the error banner) don't have this problem —
+         those boxes carry their own background regardless of page theme. */
+      :root[data-theme="brass"] .verdict-strong { color: #3fae62; }
+      :root[data-theme="brass"] .verdict-watch { color: #d1a13f; }
+      :root[data-theme="brass"] .verdict-referral-only { color: #6f9aef; }
     }
     * { box-sizing: border-box; }
     body {
@@ -54,13 +103,15 @@
       border-radius: 6px;
       border: 1px solid var(--border);
       background: var(--accent);
-      color: #fff;
+      color: var(--accent-fg);
       padding: 8px 14px;
       min-height: 32px;
       cursor: pointer;
     }
     button.secondary { background: transparent; color: var(--fg); }
-    button:disabled { background: #c9c9d1; border-color: #c9c9d1; cursor: not-allowed; }
+    button.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+    button.danger:hover { background: var(--danger); color: #fff; }
+    button:disabled { background: var(--disabled); border-color: var(--disabled); cursor: not-allowed; }
     button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
       outline: 2px solid var(--accent); outline-offset: 2px;
     }
@@ -91,8 +142,6 @@
     .search-clear:hover { background: var(--row-hover); }
     #result-summary { color: var(--muted); font-size: 0.9rem; margin: -8px 0 16px; }
     .header-actions { display: flex; align-items: center; gap: 10px; }
-    .sync-status { font-size: 0.9rem; color: var(--ok-fg); min-height: 1.2em; margin: 0 0 16px; }
-    .sync-status.sync-error { color: var(--danger); }
     .empty-state {
       min-height: 360px;
       display: flex;
@@ -155,9 +204,12 @@
     .verdict-picker [role="radio"][aria-checked="true"] {
       background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600;
     }
-    .autosave-status {
-      font-size: 0.85rem; color: var(--ok-fg); min-height: 1.2em; margin: 0 0 20px;
-    }
+    /* Verdict/next-step reuse the shared .status-line component (see
+       below) — this just restores the bottom spacing .autosave-status
+       used to carry directly, scoped to these two spots rather than
+       baked into .status-line's shared base (which is also used in
+       tighter contexts, e.g. inside Settings' section cards). */
+    #verdict-status, #next-step-status { margin: 0 0 20px; }
     .next-step-field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
     .next-step-field input {
       width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
@@ -193,29 +245,54 @@
     .log-interaction-form textarea { min-height: 64px; resize: vertical; }
     .log-interaction-form .form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
-    /* Settings popover — anchored under-right of the gear button, reusing
-       .log-interaction-form's border/padding/fieldset styling as-is; this
-       pair is the one CSS addition the design brief allows for positioning
-       the popover itself. Holds two clearly-separated sections (Follow-up
-       settings, Google) — .settings-panel positions the whole popover, each
-       section keeps its own .log-interaction-form card look. */
-    .settings-anchor { position: relative; display: inline-block; margin-right: 8px; }
-    .settings-panel {
-      position: absolute; top: calc(100% + 8px); right: 0; z-index: 20;
-      width: 280px; margin-bottom: 0; background: var(--bg);
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    /* Settings screen (#/settings) — a real page, not a popover; sections
+       reuse .log-interaction-form's card look and .settings-section-title
+       for headings, same as the popover did. */
+    .settings-page { max-width: 640px; }
+    .settings-page h1 { margin: 0 0 4px; font-size: 1.4rem; }
+    .settings-page .settings-subtitle { margin: 0 0 24px; color: var(--muted); font-size: 0.9rem; }
+    .settings-path-value {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.82rem; background: var(--chip-bg); border-radius: 6px;
+      padding: 8px 10px; word-break: break-all; margin-bottom: 10px;
     }
-    .settings-panel .log-interaction-form:last-child { margin-bottom: 0; }
+    .settings-note {
+      margin-top: 10px; font-size: 0.85rem; color: var(--muted);
+      background: var(--chip-bg); border-radius: 6px; padding: 8px 10px;
+    }
+    /* Same look as .theme-toggle/.theme-option (Appearance section), under
+       its own class names — wireAppearanceSection() queries .theme-option
+       globally (not scoped to its own section), so reusing that class here
+       would make its click handler fire on these buttons too. */
+    .backend-toggle { display: flex; gap: 8px; }
+    .backend-toggle .backend-option { flex: 1; padding: 6px 10px; }
+    .backend-toggle .backend-option[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
     .settings-section-title {
       font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em;
       color: var(--muted); margin: 0 0 8px;
     }
-    /* Reconnect Google status line — mirrors wizard.html's own
-       .status-line/.spinner pattern (same UX, adapted to fit inline in a
-       popover section instead of a full wizard step). */
+    .checkbox-field { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; cursor: pointer; }
+    .theme-toggle { display: flex; gap: 8px; }
+    .theme-toggle .theme-option { flex: 1; padding: 6px 10px; }
+    .theme-toggle .theme-option[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+    .icon-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+    .icon-option {
+      padding: 4px; background: transparent; border: 2px solid transparent; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center; min-height: 0;
+    }
+    .icon-option img { display: block; border-radius: 4px; }
+    .icon-option[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-bg); }
+    /* Shared standing-state status line — mirrors wizard.html's own
+       .status-line/.spinner pattern. One component for every inline
+       status message in the app (was three near-duplicate classes:
+       .status-line/.sync-status/.autosave-status — the last of which had
+       no .error variant at all, so a failed autosave literally rendered
+       in this success color). Transient one-off events use the toast
+       component instead — see showToast() above. */
     .status-line { font-size: 0.88rem; display: flex; align-items: center; gap: 8px; min-height: 1.2em; }
     .status-line.error { color: var(--danger); }
     .status-line.success { color: var(--ok-fg); }
+    .status-line.checking { color: var(--muted); }
     .spinner {
       width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border);
       border-top-color: var(--accent); animation: spin 0.8s linear infinite; flex: 0 0 auto;
@@ -224,6 +301,40 @@
       .spinner { animation: none; border-top-color: var(--border); }
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Toast/notification component — a single #toast-region living outside
+       #content (static markup, not router-managed) so it survives every
+       navigation. Transient one-off events only; standing state stays in
+       its own inline .status-line — see the ui-feedback-states epic's
+       design discussion for the full toast-vs-inline split. */
+    #toast-region {
+      position: fixed; bottom: 20px; right: 20px; z-index: 100;
+      display: flex; flex-direction: column-reverse; gap: 10px;
+      width: 320px; max-width: calc(100vw - 40px); pointer-events: none;
+    }
+    .toast {
+      display: flex; align-items: flex-start; gap: 10px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 14px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+      animation: toast-in 0.18s ease-out; pointer-events: auto;
+    }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @media (prefers-reduced-motion: reduce) {
+      .toast { animation: none; }
+    }
+    .toast .toast-icon { flex: 0 0 auto; font-size: 1rem; line-height: 1.3; }
+    .toast.success { border-left: 3px solid var(--ok-fg); }
+    .toast.success .toast-icon { color: var(--ok-fg); }
+    .toast.error { border-left: 3px solid var(--danger); }
+    .toast.error .toast-icon { color: var(--danger); }
+    .toast.info { border-left: 3px solid var(--accent); }
+    .toast.info .toast-icon { color: var(--accent); }
+    .toast .toast-body { flex: 1 1 auto; font-size: 0.88rem; line-height: 1.4; }
+    .toast .toast-close {
+      all: unset; cursor: pointer; color: var(--muted); font-size: 0.85rem; line-height: 1;
+      padding: 2px; flex: 0 0 auto;
+    }
+    .toast .toast-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
     /* Interaction history */
     .interaction-history { list-style: none; margin: 0; padding: 0; }
@@ -245,7 +356,7 @@
       color: var(--muted); font-size: 0.9rem; padding: 8px 0;
     }
     .not-found-banner {
-      background: #fdecea; color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
+      background: var(--danger-bg); color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
     }
 
     /* Form */
@@ -285,7 +396,7 @@
     }
     .chip button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .form-error-banner {
-      background: #fdecea; color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
+      background: var(--danger-bg); color: var(--danger); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
     }
     .form-footer {
       /* Deliberately NOT position: sticky/fixed. The page itself is the only
@@ -324,6 +435,8 @@
     <div id="content"></div>
   </main>
 
+  <div id="toast-region" role="region" aria-label="Notifications"></div>
+
   <script>
     "use strict";
 
@@ -343,6 +456,7 @@
     }
     const getContacts = () => api("/api/contacts");
     const getContact = (id) => api("/api/contacts/" + encodeURIComponent(id));
+    const deleteContact = (id) => api("/api/contacts/" + encodeURIComponent(id), { method: "DELETE" });
     const saveContact = (payload) =>
       api("/api/contacts", {
         method: "POST",
@@ -362,11 +476,42 @@
         body: JSON.stringify({ nextStep }),
       });
     const syncGoogle = () => api("/api/sync/google", { method: "POST" });
+    const pushGoogle = () => api("/api/sync/google/push", { method: "POST" });
     const searchContacts = (q) => api("/api/contacts/search?q=" + encodeURIComponent(q));
     const getNeedsFollowUp = () => api("/api/contacts/needs-follow-up");
     const getFollowUpSettings = () => api("/api/settings/follow-up");
     const putFollowUpSettings = (payload) =>
       api("/api/settings/follow-up", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    const getAutostartSettings = () => api("/api/settings/autostart");
+    const putAutostartSettings = (payload) =>
+      api("/api/settings/autostart", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    const getWizardSummary = () => api("/api/wizard/summary");
+    const getDbLocation = () => api("/api/wizard/database");
+    const postDbLocation = (dbPath) =>
+      api("/api/wizard/database", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: dbPath }),
+      });
+    const postDbLocationReset = () => api("/api/wizard/database/reset", { method: "POST" });
+    const getSecretsBackends = () => api("/api/wizard/secrets-backends");
+    const postSecretsBackendChoice = (backend) =>
+      api("/api/wizard/secrets-backend-choice", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend }),
+      });
+    const getAppearanceSettings = () => api("/api/settings/appearance");
+    const putAppearanceSettings = (payload) =>
+      api("/api/settings/appearance", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
@@ -378,12 +523,6 @@
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
-
-    // Set by the "Sync now" handler, displayed once by the very next
-    // renderList() (the sync handler re-renders the list to pick up any
-    // newly-pulled contacts, which would otherwise wipe out an inline status
-    // message written into the markup it just replaced).
-    let lastSyncMessage = null;
 
     // ---- shared data ----------------------------------------------------------
     const VERDICTS = [
@@ -434,11 +573,72 @@
       }[c]));
     }
 
+    // ---- toast --------------------------------------------------------------
+    // Transient one-off events only (sync/push results, delete failure, a
+    // save success/failure) — standing state (form validation, "restart to
+    // apply" notes, the Google account status line) stays in its own inline
+    // .status-line. #toast-region lives in the static body markup, outside
+    // #content, so toasts survive every navigation instead of needing a
+    // bridge variable like the old lastSyncMessage hack.
+    const TOAST_ICON = { success: "✓", error: "⚠", info: "ℹ" };
+    const TOAST_DURATION_MS = 4000;
+    function showToast(message, kind) {
+      const region = document.getElementById("toast-region");
+      const el = document.createElement("div");
+      el.className = "toast " + kind;
+      // role="alert" already implies an assertive live region on its own —
+      // an explicit error toast should interrupt regardless of where focus
+      // currently is (a delete/save failure). role="status" implies polite,
+      // the right default for success/info.
+      el.setAttribute("role", kind === "error" ? "alert" : "status");
+      el.innerHTML =
+        '<span class="toast-icon" aria-hidden="true">' + (TOAST_ICON[kind] || "") + "</span>" +
+        '<span class="toast-body"></span>' +
+        '<button type="button" class="toast-close" aria-label="Dismiss">&times;</button>';
+      // .textContent, not innerHTML — message is arbitrary (often an
+      // err.message) and must never be interpreted as markup.
+      el.querySelector(".toast-body").textContent = message;
+      let timer = null;
+      function dismiss() {
+        if (timer) clearTimeout(timer);
+        el.remove();
+      }
+      el.querySelector(".toast-close").addEventListener("click", dismiss);
+      timer = setTimeout(dismiss, TOAST_DURATION_MS);
+      region.appendChild(el);
+    }
+
+    // ---- focus-management convention -----------------------------------
+    // Stated explicitly here (ui-visual-cleanup epic) so future sections
+    // follow one rule instead of re-deriving it each time — audited every
+    // existing .focus() call site against it first; all of them already
+    // comply, no behavior changed by writing this down.
+    //
+    // Default: after an action that keeps the user on the same view (a
+    // save that doesn't open/close anything or fail validation), don't
+    // forcibly move focus — leave it wherever the user's own interaction
+    // put it. Follow-up/Appearance/Database/Secrets-backend saves all
+    // already match this by doing nothing.
+    //
+    // Three real exceptions, all already in use, all legitimate:
+    //   1. A disclosure opens or closes — focus moves into the revealed
+    //      control (Database's "Change…" panel, the log-interaction
+    //      form's first field) or back to the control that closed it
+    //      (the log-interaction toggle button).
+    //   2. Refocusing a just-selected option matters for immediate
+    //      re-selection (the verdict picker, so arrow keys keep working
+    //      right after a click).
+    //   3. Validation failure — direct the user to the field that needs
+    //      fixing (the contact form's required Name field, the Follow-up
+    //      settings form's window/grace inputs).
+    // Everything else is the default: no forced focus move.
+
     // ---- router -----------------------------------------------------------
     function parseRoute() {
       const hash = location.hash.replace(/^#/, "") || "/";
       const segs = hash.split("/").filter(Boolean);
       if (segs.length === 0) return { view: "list" };
+      if (segs[0] === "settings") return { view: "settings" };
       if (segs[0] === "new") return { view: "form", mode: "add" };
       if (segs[0] === "contact" && segs[1] && segs[2] === "edit") return { view: "form", mode: "edit", id: decodeURIComponent(segs[1]) };
       if (segs[0] === "contact" && segs[1]) return { view: "detail", id: decodeURIComponent(segs[1]) };
@@ -456,16 +656,46 @@
 
     const content = document.getElementById("content");
 
+    // Each render*() function's own fetches keep running even after the
+    // user navigates away (renderSettings() in particular awaits several
+    // sequential requests, giving a fast back-click plenty of time to land
+    // first) — nothing cancels an in-flight render. Without this counter, a
+    // stale render's error handler landing after a newer render already
+    // succeeded would clobber the fresh, correct DOM with an error banner
+    // (both write to the same shared `content` node). Bumped once per
+    // render() call; a render only touches `content` on failure if it's
+    // still the most recent one.
+    let renderGeneration = 0;
     async function render() {
+      const myGeneration = ++renderGeneration;
       const route = parseRoute();
       try {
         if (route.view === "list") await renderList();
         else if (route.view === "detail") await renderDetail(route.id);
         else if (route.view === "form") await renderForm(route.mode, route.id);
+        else if (route.view === "settings") await renderSettings();
       } catch (err) {
+        if (myGeneration !== renderGeneration) return;
         content.innerHTML = '<p class="not-found-banner">' + escapeHtml(err.message || String(err)) + "</p>";
         console.error(err);
       }
+    }
+
+    // Shared by renderDetail() and renderForm() (edit mode) for an unknown
+    // or deleted contact id. Previously each site set this banner's content
+    // and then immediately called navigate("#/") on the next line —
+    // replacing #content before the banner could ever actually be seen, a
+    // dead-code bug (the "not found" message was written and instantly
+    // discarded, unseen, every time). Fixed by not auto-navigating at all:
+    // show the banner for real, with a working back-link, and let the user
+    // act on it.
+    function renderNotFound() {
+      setTopbar({
+        left: '<button class="back-link" id="back-link">&larr; Back to contacts</button>',
+        right: "",
+      });
+      document.getElementById("back-link").addEventListener("click", () => navigate("#/"));
+      content.innerHTML = '<p class="not-found-banner">Contact not found — it may have been removed.</p>';
     }
 
     // ---- List view ----------------------------------------------------------
@@ -473,11 +703,7 @@
       setTopbar({
         left: '<span class="brand">rolodex</span>',
         right:
-          '<span class="settings-anchor" id="settings-anchor">' +
-          '<button type="button" class="secondary" id="settings-toggle" aria-label="Settings" ' +
-          'aria-expanded="false" aria-controls="settings-panel-wrap">&#9881;</button>' +
-          '<div id="settings-panel-wrap"></div>' +
-          "</span>" +
+          '<button type="button" class="secondary" id="settings-toggle" aria-label="Settings">&#9881;</button>' +
           '<button id="add-top">+ Add contact</button>',
       });
       content.innerHTML =
@@ -492,35 +718,63 @@
         "</div>" +
         '<button type="button" class="secondary" id="followup-toggle" aria-pressed="false">Needs follow-up</button>' +
         '<button type="button" class="secondary" id="sync-now">Sync now</button>' +
+        '<button type="button" class="secondary" id="push-google">Push to Google</button>' +
         "</div>" +
         "</div>" +
         '<div id="result-summary" aria-live="polite"></div>' +
-        '<div class="sync-status" id="sync-status" aria-live="polite"></div>' +
         '<div id="list-body"></div>';
 
       document.getElementById("add-top").addEventListener("click", () => navigate("#/new"));
-      wireSettingsPanel();
+      document.getElementById("settings-toggle").addEventListener("click", () => navigate("#/settings"));
 
-      const syncStatusEl = document.getElementById("sync-status");
-      if (lastSyncMessage) {
-        syncStatusEl.textContent = lastSyncMessage;
-        lastSyncMessage = null;
-      }
       document.getElementById("sync-now").addEventListener("click", async () => {
         const btn = document.getElementById("sync-now");
+        const originalLabel = btn.textContent;
         btn.disabled = true;
-        syncStatusEl.className = "sync-status";
-        syncStatusEl.textContent = "Syncing with Google Contacts…";
+        btn.textContent = "Syncing…";
         try {
           const result = await syncGoogle();
-          lastSyncMessage =
-            "Synced " + result.pulled + " contact" + (result.pulled === 1 ? "" : "s") +
-            " from Google (" + result.created + " new, " + result.updated + " updated).";
           await renderList();
+          showToast(
+            "Synced " + result.pulled + " contact" + (result.pulled === 1 ? "" : "s") +
+            " from Google (" + result.created + " new, " + result.updated + " updated).",
+            "success",
+          );
         } catch (err) {
-          syncStatusEl.className = "sync-status sync-error";
-          syncStatusEl.textContent = "Sync failed: " + err.message;
+          showToast("Sync failed: " + err.message, "error");
           btn.disabled = false;
+          btn.textContent = originalLabel;
+        }
+      });
+      document.getElementById("push-google").addEventListener("click", async () => {
+        // Push is the more consequential direction — it creates/overwrites
+        // data on the owner's real Google account — so it gets its own
+        // confirmation, unlike the non-destructive "Sync now" pull.
+        if (!confirm("Push every local contact to Google Contacts? This may create or overwrite contacts there.")) return;
+        const btn = document.getElementById("push-google");
+        const originalLabel = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Pushing…";
+        try {
+          const result = await pushGoogle();
+          let message =
+            "Pushed " + result.pushed + " contact" + (result.pushed === 1 ? "" : "s") +
+            " to Google (" + result.created + " new, " + result.updated + " updated).";
+          await renderList();
+          if (result.errors.length) {
+            showToast(
+              message + " " + result.errors.length + " failed: " +
+              result.errors.map((e) => e.name + " (" + e.error + ")").join("; "),
+              "error",
+            );
+          } else {
+            showToast(message, "success");
+          }
+        } catch (err) {
+          showToast("Push failed: " + err.message, "error");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalLabel;
         }
       });
 
@@ -603,8 +857,10 @@
       // parallel with the normal contacts fetch, below) so the button's count
       // label is accurate before the user ever clicks it; toggling ON reuses
       // that same snapshot rather than re-fetching, since nothing changes it
-      // except a settings save (handled explicitly in wireSettingsPanel) or a
-      // fresh renderList() (e.g. navigating away and back, or "Sync now").
+      // except a fresh renderList() (e.g. navigating away and back, or "Sync
+      // now") — a Follow-up window/grace save on the Settings screen only
+      // takes effect the next time renderList() itself runs, same as any
+      // other navigation back to the list.
       let followUpOn = false;
       let needsFollowUpContacts = null;
 
@@ -726,6 +982,7 @@
           getContacts(),
           getNeedsFollowUp().catch((err) => {
             console.error(err);
+            showToast("Couldn't load follow-up count: " + err.message, "error");
             return null;
           }),
         ]);
@@ -744,265 +1001,420 @@
         console.error(err);
       }
 
-      // ---- Follow-up settings popover ------------------------------------
-      // Structurally cloned from wireInteractionsPanel()'s open/close/focus
-      // contract (empty wrapper when closed, form innerHTML when open, focus
-      // moves to the first control on open and back to the toggle button on
-      // any close path) — plus outside-click/Escape dismissal, since this is
-      // a non-modal popover rather than an inline disclosure and needs its
-      // own way to go away without a Cancel click. Nested here (rather than
-      // a top-level function) so it can reach the toggle's followUpOn/
-      // needsFollowUpContacts state and re-run runSearch()/setToggleUi()
-      // after a save, per the design brief's post-save recommendation.
-      function settingsFormHtml(windowDays, graceDays) {
-        return (
-          '<form class="log-interaction-form" id="settings-form" aria-label="Follow-up settings" novalidate>' +
-          '<div class="form-error-banner" id="settings-form-error" hidden></div>' +
-          '<div class="form-field" id="settings-window-field">' +
-          '<label for="settings-window">Follow-up window (days)</label>' +
-          '<input type="number" id="settings-window" min="1" step="1" inputmode="numeric" ' +
-          'value="' + escapeHtml(String(windowDays)) + '" aria-describedby="settings-window-error" />' +
-          '<span class="field-error" id="settings-window-error" hidden>Enter a positive whole number.</span>' +
-          "</div>" +
-          '<div class="form-field" id="settings-grace-field">' +
-          '<label for="settings-grace">Grace period (days)</label>' +
-          '<input type="number" id="settings-grace" min="1" step="1" inputmode="numeric" ' +
-          'value="' + escapeHtml(String(graceDays)) + '" aria-describedby="settings-grace-error" />' +
-          '<span class="field-error" id="settings-grace-error" hidden>Enter a positive whole number.</span>' +
-          "</div>" +
-          '<div class="form-actions">' +
-          '<button type="button" class="secondary" id="settings-cancel">Cancel</button>' +
-          '<button type="submit" id="settings-save">Save</button>' +
-          "</div>" +
-          "</form>"
-        );
+    }
+
+    function settingsFormHtml(windowDays, graceDays) {
+      return (
+        '<form class="log-interaction-form" id="settings-form" aria-label="Follow-up settings" novalidate>' +
+        '<div class="form-error-banner" id="settings-form-error" hidden></div>' +
+        '<div class="form-field" id="settings-window-field">' +
+        '<label for="settings-window">Follow-up window (days)</label>' +
+        '<input type="number" id="settings-window" min="1" step="1" inputmode="numeric" ' +
+        'value="' + escapeHtml(String(windowDays)) + '" aria-describedby="settings-window-error" />' +
+        '<span class="field-error" id="settings-window-error" hidden>Enter a positive whole number.</span>' +
+        "</div>" +
+        '<div class="form-field" id="settings-grace-field">' +
+        '<label for="settings-grace">Grace period (days)</label>' +
+        '<input type="number" id="settings-grace" min="1" step="1" inputmode="numeric" ' +
+        'value="' + escapeHtml(String(graceDays)) + '" aria-describedby="settings-grace-error" />' +
+        '<span class="field-error" id="settings-grace-error" hidden>Enter a positive whole number.</span>' +
+        "</div>" +
+        '<div class="form-actions">' +
+        '<button type="button" class="secondary" id="settings-cancel">Cancel</button>' +
+        '<button type="submit" id="settings-save">Save</button>' +
+        "</div>" +
+        "</form>"
+      );
+    }
+
+    // The Appearance section — a theme toggle plus a 10-thumbnail grid over
+    // the app-icon candidates preserved at .pHive/design/app-icon/renditions/
+    // (see that epic's brief for how they were generated). Selecting either
+    // control PUTs the full {theme, iconId} pair (server.ts's route wants
+    // both together, matching what GET / injects on every load) and applies
+    // immediately client-side via applyAppearance() below — the server-side
+    // injection in GET / is what makes a plain reload/reopen correct too,
+    // this is just for not needing one.
+    const ICON_CANDIDATE_COUNT = 10;
+    function appearanceSectionHtml(theme, iconId) {
+      const themeButtons = ["default", "brass"]
+        .map(
+          (t) =>
+            '<button type="button" class="secondary theme-option" data-theme-option="' + t + '" ' +
+            'aria-pressed="' + (t === theme) + '">' + (t === "default" ? "Default" : "Brass") + "</button>",
+        )
+        .join("");
+      const iconButtons = Array.from({ length: ICON_CANDIDATE_COUNT }, (_, i) => i + 1)
+        .map(
+          (n) =>
+            '<button type="button" class="icon-option" data-icon-id="' + n + '" ' +
+            'aria-pressed="' + (n === iconId) + '" aria-label="Icon option ' + n + '">' +
+            '<img src="/assets/icon-c' + n + '-32.png" alt="" width="32" height="32" /></button>',
+        )
+        .join("");
+      return (
+        '<div class="log-interaction-form" id="appearance-section">' +
+        '<h3 class="settings-section-title">Appearance</h3>' +
+        '<div class="form-error-banner" id="appearance-error" hidden></div>' +
+        '<div class="form-field">' +
+        '<label id="appearance-theme-label">Theme</label>' +
+        '<div class="theme-toggle" role="group" aria-labelledby="appearance-theme-label">' + themeButtons + "</div>" +
+        "</div>" +
+        '<div class="form-field">' +
+        '<label id="appearance-icon-label">App icon</label>' +
+        '<div class="icon-grid" role="group" aria-labelledby="appearance-icon-label">' + iconButtons + "</div>" +
+        "</div>" +
+        "</div>"
+      );
+    }
+
+    // Rewrites the <head> favicon links and the <html> data-theme attribute
+    // in place — the same values GET / would inject on a fresh load, just
+    // applied without one. Browsers cache favicons aggressively, so a tab
+    // that's already open may not visibly repaint until its next
+    // navigation/reload; that's a known browser limitation, not a bug here.
+    function applyAppearance(theme, iconId) {
+      if (theme === "brass") document.documentElement.setAttribute("data-theme", "brass");
+      else document.documentElement.removeAttribute("data-theme");
+      const linkSwaps = [
+        ['link[rel="icon"][sizes="any"]', "/assets/icon-c" + iconId + ".ico"],
+        ['link[rel="icon"][sizes="32x32"]', "/assets/icon-c" + iconId + "-32.png"],
+        ['link[rel="icon"][sizes="16x16"]', "/assets/icon-c" + iconId + "-16.png"],
+        ['link[rel="apple-touch-icon"]', "/assets/icon-c" + iconId + "-180.png"],
+      ];
+      for (const [selector, href] of linkSwaps) {
+        const el = document.querySelector(selector);
+        if (el) el.setAttribute("href", href);
       }
+    }
 
-      // The Google section of the settings popover — a "Reconnect Google"
-      // entry point for re-establishing a revoked/expired connection without
-      // rerunning the first-run wizard. Reuses the exact same server route
-      // (POST /api/wizard/google/connect) and connecting/cancel/success/error
-      // UX pattern already proven by wizard.html's runConnect(), just adapted
-      // to live inline in a popover section instead of a full wizard step.
-      // The actions area starts empty — wireGoogleSection() (called right
-      // after this is dropped into the DOM) renders the idle button into it,
-      // so there is exactly one place that creates that button and attaches
-      // its listener, rather than this template and wireGoogleSection() both
-      // doing it.
-      function googleSectionHtml() {
-        return (
-          '<div class="log-interaction-form" id="google-section">' +
-          '<h3 class="settings-section-title">Google</h3>' +
-          '<div id="google-reconnect-status" class="status-line" aria-live="polite"></div>' +
-          '<div class="form-actions" id="google-reconnect-actions"></div>' +
-          "</div>"
-        );
-      }
+    // Tracks the settings page's current appearance selection so a save PUTs
+    // the full {theme, iconId} pair even though theme and icon are two
+    // separate button groups — the server route (and GET /'s injection)
+    // always wants both together.
+    function wireAppearanceSection(theme, iconId) {
+      let current = { theme, iconId };
+      const errorBanner = document.getElementById("appearance-error");
 
-      function wireSettingsPanel() {
-        const anchor = document.getElementById("settings-anchor");
-        const toggleBtn = document.getElementById("settings-toggle");
-        const wrap = document.getElementById("settings-panel-wrap");
-        let panelOpen = false;
-        // The AbortController for an in-flight "Reconnect Google" request, if
-        // any. Tracked here (not just inside runReconnect()'s own closure) so
-        // closePanel() can abort it too — otherwise dismissing the popover
-        // (outside click, Escape, hashchange) while a connect is in flight
-        // would both leave the server's local OAuth listener open for the
-        // full 120s timeout AND leave the request's then/catch handlers
-        // trying to update DOM nodes that wrap.innerHTML = "" just removed.
-        let reconnectController = null;
-
-        function onDocumentMousedown(e) {
-          if (panelOpen && !anchor.contains(e.target)) {
-            // Prevent the browser's native default mousedown action (which
-            // shifts focus to <body> for clicks on non-focusable elements)
-            // from clobbering the explicit toggleBtn.focus() in closePanel().
-            // That default action runs AFTER this synchronous handler
-            // returns, so without preventDefault() here, focus would land on
-            // <body> instead of the gear button.
-            e.preventDefault();
-            closePanel();
-          }
-        }
-        function onDocumentKeydown(e) {
-          if (panelOpen && e.key === "Escape") {
-            e.preventDefault();
-            closePanel();
-          }
-        }
-        function onHashChange() {
-          closePanel();
-        }
-
-        function closePanel() {
-          if (!panelOpen) return;
-          panelOpen = false;
-          if (reconnectController) {
-            reconnectController.abort();
-            reconnectController = null;
-          }
-          wrap.innerHTML = "";
-          toggleBtn.setAttribute("aria-expanded", "false");
-          document.removeEventListener("mousedown", onDocumentMousedown);
-          document.removeEventListener("keydown", onDocumentKeydown);
-          window.removeEventListener("hashchange", onHashChange);
-          toggleBtn.focus();
-        }
-
-        function validatePositiveInt(input, fieldId, errorId) {
-          const raw = input.value.trim();
-          const n = Number(raw);
-          const valid = raw !== "" && Number.isInteger(n) && n > 0;
-          document.getElementById(fieldId).classList.toggle("invalid", !valid);
-          document.getElementById(errorId).hidden = valid;
-          if (valid) input.removeAttribute("aria-invalid");
-          else input.setAttribute("aria-invalid", "true");
-          return valid ? n : null;
-        }
-
-        function wireForm() {
-          const form = document.getElementById("settings-form");
-          const windowInput = document.getElementById("settings-window");
-          const graceInput = document.getElementById("settings-grace");
-
-          document.getElementById("settings-cancel").addEventListener("click", () => closePanel());
-
-          form.addEventListener("submit", async (e) => {
-            e.preventDefault();
-
-            const windowDays = validatePositiveInt(windowInput, "settings-window-field", "settings-window-error");
-            const graceDays = validatePositiveInt(graceInput, "settings-grace-field", "settings-grace-error");
-            if (windowDays === null || graceDays === null) {
-              (windowDays === null ? windowInput : graceInput).focus();
-              return;
-            }
-
-            const errorBanner = document.getElementById("settings-form-error");
-            const saveBtn = document.getElementById("settings-save");
-            saveBtn.disabled = true;
-            try {
-              await putFollowUpSettings({ windowDays, graceDays });
-              errorBanner.hidden = true;
-              closePanel();
-              // Recommendation beyond the bare acceptance criteria: if the
-              // follow-up toggle is currently ON, the visible list was built
-              // from the OLD window/grace values — re-fetch immediately so it
-              // (and the count badge) reflect what was just saved, instead of
-              // waiting for the next toggle click.
-              if (followUpOn) {
-                try {
-                  needsFollowUpContacts = await getNeedsFollowUp();
-                } catch (err) {
-                  console.error(err);
-                }
-                setToggleUi();
-                runSearch(searchInput.value);
-              }
-            } catch (err) {
-              // Save fails: keep the panel open with an inline error banner,
-              // preserving the user's edits (matches the log-interaction
-              // form's failure behavior).
-              errorBanner.hidden = false;
-              errorBanner.textContent = "Couldn't save: " + err.message;
-            } finally {
-              saveBtn.disabled = false;
-            }
-          });
-        }
-
-        function showGoogleStatus(kind, html) {
-          // Guards every caller against a panel that closed (and cleared
-          // wrap.innerHTML) while a reconnect was in flight — closePanel()
-          // aborts the controller, but the fetch's catch handler can still
-          // run one microtask later, after these nodes are already gone.
-          const el = document.getElementById("google-reconnect-status");
-          if (!el) return;
-          el.className = "status-line" + (kind ? " " + kind : "");
-          el.innerHTML = html;
-        }
-
-        function setGoogleActionsIdle() {
-          const actions = document.getElementById("google-reconnect-actions");
-          if (!actions) return;
-          actions.innerHTML = '<button type="button" class="secondary" id="reconnect-google-btn">Reconnect Google</button>';
-          document.getElementById("reconnect-google-btn").addEventListener("click", runReconnect);
-        }
-
-        function setGoogleActionsConnecting() {
-          const actions = document.getElementById("google-reconnect-actions");
-          if (!actions) return;
-          actions.innerHTML = '<button type="button" class="secondary" id="reconnect-google-cancel">Cancel</button>';
-          document.getElementById("reconnect-google-cancel").addEventListener("click", () => {
-            if (reconnectController) reconnectController.abort();
-          });
-        }
-
-        // Runs the real OAuth loopback consent flow via the same
-        // POST /api/wizard/google/connect route the wizard's Google-connect
-        // step uses (src/shell/server.ts), and the same abort-propagation
-        // guarantee: aborting `controller` here aborts this fetch, which
-        // (per api()'s plain `await fetch(...)`) rejects with an AbortError
-        // that this function distinguishes from a real failure below — the
-        // server side of that guarantee (req.on("close") -> AbortSignal ->
-        // connectGoogleAccount) is entirely inside the shared route and does
-        // not change based on which UI called it.
-        async function runReconnect() {
-          showGoogleStatus(
-            "checking",
-            '<span class="spinner" aria-hidden="true"></span> Connecting… waiting for you to finish in your browser.',
-          );
-          setGoogleActionsConnecting();
-          const controller = new AbortController();
-          reconnectController = controller;
-          try {
-            await api("/api/wizard/google/connect", { method: "POST", signal: controller.signal });
-            reconnectController = null;
-            showGoogleStatus("success", "&#10003; Google account connected.");
-            setGoogleActionsIdle();
-          } catch (err) {
-            reconnectController = null;
-            if (err && err.name === "AbortError") {
-              showGoogleStatus("", "Connection canceled. You can try connecting again whenever you're ready.");
-            } else {
-              showGoogleStatus("error", escapeHtml((err && err.message) || "Something went wrong connecting your Google account."));
-            }
-            setGoogleActionsIdle();
-          }
-        }
-
-        function wireGoogleSection() {
-          setGoogleActionsIdle();
-        }
-
-        async function openPanel() {
-          panelOpen = true;
-          toggleBtn.setAttribute("aria-expanded", "true");
-          let current = { windowDays: 30, graceDays: 14 };
-          try {
-            current = await getFollowUpSettings();
-          } catch (err) {
-            console.error(err);
-          }
-          wrap.innerHTML =
-            '<div class="settings-panel" id="settings-panel">' +
-            '<h3 class="settings-section-title">Follow-up settings</h3>' +
-            settingsFormHtml(current.windowDays, current.graceDays) +
-            googleSectionHtml() +
-            "</div>";
-          wireForm();
-          wireGoogleSection();
-          document.getElementById("settings-window").focus();
-          document.addEventListener("mousedown", onDocumentMousedown);
-          document.addEventListener("keydown", onDocumentKeydown);
-          window.addEventListener("hashchange", onHashChange);
-        }
-
-        toggleBtn.addEventListener("click", () => {
-          if (panelOpen) closePanel();
-          else openPanel();
+      function setPressedState() {
+        document.querySelectorAll(".theme-option").forEach((btn) => {
+          btn.setAttribute("aria-pressed", String(btn.dataset.themeOption === current.theme));
+        });
+        document.querySelectorAll(".icon-option").forEach((btn) => {
+          btn.setAttribute("aria-pressed", String(Number(btn.dataset.iconId) === current.iconId));
         });
       }
+
+      async function save(next) {
+        const prev = current;
+        current = next;
+        setPressedState();
+        applyAppearance(current.theme, current.iconId);
+        try {
+          await putAppearanceSettings(current);
+          errorBanner.hidden = true;
+        } catch (err) {
+          // Revert on failure, matching the follow-up form's
+          // keep-the-page-usable-with-error behavior on save failure.
+          current = prev;
+          setPressedState();
+          applyAppearance(current.theme, current.iconId);
+          errorBanner.hidden = false;
+          errorBanner.textContent = "Couldn't save: " + err.message;
+        }
+      }
+
+      document.querySelectorAll(".theme-option").forEach((btn) => {
+        btn.addEventListener("click", () => save({ theme: btn.dataset.themeOption, iconId: current.iconId }));
+      });
+      document.querySelectorAll(".icon-option").forEach((btn) => {
+        btn.addEventListener("click", () => save({ theme: current.theme, iconId: Number(btn.dataset.iconId) }));
+      });
+    }
+
+    // The Autostart section — only ever rendered when GET /api/settings/
+    // autostart reports supported:true, i.e. running inside the packaged
+    // Electron app (src/electron/main.ts injects the real
+    // app.setLoginItemSettings-backed implementation; a plain `npm run
+    // shell` dev server has no OS concept of "autostart" at all, so there
+    // is nothing useful to show there — omitted entirely rather than shown
+    // disabled).
+    function autostartSectionHtml(enabled) {
+      return (
+        '<div class="log-interaction-form" id="autostart-section">' +
+        '<h3 class="settings-section-title">Startup</h3>' +
+        '<label class="checkbox-field">' +
+        '<input type="checkbox" id="autostart-toggle"' + (enabled ? " checked" : "") + " />" +
+        " Start rolodex at login" +
+        "</label>" +
+        "</div>"
+      );
+    }
+
+    function wireAutostartSection() {
+      const toggle = document.getElementById("autostart-toggle");
+      if (!toggle) return;
+      toggle.addEventListener("change", async () => {
+        const desired = toggle.checked;
+        toggle.disabled = true;
+        try {
+          await putAutostartSettings({ enabled: desired });
+        } catch (err) {
+          // Revert the checkbox on failure rather than showing a
+          // checked/unchecked state that doesn't match what's actually
+          // registered with the OS.
+          toggle.checked = !desired;
+          console.error(err);
+          showToast("Couldn't save: " + err.message, "error");
+        } finally {
+          toggle.disabled = false;
+        }
+      });
+    }
+
+    // The Google section — a real three-state account status line (Signed
+    // in / Client configured, not signed in / Not configured — computed
+    // server-side from GET /api/wizard/summary's googleConfigured +
+    // googleSignedIn, since googleConfigured alone can't distinguish
+    // "configured but never signed in" from "fully connected") plus a
+    // "Reconnect Google" entry point for establishing/re-establishing the
+    // connection without rerunning the first-run wizard. Reuses the exact
+    // same server route (POST /api/wizard/google/connect) and
+    // connecting/cancel/success/error UX pattern already proven by
+    // wizard.html's runConnect(). The reconnect-actions area starts empty —
+    // wireGoogleSection() (called right after this is dropped into the DOM)
+    // renders the idle button into it, so there is exactly one place that
+    // creates that button and attaches its listener.
+    function googleAccountStatusText(status) {
+      if (status === "signed-in") return { kind: "success", text: "✓ Signed in." };
+      if (status === "configured") return { kind: "", text: "Client configured, not signed in yet." };
+      return { kind: "", text: "Not configured." };
+    }
+    function googleSectionHtml(status) {
+      const initial = googleAccountStatusText(status);
+      return (
+        '<div class="log-interaction-form" id="google-section">' +
+        '<h3 class="settings-section-title">Google account</h3>' +
+        '<div class="status-line' + (initial.kind ? " " + initial.kind : "") + '" id="google-account-status">' + initial.text + "</div>" +
+        '<div id="google-reconnect-status" class="status-line" aria-live="polite"></div>' +
+        '<div class="form-actions" id="google-reconnect-actions"></div>' +
+        "</div>"
+      );
+    }
+
+    // AbortController for an in-flight "Reconnect Google" request, if any —
+    // tracked at module scope (not just inside runReconnect()'s own
+    // closure) purely so a future caller could abort it from elsewhere; the
+    // settings page itself doesn't need to abort on navigate-away today
+    // since showGoogleStatus()'s own `if (!el) return` guard already makes
+    // a stale in-flight update after leaving the page a safe no-op, not a
+    // crash.
+    let reconnectController = null;
+
+    function showGoogleStatus(kind, html) {
+      const el = document.getElementById("google-reconnect-status");
+      if (!el) return;
+      el.className = "status-line" + (kind ? " " + kind : "");
+      el.innerHTML = html;
+    }
+
+    function setGoogleActionsIdle() {
+      const actions = document.getElementById("google-reconnect-actions");
+      if (!actions) return;
+      actions.innerHTML = '<button type="button" class="secondary" id="reconnect-google-btn">Reconnect Google</button>';
+      document.getElementById("reconnect-google-btn").addEventListener("click", runReconnect);
+    }
+
+    function setGoogleActionsConnecting() {
+      const actions = document.getElementById("google-reconnect-actions");
+      if (!actions) return;
+      actions.innerHTML = '<button type="button" class="secondary" id="reconnect-google-cancel">Cancel</button>';
+      document.getElementById("reconnect-google-cancel").addEventListener("click", () => {
+        if (reconnectController) reconnectController.abort();
+      });
+    }
+
+    // Runs the real OAuth loopback consent flow via the same
+    // POST /api/wizard/google/connect route the wizard's Google-connect
+    // step uses (src/shell/server.ts), and the same abort-propagation
+    // guarantee: aborting `controller` here aborts this fetch, which (per
+    // api()'s plain `await fetch(...)`) rejects with an AbortError that
+    // this function distinguishes from a real failure below — the server
+    // side of that guarantee (req.on("close") -> AbortSignal ->
+    // connectGoogleAccount) is entirely inside the shared route and does
+    // not change based on which UI called it.
+    async function runReconnect() {
+      showGoogleStatus(
+        "checking",
+        '<span class="spinner" aria-hidden="true"></span> Connecting… waiting for you to finish in your browser.',
+      );
+      setGoogleActionsConnecting();
+      const controller = new AbortController();
+      reconnectController = controller;
+      try {
+        await api("/api/wizard/google/connect", { method: "POST", signal: controller.signal });
+        reconnectController = null;
+        showGoogleStatus("success", "&#10003; Google account connected.");
+        setGoogleActionsIdle();
+        // A successful connect means a fresh token was just stored — update
+        // the account-status line in place rather than re-fetching the
+        // whole wizard summary just for this one field.
+        const statusEl = document.getElementById("google-account-status");
+        if (statusEl) {
+          const signedIn = googleAccountStatusText("signed-in");
+          statusEl.className = "status-line" + (signedIn.kind ? " " + signedIn.kind : "");
+          statusEl.textContent = signedIn.text;
+        }
+      } catch (err) {
+        reconnectController = null;
+        if (err && err.name === "AbortError") {
+          showGoogleStatus("", "Connection canceled. You can try connecting again whenever you're ready.");
+        } else {
+          showGoogleStatus("error", escapeHtml((err && err.message) || "Something went wrong connecting your Google account."));
+        }
+        setGoogleActionsIdle();
+      }
+    }
+
+    function wireGoogleSection() {
+      setGoogleActionsIdle();
+    }
+
+    // The Database location section — new this epic, not migrated from
+    // anywhere. Reuses the wizard's own GET/POST /api/wizard/database +
+    // POST .../reset routes verbatim (same writable-check gate: a rejected
+    // candidate never overwrites a working override). Unlike the wizard,
+    // this can never take effect live — `Store`/`secrets` are both
+    // memoized for the server process's lifetime (see the epic's design
+    // discussion) — so a successful change/reset shows a persistent
+    // "restart to apply" note instead of implying anything happened
+    // immediately.
+    function databaseSectionHtml() {
+      return (
+        '<div class="log-interaction-form" id="database-section">' +
+        '<h3 class="settings-section-title">Database location</h3>' +
+        '<div class="settings-path-value" id="db-path-display">Checking&hellip;</div>' +
+        '<div class="status-line" id="db-status" aria-live="polite"></div>' +
+        '<div class="form-actions">' +
+        '<button type="button" class="secondary" id="db-change-toggle">Change&hellip;</button>' +
+        '<button type="button" class="secondary" id="db-reset" hidden>Reset to default</button>' +
+        "</div>" +
+        '<div class="form-field" id="db-change-panel" hidden>' +
+        '<label for="db-path-input">New location (full file path)</label>' +
+        '<input type="text" id="db-path-input" autocomplete="off" spellcheck="false" />' +
+        '<div class="form-actions"><button type="button" id="db-path-apply">Check this location</button></div>' +
+        "</div>" +
+        '<div class="settings-note" id="db-apply-note" hidden>Applies next launch — restart rolodex to switch.</div>' +
+        "</div>"
+      );
+    }
+
+    function wireDatabaseSection() {
+      const display = document.getElementById("db-path-display");
+      const status = document.getElementById("db-status");
+      const resetBtn = document.getElementById("db-reset");
+      const changeToggle = document.getElementById("db-change-toggle");
+      const changePanel = document.getElementById("db-change-panel");
+      const pathInput = document.getElementById("db-path-input");
+      const applyNote = document.getElementById("db-apply-note");
+
+      function paint(result) {
+        display.textContent = result.path;
+        resetBtn.hidden = result.isDefault;
+        if (result.writable) {
+          status.className = "status-line success";
+          status.textContent = "✓ This location is writable.";
+        } else {
+          status.className = "status-line error";
+          status.textContent =
+            "This location isn't writable — choose a different folder or use the default." +
+            (result.error ? " " + result.error : "");
+        }
+      }
+
+      changeToggle.addEventListener("click", () => {
+        changePanel.hidden = !changePanel.hidden;
+        if (!changePanel.hidden) pathInput.focus();
+      });
+
+      document.getElementById("db-path-apply").addEventListener("click", async () => {
+        const candidate = pathInput.value.trim();
+        if (!candidate) return;
+        status.className = "status-line";
+        status.textContent = "Checking…";
+        const result = await postDbLocation(candidate);
+        paint(result);
+        if (result.writable) {
+          applyNote.hidden = false;
+          pathInput.value = "";
+          changePanel.hidden = true;
+        }
+      });
+
+      resetBtn.addEventListener("click", async () => {
+        if (!confirm("Reset the database location to the default path? This only changes where rolodex looks for data — it doesn't move or delete anything.")) return;
+        status.className = "status-line";
+        status.textContent = "Checking…";
+        const result = await postDbLocationReset();
+        paint(result);
+        applyNote.hidden = false;
+      });
+
+      getDbLocation().then(paint).catch((err) => {
+        status.className = "status-line error";
+        status.textContent = "Couldn't load: " + err.message;
+      });
+    }
+
+    // The Secrets backend section — new this epic, not migrated from
+    // anywhere. Only ever rendered when Portunus is actually available
+    // (same convention as the Autostart section: omitted entirely, not
+    // shown with a single disabled option, when there's no real choice to
+    // make) — reuses GET /api/wizard/secrets-backends (now also reporting
+    // currentBackend) and POST /api/wizard/secrets-backend-choice verbatim.
+    // No live secrets-check/troubleshooting UI here — that's the wizard's
+    // heavier first-run verification flow; this section is just the
+    // choice itself, same "restart to apply" note as the Database section
+    // since the choice can't take effect mid-process either.
+    function secretsBackendSectionHtml(current) {
+      return (
+        '<div class="log-interaction-form" id="secrets-backend-section">' +
+        '<h3 class="settings-section-title">Secrets backend</h3>' +
+        '<div class="backend-toggle" role="group" aria-label="Secrets backend">' +
+        '<button type="button" class="secondary backend-option" data-backend-option="keychain" ' +
+        'aria-pressed="' + (current === "keychain") + '">macOS Keychain</button>' +
+        '<button type="button" class="secondary backend-option" data-backend-option="portunus" ' +
+        'aria-pressed="' + (current === "portunus") + '">Portunus</button>' +
+        "</div>" +
+        '<div class="settings-note" id="secrets-backend-apply-note" hidden>Applies next launch — restart rolodex to switch.</div>' +
+        "</div>"
+      );
+    }
+
+    function wireSecretsBackendSection(current) {
+      const applyNote = document.getElementById("secrets-backend-apply-note");
+      const options = document.querySelectorAll(".backend-option");
+      function setPressed(backend) {
+        options.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.backendOption === backend)));
+      }
+      options.forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const backend = btn.dataset.backendOption;
+          const prev = current;
+          current = backend;
+          setPressed(current);
+          try {
+            await postSecretsBackendChoice(backend);
+            applyNote.hidden = false;
+          } catch (err) {
+            // Revert on failure — nothing was actually persisted.
+            current = prev;
+            setPressed(current);
+            console.error(err);
+            showToast("Couldn't save: " + err.message, "error");
+          }
+        });
+      });
     }
 
     function rowHtml(c) {
@@ -1021,21 +1433,166 @@
       );
     }
 
+    // ---- Settings view ----------------------------------------------------
+    // Replaces the old gear-icon popover with a real, navigable screen —
+    // same router/topbar/#content pattern renderList/renderDetail/renderForm
+    // already use, not a separate served page (see the settings-account-
+    // screen epic's design discussion for why). Sections land here one epic
+    // story at a time; today it's Follow-up + Appearance, migrated as-is
+    // from the popover's own HTML-builder/wiring functions (now top-level,
+    // shared with the still-present-but-dead popover code).
+    async function renderSettings() {
+      setTopbar({
+        left: '<button class="back-link" id="back-link">&larr; Contacts</button>',
+        right: "",
+      });
+      document.getElementById("back-link").addEventListener("click", () => navigate("#/"));
+
+      content.innerHTML =
+        '<div class="settings-page">' +
+        "<h1>Settings</h1>" +
+        '<p class="settings-subtitle">Follow-up window, appearance, and account settings.</p>' +
+        '<section aria-labelledby="follow-up-heading">' +
+        '<h2 class="settings-section-title" id="follow-up-heading">Follow-up window</h2>' +
+        '<div id="follow-up-section-body">Loading&hellip;</div>' +
+        "</section>" +
+        '<section>' +
+        '<div id="appearance-section-body">Loading&hellip;</div>' +
+        "</section>" +
+        '<section>' +
+        '<div id="autostart-section-body"></div>' +
+        "</section>" +
+        '<section>' +
+        '<div id="google-section-body">Loading&hellip;</div>' +
+        "</section>" +
+        '<section>' + databaseSectionHtml() + "</section>" +
+        '<section>' +
+        '<div id="secrets-backend-section-body"></div>' +
+        "</section>" +
+        "</div>";
+
+      let saved = { windowDays: 30, graceDays: 14 };
+      try {
+        saved = await getFollowUpSettings();
+      } catch (err) {
+        console.error(err);
+      }
+
+      const body = document.getElementById("follow-up-section-body");
+      body.innerHTML =
+        settingsFormHtml(saved.windowDays, saved.graceDays) +
+        '<div class="status-line" id="follow-up-save-status" aria-live="polite"></div>';
+
+      const windowInput = document.getElementById("settings-window");
+      const graceInput = document.getElementById("settings-grace");
+      const statusEl = document.getElementById("follow-up-save-status");
+
+      function setStatus(kind, text) {
+        statusEl.className = "status-line" + (kind ? " " + kind : "");
+        statusEl.textContent = text;
+      }
+
+      function validatePositiveInt(input, fieldId, errorId) {
+        const raw = input.value.trim();
+        const n = Number(raw);
+        const valid = raw !== "" && Number.isInteger(n) && n > 0;
+        document.getElementById(fieldId).classList.toggle("invalid", !valid);
+        document.getElementById(errorId).hidden = valid;
+        if (valid) input.removeAttribute("aria-invalid");
+        else input.setAttribute("aria-invalid", "true");
+        return valid ? n : null;
+      }
+
+      document.getElementById("settings-cancel").addEventListener("click", () => {
+        windowInput.value = saved.windowDays;
+        graceInput.value = saved.graceDays;
+        validatePositiveInt(windowInput, "settings-window-field", "settings-window-error");
+        validatePositiveInt(graceInput, "settings-grace-field", "settings-grace-error");
+        setStatus("", "");
+      });
+
+      document.getElementById("settings-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const windowDays = validatePositiveInt(windowInput, "settings-window-field", "settings-window-error");
+        const graceDays = validatePositiveInt(graceInput, "settings-grace-field", "settings-grace-error");
+        if (windowDays === null || graceDays === null) {
+          (windowDays === null ? windowInput : graceInput).focus();
+          return;
+        }
+        const saveBtn = document.getElementById("settings-save");
+        saveBtn.disabled = true;
+        try {
+          await putFollowUpSettings({ windowDays, graceDays });
+          saved = { windowDays, graceDays };
+          setStatus("success", "Saved.");
+        } catch (err) {
+          setStatus("error", "Couldn't save: " + err.message);
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+
+      let appearance = { theme: "default", iconId: 6 };
+      try {
+        appearance = await getAppearanceSettings();
+      } catch (err) {
+        console.error(err);
+      }
+      document.getElementById("appearance-section-body").innerHTML = appearanceSectionHtml(appearance.theme, appearance.iconId);
+      wireAppearanceSection(appearance.theme, appearance.iconId);
+
+      let autostart = { supported: false, enabled: false };
+      try {
+        autostart = await getAutostartSettings();
+      } catch (err) {
+        console.error(err);
+      }
+      if (autostart.supported) {
+        document.getElementById("autostart-section-body").innerHTML = autostartSectionHtml(autostart.enabled);
+        wireAutostartSection();
+      }
+
+      let googleStatus = "not-configured";
+      try {
+        const summary = await getWizardSummary();
+        googleStatus = summary.googleSignedIn ? "signed-in" : summary.googleConfigured ? "configured" : "not-configured";
+      } catch (err) {
+        console.error(err);
+      }
+      document.getElementById("google-section-body").innerHTML = googleSectionHtml(googleStatus);
+      wireGoogleSection();
+
+      wireDatabaseSection();
+
+      try {
+        const backends = await getSecretsBackends();
+        if (backends.portunusAvailable) {
+          document.getElementById("secrets-backend-section-body").innerHTML = secretsBackendSectionHtml(backends.currentBackend);
+          wireSecretsBackendSection(backends.currentBackend);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
     // ---- Detail view ----------------------------------------------------------
     async function renderDetail(id) {
       setTopbar({
         left: '<button class="back-link" id="back-link">&larr; Back to contacts</button>',
-        right: '<button id="edit-top">Edit</button>',
+        right: '<button class="danger secondary" id="delete-top">Delete</button><button id="edit-top">Edit</button>',
       });
       document.getElementById("back-link").addEventListener("click", () => navigate("#/"));
+
+      // Shown immediately, before the fetch — without this, a slow load
+      // just displays whatever the previous view was until getContact()
+      // resolves (flashes blank/stale, not "loading").
+      content.innerHTML = '<div class="status-line"><span class="spinner" aria-hidden="true"></span> Loading…</div>';
 
       let contact;
       try {
         contact = await getContact(id);
       } catch (err) {
-        content.innerHTML =
-          '<p class="not-found-banner">Contact not found — it may have been removed.</p>';
-        navigate("#/");
+        renderNotFound();
         return;
       }
 
@@ -1049,6 +1606,18 @@
       document.getElementById("edit-top").addEventListener("click", () =>
         navigate("#/contact/" + encodeURIComponent(id) + "/edit"),
       );
+      document.getElementById("delete-top").addEventListener("click", async () => {
+        if (!confirm('Delete "' + contact.name + '" and their interaction history? This cannot be undone.')) return;
+        const btn = document.getElementById("delete-top");
+        btn.disabled = true;
+        try {
+          await deleteContact(id);
+          navigate("#/");
+        } catch (err) {
+          btn.disabled = false;
+          showToast("Couldn't delete: " + err.message, "error");
+        }
+      });
 
       const tags = contact.tags || [];
       content.innerHTML =
@@ -1075,11 +1644,11 @@
         '<div class="col">' +
         '<h2 id="verdict-heading">Verdict</h2>' +
         '<div class="verdict-picker" role="radiogroup" aria-labelledby="verdict-heading" id="verdict-picker"></div>' +
-        '<div class="autosave-status" id="verdict-status" aria-live="polite"></div>' +
+        '<div class="status-line" id="verdict-status" aria-live="polite"></div>' +
         '<div class="next-step-field">' +
         '<label for="next-step-input">Next step</label>' +
         '<input id="next-step-input" type="text" value="' + escapeHtml(contact.nextStep || "") + '" />' +
-        '<div class="autosave-status" id="next-step-status" aria-live="polite"></div>' +
+        '<div class="status-line" id="next-step-status" aria-live="polite"></div>' +
         "</div>" +
         '<div class="interactions-panel">' +
         '<div class="interactions-header">' +
@@ -1126,14 +1695,17 @@
         current = value;
         draw();
         picker.querySelector('[data-value="' + value + '"]').focus();
+        status.className = "status-line";
         status.textContent = "Saving…";
         try {
           await patchVerdict(contact.id, value);
-          status.textContent = "Saved";
-          setTimeout(() => { if (status.textContent === "Saved") status.textContent = ""; }, 2000);
+          status.className = "status-line";
+          status.textContent = "";
+          showToast("Saved.", "success");
         } catch (err) {
           current = previous;
           draw();
+          status.className = "status-line error";
           status.textContent = "Failed to save: " + err.message;
         }
       }
@@ -1162,13 +1734,16 @@
       async function commit() {
         const value = input.value;
         if (value === lastSaved) return;
+        status.className = "status-line";
         status.textContent = "Saving…";
         try {
           await patchNextStep(contact.id, value);
           lastSaved = value;
-          status.textContent = "Saved";
-          setTimeout(() => { if (status.textContent === "Saved") status.textContent = ""; }, 2000);
+          status.className = "status-line";
+          status.textContent = "";
+          showToast("Saved.", "success");
         } catch (err) {
+          status.className = "status-line error";
           status.textContent = "Failed to save: " + err.message;
         }
       }
@@ -1366,11 +1941,15 @@
     async function renderForm(mode, id) {
       let existing = null;
       if (mode === "edit") {
+        // Shown immediately, before the fetch — same reasoning as
+        // renderDetail()'s loading state: without this, a slow load just
+        // displays whatever the previous view was until getContact()
+        // resolves.
+        content.innerHTML = '<div class="status-line"><span class="spinner" aria-hidden="true"></span> Loading…</div>';
         try {
           existing = await getContact(id);
         } catch (err) {
-          content.innerHTML = '<p class="not-found-banner">Contact not found — it may have been removed.</p>';
-          navigate("#/");
+          renderNotFound();
           return;
         }
       }

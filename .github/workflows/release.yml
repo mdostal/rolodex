@@ -1,0 +1,49 @@
+name: Release
+
+# Tag-triggered, not push/PR-triggered like ci.yml — there is no existing
+# release automation to hook into (version bumps and `git tag` have been
+# fully manual, e.g. v0.3.0/v0.4.0), so this is new: pushing a `v*` tag
+# builds the packaged app on all three platforms and attaches the
+# artifacts to the GitHub Release for that tag. electron-builder derives
+# the expected tag from package.json's version (`v${version}`) by default,
+# matching the existing manual-tag convention — bump the version and tag
+# `vX.Y.Z` to cut a release, same as before, this workflow just does the
+# packaging + upload that used to not exist at all.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      # --maxWorkers=2: see the identical comment in ci.yml — shared CI
+      # runners have intermittently timed out JSDOM-heavy tests under full
+      # default parallelism.
+      - run: npm test -- --maxWorkers=2
+      - run: npm run shell:build
+
+      # No --mac/--win/--linux flag: electron-builder auto-selects the
+      # current runner's OS from the "mac"/"win"/"linux" sections already
+      # configured in package.json's "build" key — one native runner per
+      # platform, not cross-compiled from a single host.
+      - run: npx electron-builder --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

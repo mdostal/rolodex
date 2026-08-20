@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { mkdir, readFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Store } from "../lib/store.js";
 import type { Contact, Interaction } from "../lib/types.js";
-import { createSecretsAdapter, type CreateSecretsAdapterOptions, type SecretsAdapter } from "../lib/secrets-adapter.js";
+import { createSecretsAdapter, isPortunusAvailable as defaultIsPortunusAvailable, type CreateSecretsAdapterOptions, type SecretsAdapter } from "../lib/secrets-adapter.js";
 import { checkSecretsCapability } from "../lib/secrets-check.js";
-import { applyPullToStore, createGoogleSync } from "../lib/google-sync.js";
+import { applyPullToStore, createGoogleSync, deleteContactEverywhere, pushAllToGoogle, GOOGLE_OAUTH_TOKEN_KEY } from "../lib/google-sync.js";
 import { connectGoogleAccount as defaultConnectGoogleAccount, type ConnectGoogleAccountOptions } from "../lib/google-oauth-flow.js";
 import {
   checkDbPathWritable,
@@ -18,22 +19,33 @@ import {
   resolveDbPath,
   setDbPathOverride,
 } from "./db-location.js";
+import {
+  getSecretsBackendChoiceSync,
+  setSecretsBackendChoice,
+  type SecretsBackendChoice,
+} from "./secrets-backend-config.js";
 
 /**
  * Desktop shell, chosen (saf-01) as: a local Node HTTP server hosting `Store`
  * in-process, with a plain browser tab as the UI.
  *
- * Why not Electron or Tauri: Store already runs as ordinary Node, so an
- * ordinary Node process serving it needs no IPC bridge, no renderer
- * sandboxing story, and no native-module rebuild risk — Electron's
- * contextIsolation/preload wiring and Tauri's Node sidecar (it can't reach
- * node:sqlite from Rust directly) both solve problems this shell doesn't
- * have. A browser tab is a genuinely real window against the real SQLite
- * file, not a fake/mocked stand-in — this story's whole point is proving
- * that, as thinly as possible. Electron remains a reasonable future upgrade
- * if a truly native window (tray icon, native menus, offline-from-file://)
- * is ever required; nothing here forecloses it since Store itself is
- * untouched by this choice.
+ * This file itself stays framework-agnostic on purpose: Store runs as
+ * ordinary Node, so an ordinary Node process serving it needs no IPC
+ * bridge, no renderer sandboxing story, and no native-module rebuild risk —
+ * a plain browser tab is a genuinely real window against the real SQLite
+ * file, not a fake/mocked stand-in. That's still true, and still exactly
+ * how `npm run shell` runs today.
+ *
+ * The packaged desktop app (src/electron/main.ts, the electron-packaging
+ * epic) is Electron, not Tauri, precisely BECAUSE of the shape above:
+ * Electron's main process IS Node, so it imports and boots this exact
+ * server in-process with zero changes here — no sidecar, no IPC. Tauri's
+ * Rust core can't reach node:sqlite directly and would need this server
+ * spawned as a separate bundled sidecar process instead; real added
+ * complexity for zero benefit given this file already runs as plain Node.
+ * main.ts is the only file that imports `electron` at all — this module
+ * neither knows nor cares whether its caller is a browser tab or an
+ * Electron BrowserWindow.
  *
  * First-run setup wizard (saf-04): this server no longer opens the SQLite
  * file at import time. Until the wizard's Finish screen calls
@@ -78,6 +90,16 @@ export interface RolodexServerOptions {
    * separately from `secrets` so tests can make the persisted-state adapter
    * and the probe behave differently without touching a real keychain. */
   secretsCapabilityFactory?: (opts?: CreateSecretsAdapterOptions) => SecretsAdapter;
+  /** Factory used to construct the persistent `secrets` adapter itself (only
+   * when `opts.secrets` isn't given) — defaults to the real
+   * createSecretsAdapter. Distinct from `secretsCapabilityFactory` (which is
+   * for the wizard's fresh-per-call capability probe, see above): this one
+   * backs the SAME long-lived `secrets` instance `googleSync` and every
+   * other route below is constructed from. Injectable so tests can verify
+   * exactly which `backend` this server resolved (via
+   * getSecretsBackendChoiceSync(homeDir)) and passed into it, without a real
+   * keychain or Portunus install. */
+  secretsAdapterFactory?: (opts?: CreateSecretsAdapterOptions) => SecretsAdapter;
   /** Home directory used to resolve the default DB path and the wizard's
    * local (non-secret) config file. Defaults to process.env.HOME. Tests
    * override this to a temp dir instead of touching a real ~/.local/share. */
@@ -88,7 +110,32 @@ export interface RolodexServerOptions {
    * Defaults to the real `connectGoogleAccount`. Injectable so tests can
    * substitute a fake and never open a real browser tab or talk to Google. */
   connectGoogleAccount?: (opts: ConnectGoogleAccountOptions) => Promise<void>;
+  /** Probes whether the real `portunus` CLI is available (src/lib/secrets-
+   * adapter.ts's isPortunusAvailable), used only by the wizard's Secrets
+   * screen to decide whether to show a Keychain/Portunus choice at all.
+   * Defaults to the real probe. Injectable so tests can simulate "Portunus
+   * is installed" without a real binary on the test machine. */
+  isPortunusAvailable?: () => Promise<boolean>;
+  /** Native launch-at-login control — only meaningful when this server is
+   * booted inside the Electron app (src/electron/main.ts), which injects
+   * the real implementation backed by Electron's app.setLoginItemSettings/
+   * getLoginItemSettings. There is no OS concept of "autostart" for a plain
+   * `npm run shell` dev server, so the default below reports unsupported
+   * rather than pretending a toggle exists. Kept as a plain get/set pair
+   * (not a class) so this file — a `Store`-adjacent HTTP layer — never
+   * imports `electron` itself; only src/electron/main.ts does. */
+  autostart?: {
+    isSupported: boolean;
+    getEnabled: () => boolean;
+    setEnabled: (enabled: boolean) => void;
+  };
 }
+
+const UNSUPPORTED_AUTOSTART = {
+  isSupported: false,
+  getEnabled: () => false,
+  setEnabled: () => {},
+};
 
 /** Thrown by readJsonBody() when the request body isn't valid JSON — a
  * distinct type so the top-level request handler can tell "client sent a
@@ -131,13 +178,26 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
   const indexHtmlPath = opts.indexHtmlPath ?? path.join(HERE, "index.html");
   const wizardHtmlPath = opts.wizardHtmlPath ?? path.join(HERE, "wizard.html");
   const assetsDir = path.join(HERE, "assets");
+  const autostart = opts.autostart ?? UNSUPPORTED_AUTOSTART;
   const homeDir = opts.homeDir;
-  const secrets = opts.secrets ?? createSecretsAdapter();
+  // Backend choice (keychain vs. portunus) is resolved via a SYNCHRONOUS
+  // local-file read (getSecretsBackendChoiceSync) at this exact call site —
+  // deliberately, not an async/lazy adapter — so `secrets` below is still a
+  // concrete, already-resolved SecretsAdapter the moment createGoogleSync()
+  // is constructed from it two lines down. See secrets-backend-config.ts's
+  // top-of-file docstring for the full rationale (grill finding F3): an
+  // earlier "make secrets async/lazy like Store" proposal was checked
+  // against the real code and found architecturally wrong, since — unlike
+  // Store — `secrets` has an eager synchronous consumer (`googleSync`)
+  // immediately after it right here.
+  const secretsAdapterFactory = opts.secretsAdapterFactory ?? createSecretsAdapter;
+  const secrets = opts.secrets ?? secretsAdapterFactory({ backend: getSecretsBackendChoiceSync(homeDir) });
   const secretsCapabilityFactory = opts.secretsCapabilityFactory ?? createSecretsAdapter;
   // Shares this server's `secrets` adapter so a one-shot sync reads the same
   // OAuth client credentials the wizard's Google-connect step wrote.
   const googleSync = createGoogleSync({ secrets });
   const connectGoogleAccount = opts.connectGoogleAccount ?? defaultConnectGoogleAccount;
+  const isPortunusAvailable = opts.isPortunusAvailable ?? (() => defaultIsPortunusAvailable());
 
   let store: Store | undefined = opts.store;
   // Once true, wizard completion can never revert within a process's
@@ -293,8 +353,57 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
       return;
     }
 
+    // GET /api/wizard/secrets-backends — tells the wizard's Secrets screen
+    // whether Portunus is available on this machine at all, so it knows
+    // whether to render a real Keychain/Portunus choice (per this story's
+    // hard requirement: no visible choice, Keychain-only, when Portunus
+    // isn't detected). A lightweight `portunus --version` probe
+    // (isPortunusAvailable), NOT the round-trip capability check that
+    // POST .../secrets-check performs — those stay separate routes/concerns:
+    // this one only answers "does the choice UI exist at all", the other
+    // answers "does whichever backend is currently selected actually work".
+    // currentBackend (settings-account-screen epic) is the one other thing
+    // this response was missing for a non-wizard caller: the wizard itself
+    // never needed it (its choice screen always starts from the "keychain"
+    // default), but the Settings screen's Secrets-backend section needs to
+    // know which radio to actually show as selected.
+    if (req.method === "GET" && segs.length === 1 && segs[0] === "secrets-backends") {
+      sendJson(res, 200, { portunusAvailable: await isPortunusAvailable(), currentBackend: getSecretsBackendChoiceSync(homeDir) });
+      return;
+    }
+
+    // POST /api/wizard/secrets-backend-choice — persists the user's pick
+    // from the Secrets screen's Keychain/Portunus choice (only reachable
+    // when GET .../secrets-backends reported Portunus as available) via
+    // setSecretsBackendChoice(), BEFORE the wizard is allowed to navigate on
+    // to "google" — see wizard.html's renderSecrets(). Does NOT reconstruct
+    // this server's own long-lived `secrets` adapter (that was already
+    // resolved once, synchronously, at construction time above) — the
+    // effect of this choice on THIS process is limited to whatever this
+    // route itself does with `backend` afterward (nothing, currently); it
+    // takes effect for real the next time the server process starts, which
+    // for a first-run wizard is the very next launch after setup completes.
+    if (req.method === "POST" && segs.length === 1 && segs[0] === "secrets-backend-choice") {
+      const body = (await readJsonBody(req)) as { backend?: unknown };
+      if (body.backend !== "keychain" && body.backend !== "portunus") {
+        sendJson(res, 400, { error: 'backend must be "keychain" or "portunus"' });
+        return;
+      }
+      const backend: SecretsBackendChoice = body.backend;
+      await setSecretsBackendChoice(backend, homeDir);
+      sendJson(res, 200, { ok: true, backend });
+      return;
+    }
+
     if (req.method === "POST" && segs.length === 1 && segs[0] === "secrets-check") {
-      const result = await checkSecretsCapability(secretsCapabilityFactory);
+      // Optional body: `{ backend: "keychain" | "portunus" }`, so the wizard
+      // UI can request a probe of whichever backend it currently has
+      // selected instead of always the default. Absent/malformed/unknown
+      // `backend` all fall back to "keychain" — checkSecretsCapability()'s
+      // own default and today's exact (pre-this-parameter) behavior.
+      const body = (await readJsonBody(req)) as { backend?: unknown };
+      const backend = body.backend === "portunus" ? "portunus" : "keychain";
+      const result = await checkSecretsCapability(secretsCapabilityFactory, backend);
       sendJson(res, result.ok ? 200 : 422, result);
       return;
     }
@@ -302,8 +411,15 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
     if (req.method === "GET" && segs.length === 1 && segs[0] === "summary") {
       const dbPath = await resolveDbPath(homeDir);
       const googleConfigured = (await secrets.get(GOOGLE_OAUTH_CLIENT_KEY)) !== undefined;
+      // Distinct from googleConfigured (client id/secret saved): this is
+      // whether the OAuth exchange has actually happened. A client can be
+      // configured without ever having been signed in (e.g. the wizard's
+      // Google step was skipped after just saving credentials), which
+      // googleConfigured alone can't tell apart from "fully connected" —
+      // the Settings screen's account-status line needs that distinction.
+      const googleSignedIn = (await secrets.get(GOOGLE_OAUTH_TOKEN_KEY)) !== undefined;
       const secretsResult = await checkSecretsCapability(secretsCapabilityFactory);
-      sendJson(res, 200, { dbPath, googleConfigured, secrets: secretsResult });
+      sendJson(res, 200, { dbPath, googleConfigured, googleSignedIn, secrets: secretsResult });
       return;
     }
 
@@ -405,6 +521,25 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
         return;
       }
 
+      // POST /api/sync/google/push — a genuinely separate action from the
+      // pull route above, not a query-param variant of it: push is the more
+      // consequential direction (it creates/overwrites data on the owner's
+      // real Google account), so it gets its own explicit endpoint the UI
+      // surfaces as its own clearly-labeled button, not folded into
+      // "Sync now". Per-contact failures land in the response's errors
+      // array (200, not partial-failure-as-502) — one bad contact
+      // shouldn't read as "the whole push failed" when most of it worked.
+      if (req.method === "POST" && parts.length === 4 && parts[0] === "api" && parts[1] === "sync" && parts[2] === "google" && parts[3] === "push") {
+        if (!(await isWizardCompleted())) {
+          sendJson(res, 409, { error: "setup not complete" });
+          return;
+        }
+        const s = await getStore();
+        const summary = await pushAllToGoogle(s, googleSync);
+        sendJson(res, 200, summary);
+        return;
+      }
+
       // GET/PUT /api/settings/follow-up — persisted config (windowDays,
       // graceDays) that drives GET /api/contacts/needs-follow-up when its own
       // query params are omitted. Gated behind wizard completion, same as
@@ -432,6 +567,66 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
           }
           s.setFollowUpConfig({ windowDays: body.windowDays, graceDays: body.graceDays });
           sendJson(res, 200, s.getFollowUpConfig());
+          return;
+        }
+      }
+
+      // GET/PUT /api/settings/autostart — native launch-at-login, backed by
+      // Electron's app.setLoginItemSettings when running inside the app
+      // (see the `autostart` RolodexServerOptions doc comment above). Not
+      // wizard-gated (touches no Store data at all) and not persisted here
+      // — Electron's own login-item registration IS the persisted state,
+      // there's nothing else to remember.
+      if (parts[0] === "api" && parts[1] === "settings" && parts.length === 3 && parts[2] === "autostart") {
+        if (req.method === "GET") {
+          sendJson(res, 200, { supported: autostart.isSupported, enabled: autostart.getEnabled() });
+          return;
+        }
+
+        if (req.method === "PUT") {
+          if (!autostart.isSupported) {
+            sendJson(res, 501, { error: "autostart is only available in the packaged app" });
+            return;
+          }
+          const body = (await readJsonBody(req)) as { enabled?: unknown };
+          if (typeof body.enabled !== "boolean") {
+            sendJson(res, 400, { error: "enabled must be a boolean" });
+            return;
+          }
+          autostart.setEnabled(body.enabled);
+          sendJson(res, 200, { supported: true, enabled: autostart.getEnabled() });
+          return;
+        }
+      }
+
+      // GET/PUT /api/settings/appearance — persisted {theme, iconId}, read by
+      // GET / to server-side-inject the active theme attribute and favicon
+      // links into index.html on every request (see below). Same
+      // wizard-completion gate and validate-then-persist shape as
+      // /api/settings/follow-up above.
+      if (parts[0] === "api" && parts[1] === "settings" && parts.length === 3 && parts[2] === "appearance") {
+        if (!(await isWizardCompleted())) {
+          sendJson(res, 409, { error: "setup not complete" });
+          return;
+        }
+        const s = await getStore();
+
+        if (req.method === "GET") {
+          sendJson(res, 200, s.getAppearance());
+          return;
+        }
+
+        if (req.method === "PUT") {
+          const body = (await readJsonBody(req)) as { theme?: unknown; iconId?: unknown };
+          const isValidTheme = (v: unknown): v is "default" | "brass" => v === "default" || v === "brass";
+          const isValidIconId = (v: unknown): v is number =>
+            typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 10;
+          if (!isValidTheme(body.theme) || !isValidIconId(body.iconId)) {
+            sendJson(res, 400, { error: "theme must be 'default' or 'brass', iconId must be an integer 1-10" });
+            return;
+          }
+          s.setAppearance({ theme: body.theme, iconId: body.iconId });
+          sendJson(res, 200, s.getAppearance());
           return;
         }
       }
@@ -583,6 +778,35 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
             sendJson(res, 200, contact);
             return;
           }
+
+          if (req.method === "DELETE") {
+            // deleteContactEverywhere() does its own s.get(id)/not-found
+            // check — a separate one here would just be a second query for
+            // no benefit.
+            const summary = await deleteContactEverywhere(id, s, googleSync);
+            if (!summary.deleted) {
+              sendJson(res, 404, { error: "not found" });
+              return;
+            }
+            if (summary.googleDeleteError) {
+              // Best-effort, non-blocking per the google-two-way-sync epic's
+              // design (decision 4) — the local delete already succeeded
+              // and is not rolled back for this. A 204 genuinely cannot
+              // carry a body to put a warning in, so this is logged
+              // server-side instead, the same way this codebase already
+              // logs other best-effort side-channel failures (e.g.
+              // withInMemoryFallback's console.warn).
+              console.warn(
+                `rolodex: deleted contact ${id} locally, but its linked Google contact could not be deleted: ${summary.googleDeleteError}`,
+              );
+            }
+            // 204 genuinely has no body — bypassing sendJson() here rather
+            // than sending it JSON.stringify(null)'s "null" text, which
+            // would violate the no-body requirement of a 204 response.
+            res.writeHead(204);
+            res.end();
+            return;
+          }
         }
 
         // /api/contacts/:id/verdict and /api/contacts/:id/next-step
@@ -621,8 +845,27 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
       }
 
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-        const htmlPath = (await isWizardCompleted()) ? indexHtmlPath : wizardHtmlPath;
-        const html = await readFile(htmlPath, "utf8");
+        const completed = await isWizardCompleted();
+        const htmlPath = completed ? indexHtmlPath : wizardHtmlPath;
+        let html = await readFile(htmlPath, "utf8");
+        // index.html is read fresh off disk on every request (no caching),
+        // so the active appearance settings are injected here rather than
+        // hydrated client-side — no flash-of-wrong-theme/icon is possible.
+        // wizard.html never gets this treatment: appearance settings live in
+        // the settings table, which doesn't exist meaningfully before the
+        // wizard itself has run.
+        if (completed) {
+          const s = await getStore();
+          const { theme, iconId } = s.getAppearance();
+          if (theme === "brass") {
+            html = html.replace('<html lang="en">', '<html lang="en" data-theme="brass">');
+          }
+          html = html
+            .replace("/assets/favicon.ico", `/assets/icon-c${iconId}.ico`)
+            .replace("/assets/favicon-32.png", `/assets/icon-c${iconId}-32.png`)
+            .replace("/assets/favicon-16.png", `/assets/icon-c${iconId}-16.png`)
+            .replace("/assets/apple-touch-icon.png", `/assets/icon-c${iconId}-180.png`);
+        }
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(html);
         return;
@@ -641,7 +884,14 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
   });
 }
 
-const isMainModule = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+// realpathSync matters here: a global/symlinked invocation would leave
+// process.argv[1] as the symlink path while import.meta.url is always the
+// resolved real file — see the identical fix in src/mcp/server.ts and
+// src/cli/index.ts. Not currently reachable via a `bin` entry, but this
+// keeps the pattern correct everywhere it appears rather than only where
+// npm link happened to expose the bug.
+const isMainModule =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
 
 if (isMainModule) {
   const PORT = Number(process.env.ROLODEX_SHELL_PORT ?? 4173);

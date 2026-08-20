@@ -27,13 +27,31 @@ isn't the primary way to use rolodex.
   period).
 - A pluggable `SecretsAdapter` (`src/lib/secrets-adapter.ts`) backed by the
   macOS keychain, used by the wizard and by Google sync.
-- A one-shot Google Contacts pull (`src/lib/google-sync.ts`), connected
-  through a real OAuth 2.0 consent flow (`src/lib/google-oauth-flow.ts`) run
-  from the setup wizard or re-triggered from Settings, that seeds the
-  rolodex from the owner's Google Contacts, with local-only fields preserved
-  across the merge.
-- All 5 MCP tools (`src/mcp/server.ts`) wired to that same real `Store`/
+- Real two-way Google Contacts sync (`src/lib/google-sync.ts`) — pull and
+  push, connected through a real OAuth 2.0 consent flow
+  (`src/lib/google-oauth-flow.ts`) run from the setup wizard or
+  re-triggered from Settings. Pull seeds/refreshes the rolodex from the
+  owner's Google Contacts with local-only fields preserved across the
+  merge; push creates/updates the owner's Google Contacts from local
+  changes, with etag-based conflict detection so a contact that changed on
+  Google since the last sync is reported clearly rather than silently
+  overwritten.
+- All 6 MCP tools (`src/mcp/server.ts`) wired to that same real `Store`/
   `GoogleSync` logic.
+- A third, plain CLI surface (`src/cli/index.ts`, `rolodex <command>`) for
+  non-MCP tooling/scripts — a thin argv wrapper around the exact same
+  `RolodexMcpHandlers` the MCP server registers, not a separate
+  implementation. JSON in, JSON out, same `ROLODEX_DB` env var as the other
+  two surfaces.
+- A packaged desktop app (`src/electron/main.ts`, the `electron-packaging`
+  epic) — installable/downloadable builds for macOS (dmg), Windows (NSIS),
+  and Linux (AppImage + deb), unsigned for now, published to GitHub
+  Releases on a `v*` tag push. Electron's main process boots
+  `src/shell/server.ts` in-process (unmodified — see "Desktop shell + local
+  server" below) and points a `BrowserWindow` at its loopback URL; no
+  preload script, no IPC bridge — the web UI is unaware it's inside
+  Electron. A native launch-at-login toggle lives in Settings, backed by
+  `app.setLoginItemSettings`.
 - Search (FTS5-backed, with a LIKE-scan fallback) and interaction logging,
   reachable from the UI and the HTTP API.
 - No login, no logout, no in-app access control of any kind. See below.
@@ -50,7 +68,7 @@ repo self-contradictory for new contributors — hence this rewrite.
 ## Layers
 | Layer | Lives where | Contains |
 |---|---|---|
-| **Core (generic OSS)** | this repo, `src/` | types, SQLite store + FTS, SecretsAdapter, Google-sync adapter, desktop shell/server, wizard + UI, MCP server/tools |
+| **Core (generic OSS)** | this repo, `src/` | types, SQLite store + FTS, SecretsAdapter, Google-sync adapter, desktop shell/server, wizard + UI, MCP server/tools, CLI, Electron packaging |
 | **Your layer** | OS keychain + `~/.local/share/rolodex/` (outside the repo, gitignored) | resolved `ROLODEX_DB` path, your Google OAuth client credentials/token, your data |
 
 The core knows nothing about any specific user. Adding your credentials or
@@ -65,13 +83,17 @@ tracked in source.
 ## Desktop shell + local server (`src/shell/server.ts`)
 
 Chosen shape (saf-01): a local Node HTTP server hosting `Store` in-process,
-with an ordinary browser tab as the UI — not Electron, not Tauri. `Store`
-already runs as ordinary Node (it needs `node:sqlite`), so an ordinary Node
-process serving it needs no IPC bridge, no renderer sandboxing story, and no
-native-module rebuild risk. Electron/Tauri remain reasonable future upgrades
-if a truly native window (tray icon, offline-from-`file://`) is ever
-required; nothing here forecloses that since `Store` itself is untouched by
-this choice.
+with an ordinary browser tab as the UI. `Store` already runs as ordinary
+Node (it needs `node:sqlite`), so an ordinary Node process serving it needs
+no IPC bridge, no renderer sandboxing story, and no native-module rebuild
+risk. This file itself stays framework-agnostic — it's still exactly what
+`npm run shell` runs today, unmodified.
+
+The packaged desktop app (below) is Electron precisely *because* of this
+shape: Electron's main process IS Node, so it imports and boots this exact
+server in-process with zero changes here, no sidecar, no IPC. See
+"Packaged desktop app" below for the full reasoning (including why not
+Tauri) and what's actually built.
 
 Run it with `npm run shell`. It:
 - Binds to **127.0.0.1 only** — never `0.0.0.0`/all interfaces. This server
@@ -113,6 +135,75 @@ immediately rather than waiting out its 120s timeout. The same flow is
 reachable again later from Settings ("Reconnect Google") if a connection is
 ever revoked or expires, without rerunning the whole wizard.
 
+## Packaged desktop app (`src/electron/main.ts`, `electron-packaging` epic)
+
+Installable/downloadable builds — macOS (dmg), Windows (NSIS), Linux
+(AppImage + deb) — as a real alternative to `npm run shell`, not a
+replacement for it. Electron, not Tauri: Tauri's Rust core cannot reach
+`node:sqlite` directly and would need `src/shell/server.ts` bundled and
+spawned as a separate sidecar process; Electron's main process IS Node, so
+`main.ts` imports and boots that exact server in-process instead — no
+sidecar, no IPC bridge, no preload script. The web UI (`index.html`/
+`wizard.html`) is unaware it's running inside Electron at all; `main.ts` is
+the only file in this repo that imports `electron`.
+
+**Electron 43.4.0, verified not assumed.** `node:sqlite` is a Node *core*
+module, not an npm native addon, so the usual `asarUnpack` fix for native
+deps doesn't apply to it — what actually matters is which Node version
+Electron bundles (see the Node-version caveat below). Electron 43.4.0
+bundles Node 24.18.1, confirmed via `ELECTRON_RUN_AS_NODE=1 electron -e
+'...'` and a real `DatabaseSync` write/read inside the actual Electron
+binary before this version was committed to.
+
+Two platform-specific behaviors from the dev-server phase are handled at
+the Electron call site, not by changing their source: `server.ts`'s own
+"open the OS browser" step is suppressed (`ROLODEX_NO_OPEN=1`, the window
+replaces it), and the real Google OAuth consent screen's browser-open is
+redirected to Electron's own `shell.openExternal` via
+`connectGoogleAccount`'s already-injectable `openBrowser` option — which
+also fixes Windows/Linux for free, since the default opener
+(`google-oauth-flow.ts`) is Darwin-`open`-only and silently no-ops
+elsewhere.
+
+**Native launch-at-login**, not an external launchd/systemd/registry
+script: `GET/PUT /api/settings/autostart` on the shell server, backed by an
+injectable `{isSupported, getEnabled, setEnabled}` pair on
+`RolodexServerOptions` (same DI shape as `connectGoogleAccount`). Reports
+unsupported outside the packaged app (a plain dev server has no OS concept
+of autostart); `main.ts` injects the real implementation via
+`app.setLoginItemSettings`/`getLoginItemSettings`. A toggle in the Settings
+screen's Autostart section only renders when the route reports it's
+supported.
+
+**Packaging (`package.json`'s `build` key, electron-builder):** targets
+macOS dmg, Windows NSIS, Linux AppImage + deb. Icons committed under
+`build/` (generated from the app-icon epic's 1024px master via `iconutil`/
+PIL). **Explicitly unsigned** — `mac.identity: null`, set deliberately
+after discovering electron-builder auto-signs with whatever Apple
+Development identity it finds in the local keychain otherwise, which would
+silently differ between a local dev build and CI (which has no such
+identity) and contradict the "unsigned for now" decision. `asar: true`
+needs no `asarUnpack`, per the `node:sqlite` note above.
+
+**Release publishing (`.github/workflows/release.yml`):** new, tag-
+triggered (`v*`) — there was no release automation before this (version
+bumps and `git tag` have been fully manual). A 3-runner matrix
+(macos-latest/windows-latest/ubuntu-latest) each builds and publishes its
+own native target via `electron-builder --publish always`, no
+cross-compiling. electron-builder derives the expected tag from
+`package.json`'s version by default, matching the existing manual-tag
+convention — cutting a release is still "bump the version, tag `vX.Y.Z`,"
+this workflow just does the packaging + upload that didn't exist.
+
+**Verified for real**, beyond typecheck/tests: launched the actual
+asar-packaged, unsigned `.app` binary (not `electron .` dev mode) against a
+scratch `$HOME` and confirmed its in-process server booted and served the
+real wizard UI; round-tripped the autostart toggle through the real
+`app.setLoginItemSettings` call. Windows/Linux targets are configured but
+not build-verified on this (macOS) development machine — real per-platform
+verification happens the first time the release workflow actually runs on
+a pushed tag, one native CI runner per OS.
+
 ## Store (`src/lib/store.ts`)
 SQLite (`node:sqlite`, WAL) with an **FTS5** virtual table over
 name/org/what/angle/tags so search is real, not just a LIKE scan — except see
@@ -150,30 +241,45 @@ export function createSecretsAdapter(opts?: CreateSecretsAdapterOptions): Secret
 export function createInMemorySecretsAdapter(): SecretsAdapter; // fake, and the fallback target
 ```
 
-- **Real backend:** macOS Keychain via the `security` CLI
+**Two real backends ship**, chosen via `createSecretsAdapter({ backend: "keychain" | "portunus" })`
+(defaults to `"keychain"` for byte-identical behavior against every caller
+that predates the `backend` option) — the setup wizard's Secrets screen
+lets the user pick between them at install time, not just macOS Keychain:
+
+- **Keychain:** macOS Keychain via the `security` CLI
   (`add/find/delete-generic-password`), invoked through
   `child_process.execFile` with an argv array (never a shell string).
   Deliberately **not** `keytar` (archived/unmaintained) and not a compiled
   native module like `@napi-rs/keyring` (per-platform prebuilds are an
   install-time risk this factory needs to avoid) — `security` ships with
-  every macOS install and needs no dependency or compilation.
+  every macOS install and needs no dependency or compilation. Darwin-only —
+  `createSecretsAdapter()` falls back to the in-memory fake immediately on
+  any other platform (with a `console.warn`).
+- **Portunus:** `createPortunusSecretsAdapter()` shells out to the real
+  `portunus` CLI the same way (`execFile`, argv array, no shell string) —
+  no `process.platform` guard, since Portunus itself is a cross-platform
+  Python CLI rather than an OS-specific credential store. Whether Portunus
+  is actually installed and working on a given machine is checked at wizard
+  time (`isPortunusAvailable()`), and is outside this repo's control to
+  guarantee on Windows/Linux.
 - **Fake backend:** a plain in-memory `Map`, used by tests and as the
-  automatic fallback target.
-- `createSecretsAdapter()` auto-detects: non-Darwin platforms get the
-  in-memory fake immediately (with a `console.warn`); on Darwin, if the real
-  keychain backend throws on its first call (no `security` binary, sandboxed
-  environment, etc.) the whole adapter permanently swaps to the in-memory
-  fake for the rest of the process rather than crashing the app.
-- Errors thrown from the keychain `set()` path are deliberately sanitized
-  before they can reach a log line — `security`'s own error object embeds
-  the full invoked argv (including the plaintext secret) in `.message`/`.cmd`;
-  `secrets-adapter.ts`'s `sanitizeSetError()` strips that before anything
+  automatic fallback target for both real backends.
+- Either real backend, if it throws on its very first call (no `security`/
+  `portunus` binary, sandboxed environment, wrong platform, etc.), makes the
+  whole adapter permanently swap to the in-memory fake for the rest of the
+  process rather than crashing the app — `withInMemoryFallback()` wraps
+  both real backends identically, warning once with whichever backend
+  actually failed named in the message.
+- Errors thrown from either backend's `set()` path are deliberately
+  sanitized before they can reach a log line — the underlying CLI's own
+  error object can embed the full invoked argv (including the plaintext
+  secret) in `.message`/`.cmd`; `sanitizeSetError()` (keychain) and
+  `sanitizePortunusError()` (Portunus) both strip that before anything
   downstream (including the wizard's own error UI) can see it.
-- The interface boundary exists specifically so a future OSS contribution
-  (the owner has named a `Portunus` adapter — key injection from an
-  encrypted external store) can plug in without touching `Store`, the wizard,
-  or the UI. This epic ships exactly one real backend (OS keychain); no
-  second backend is implemented yet.
+- The interface boundary that made adding Portunus possible without
+  touching `Store`, the wizard's other screens, or the main UI is exactly
+  why it was scoped as "swap the adapter," not a rewrite — same pattern any
+  future third backend would follow.
 
 ## Google sync (`src/lib/google-sync.ts`)
 
@@ -184,7 +290,8 @@ implementation.
 ```ts
 export interface GoogleSync {
   pull(): Promise<Contact[]>;
-  push(c: Contact): Promise<{ resourceName: string }>; // stub — see Remaining Gaps
+  push(c: Contact): Promise<{ resourceName: string; etag?: string }>;
+  deleteContact(resourceName: string): Promise<void>;
 }
 export function createGoogleSync(opts?: CreateGoogleSyncOptions): GoogleSync;
 ```
@@ -198,15 +305,46 @@ export function createGoogleSync(opts?: CreateGoogleSyncOptions): GoogleSync;
    `people.connections.list`, mapping each `resourceName` to
    `Contact.googleResourceName` for idempotent re-sync.
 
-**One-shot pull only, today.** `POST /api/sync/google` on the shell server
-calls `pull()`, then merges each pulled contact with any existing local match
-(by `googleResourceName`, then email) before handing it to `Store.upsert()` —
-this merge (`mergeLocalOnlyFields()`) is what actually protects
+**Real two-way sync.** `POST /api/sync/google` on the shell server (and
+`rolodex_sync_google`'s `direction: "pull"`) calls `pull()`, then merges each
+pulled contact with any existing local match (by `googleResourceName`, then
+email) before handing it to `Store.upsert()` — this merge
+(`mergeLocalOnlyFields()`) is what actually protects
 verdict/angle/nextStep/tags/met/what/createdAt from being clobbered by a
 resync; `Store.upsert()` itself has no notion of "leave this column alone"
-and always writes every field it's given. `push()` remains an explicit stub
-(`throw new Error("not implemented")`) — two-way sync is out of scope for
-this epic.
+and always writes every field it's given.
+
+`push()` is real: `contactToPersonBody()` maps a `Contact` down to only the
+fields Google People actually has (name/org/role/email/phone — local-only
+fields are never sent), then either `people.createContact` (no
+`googleResourceName` yet) or `people.updateContact` (already linked), and the
+returned `resourceName`/`etag` are written back onto the local row.
+Conflict detection rides Google's own optimistic-concurrency mechanism: every
+pulled/pushed contact's `etag` is stored in `Contact.googleEtag`, and an
+`updateContact` call sends it back — if the contact changed on Google since
+the last pull, the People API responds `400 failedPrecondition` and `push()`
+turns that into a clear, contact-named error (`"<name>" changed on Google
+since your last sync — pull, then push again`) rather than silently
+overwriting the remote edit. A stale link (`updateContact` 404s — deleted on
+Google's side) falls back to `createContact` rather than treating the row as
+orphaned. `pushAllToGoogle()` (`src/lib/google-sync.ts`) drives this across
+every local contact, isolating each contact's failure into a per-contact
+`errors` array instead of aborting the whole batch — the shell server exposes
+this as its own explicit `POST /api/sync/google/push` action (a "Push to
+Google" button, separate from "Sync now"), and `rolodex_sync_google`'s
+`direction: "push"`/`"both"` call the same function.
+
+**Deletes are intentionally asymmetric.** `Store.delete()` plus
+`deleteContactEverywhere()` (`src/lib/google-sync.ts`) delete a contact
+locally, then best-effort delete it on Google too (a 404 there — already
+gone — is treated as success, not an error); a failure on the Google side
+does not roll back the local delete, it's surfaced to the caller instead
+(HTTP: `console.warn`; MCP: a `googleDeleteWarning` field in the response).
+The reverse never happens automatically: a contact deleted on Google's side
+is simply not returned by a future `pull()` — nothing removes it locally.
+Auto-propagating a remote delete into a silent local delete was judged too
+destructive for a personal contacts store (see the `google-two-way-sync`
+epic's design discussion for the reasoning).
 
 **Real OAuth exchange is built** (`src/lib/google-oauth-flow.ts`,
 `connectGoogleAccount()`) — see "First-run setup wizard" above for the full
@@ -217,16 +355,17 @@ reconnecting), not because the exchange doesn't exist.
 ## MCP surface (`src/mcp/server.ts`) — secondary, wired to the real logic
 
 Stdio MCP server exposing `rolodex_upsert`, `rolodex_search`,
-`rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`. Every
-tool is wired to the same `Store`/`GoogleSync` logic the standalone app
-uses — JSON-stringified responses, `isError: true` on any thrown error
-instead of crashing the stdio process, and `rolodex_sync_google`'s `push`
-direction returning a clear not-implemented response rather than a silent
-no-op (two-way sync is still a genuine gap, see below). This remains a
-secondary integration surface, not the primary way to use rolodex — the
-standalone app is that. Run it with `npm run dev`. If you use Claude Code,
-`.claude/skills/rolodex/SKILL.md` teaches an agent how to use these tools
-well.
+`rolodex_followups`, `rolodex_log_interaction`, `rolodex_sync_google`, and
+`rolodex_delete`. Every tool is wired to the same `Store`/`GoogleSync` logic
+the standalone app uses — JSON-stringified responses, `isError: true` on any
+thrown error instead of crashing the stdio process. `rolodex_sync_google`'s
+`direction: "pull" | "push" | "both"` is real two-way sync (see "Google
+sync" above); `rolodex_delete` is destructive and permanent, guarded in its
+tool description to only fire on an explicit, unambiguous user request. This
+remains a secondary integration surface, not the primary way to use
+rolodex — the standalone app is that. Run it with `npm run dev`. If you use
+Claude Code, `.claude/skills/rolodex/SKILL.md` teaches an agent how to use
+these tools well.
 
 ## Single-user, no in-app login — deliberate, not an oversight
 
@@ -272,43 +411,119 @@ normal filesystem permissions.
 ## Build-out status
 
 Done (across `standalone-app-foundation`, `followups-view`,
-`mcp-tool-bodies`, and `google-oauth-flow`):
+`mcp-tool-bodies`, `google-oauth-flow`, `electron-packaging`,
+`google-two-way-sync`, `settings-account-screen`,
+`ui-feedback-states`, and `ui-visual-cleanup`):
 - [x] Desktop shell + local server, bound to loopback, real `Store` wired in.
 - [x] `Store` bodies: `list`, `upsert`, `get`, `setVerdict`, `setNextStep`,
       `logInteraction`, `listInteractions`, `search` (FTS5 + LIKE fallback),
       `needsFollowUp` — with a "Needs follow-up" UI view and a configurable
       follow-up window/grace period.
-- [x] `SecretsAdapter`: interface + factory + macOS-keychain implementation +
-      in-memory fake, with automatic fallback and error sanitization.
+- [x] `SecretsAdapter`: interface + factory + **two** real backends
+      (macOS Keychain and Portunus, user-selectable in the wizard's Secrets
+      screen) + in-memory fake, with automatic fallback and error
+      sanitization for both.
 - [x] Five-screen first-run setup wizard, no login/logout anywhere.
 - [x] A real Google OAuth 2.0 consent flow (loopback IP address flow,
       `src/lib/google-oauth-flow.ts`), reachable from the wizard and from a
       "Reconnect Google" action in Settings, with a working Cancel button.
-- [x] One-shot Google Contacts pull, with local-only-fields-survive-sync
-      guarantee, and a refreshed token now persisted back to the keychain.
-- [x] All 5 MCP tools wired to the same real `Store`/`GoogleSync` logic.
+- [x] Real two-way Google Contacts sync (`google-two-way-sync` epic):
+      `push()`/`pushAllToGoogle()` (create-or-update, etag-based conflict
+      detection, per-contact error isolation), `Store.delete()` +
+      best-effort delete-on-Google, all wired through the shell UI ("Push to
+      Google" button), MCP (`rolodex_sync_google` push/both,
+      `rolodex_delete`), and the CLI — alongside the pre-existing pull, still
+      with the local-only-fields-survive-sync guarantee, and a refreshed
+      token persisted back to the keychain.
+- [x] All 6 MCP tools wired to the same real `Store`/`GoogleSync` logic.
+- [x] A third plain CLI surface (`rolodex <command>`) wrapping the same
+      handlers, for non-MCP tooling/scripts — including a fix for the
+      `isMainModule` symlink bug that made a global `npm link`/`npm i -g`
+      install of the CLI (or the MCP server) silently do nothing.
 - [x] Search (UI + API) and interaction logging (UI + API).
 - [x] Docs rewrite (this file + README.md) and CI.
+- [x] A packaged, installable Electron desktop app for macOS/Windows/Linux
+      (unsigned), native launch-at-login, and a tag-triggered CI release
+      workflow publishing to GitHub Releases (`electron-packaging` epic) —
+      see "Packaged desktop app" above.
+- [x] A pre-release security/correctness review (this section reflects its
+      output) — caught and fixed a critical bug where the packaged
+      Electron app bound its server to all network interfaces instead of
+      loopback-only, plus a missing single-instance lock and unhandled
+      boot-error path in the same file.
+- [x] A dedicated Settings screen (`#/settings`, `settings-account-screen`
+      epic) — a real route in the shell's own client-side router, not a
+      separate served page, replacing the old gear-icon popover entirely.
+      Consolidates Follow-up window, Appearance, Autostart, and Google
+      account status/reconnect (migrated as-is), plus two genuinely new
+      sections: **Database location** and **Secrets backend** (Keychain vs
+      Portunus), both previously wizard-only and unreachable after first
+      run. Neither can take effect live — `Store`/`secrets` are memoized
+      for the server process's lifetime — so both show a persistent
+      "restart to apply" notice on a successful change instead of implying
+      anything happened immediately. The Google section also gained a real
+      three-state status check (Not configured / Client configured, not
+      signed in yet / Signed in), replacing a bare Reconnect button with no
+      status at all.
+- [x] Comprehensive loading/error/toast UI states (`ui-feedback-states`
+      epic) — a shared toast component (`showToast(message, kind)`,
+      success/error/info, ~4s auto-dismiss + manual close, correct ARIA:
+      `role="alert"` for errors so they interrupt regardless of focus,
+      `role="status"` for success/info) for transient one-off events —
+      Sync/Push results, delete failure (replacing the app's one native
+      `alert()`), verdict/next-step save success. Standing state (form
+      validation, the Database/Secrets-backend "restart to apply" notes,
+      the Google account status line) stays inline by design — see the
+      epic's design discussion for the full toast-vs-inline split. Three
+      previously `console.error`-only failures (the needs-follow-up count
+      fetch, Autostart save, Secrets-backend save) now surface visibly.
+      The contact detail view and edit form gained real loading states
+      (previously showed nothing while their fetch was in flight). Fixed
+      a real bug where a failed verdict/next-step autosave rendered in
+      the *success* color (three near-duplicate status CSS classes
+      unified into one `.status-line` component), and a dead-code bug
+      where the "contact not found" banner was set then immediately
+      discarded by an unconditional `navigate()` on the very next line.
+- [x] UI styling/token cleanup (`ui-visual-cleanup` epic, paired with and
+      sequenced after `ui-feedback-states`) — `index.html` and
+      `wizard.html` (two self-contained files, no shared stylesheet)
+      now define the same named CSS custom-property superset; a
+      duplicated-in-both-files hardcoded disabled-button color and two
+      duplicated error-banner-background literals in `index.html`
+      replaced with tokens (`--disabled`, `--danger-bg`); an
+      `aria-label` audit across both files (found already-complete —
+      every icon-only control already had one); and a documented,
+      audited-compliant focus-management convention (leave focus alone
+      after a same-view action, with three named legitimate exceptions:
+      disclosure open/close, verdict-picker reselect, and
+      validation-failure refocus). Real `getComputedStyle` verification
+      against a live server confirmed every token swap renders
+      byte-identical to its prior hardcoded value.
 
 Remaining gaps:
-- [ ] Google `push()` / full two-way sync — pull-only today; the OAuth
-      exchange itself is real, `push()` remains an explicit stub.
-- [ ] Enrichment-on-add (public-info lookup to speed up capturing
-      org/role/what-they-do) — deferred; needs to reconcile with the
-      "no silent guesses" convention before it's designed.
-- [ ] A dedicated settings/account screen beyond the current "Reconnect
-      Google" + follow-up-window popover (e.g. changing `ROLODEX_DB` after
-      first run, re-running the wizard).
-- [ ] Portunus (or any second) `SecretsAdapter` backend — interface is open,
-      only one real implementation ships.
-- [ ] Cross-platform packaging/distribution — developed and verified on
-      macOS only so far (the OAuth flow's browser-opening step degrades to a
-      logged URL + manual open on non-Darwin, but is otherwise untested
-      there).
+- [ ] Code signing / notarization — explicitly deferred as part of the
+      `electron-packaging` epic's confirmed scope, not an oversight.
+      Unsigned installs show a Gatekeeper "unidentified developer" warning
+      on macOS (right-click → Open works around it) and a Windows
+      SmartScreen equivalent.
+- [ ] An auto-updater for the packaged app — a real product decision on its
+      own, not decided as part of `electron-packaging`.
+- [ ] Real per-platform verification of the Windows/Linux packaged builds —
+      configured and CI-wired, but only the macOS build has actually been
+      launched and smoke-tested so far (no cross-build tooling on the
+      development machine); this resolves the first time the release
+      workflow runs on a real pushed tag.
+- [ ] Enrichment-on-add as a *product feature* (a built-in public-info
+      lookup) is still deferred. What exists today is a skill-level
+      reconciliation instead: `.claude/skills/rolodex/SKILL.md` tells an
+      agent it MAY use its own web-search tool to deep-dive a person/company
+      on request, but must always propose sourced fields back to the user
+      for confirmation before `rolodex_upsert` — the "no silent guesses"
+      convention holds because the write step still requires a human yes,
+      not because enrichment doesn't happen. No new Store/MCP/CLI code
+      backs this; it's agent behavior on top of the existing tools.
 - [ ] Full at-rest database encryption — see "Single-user, no in-app login"
       above; not planned as an in-app feature.
-- [ ] Comprehensive loading/error/toast state coverage across the Contact UI
-      beyond each slice's basic error handling.
 - [ ] Pantheon plugin integration — a dormant, unwired stub exists (see
       [`docs/PANTHEON.md`](PANTHEON.md)) with no real wiring into either
       repo; explicitly deferred until Pantheon's own plugin system settles.
