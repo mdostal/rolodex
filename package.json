@@ -21,7 +21,10 @@
   "bugs": {
     "url": "https://github.com/mdostal/rolodex/issues"
   },
-  "author": "Mathew Dostal",
+  "author": {
+    "name": "Mathew Dostal",
+    "email": "contact@mdostal.com"
+  },
   "keywords": [
     "crm",
     "contacts",
