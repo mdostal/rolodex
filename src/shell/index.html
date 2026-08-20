@@ -654,6 +654,23 @@
       }
     }
 
+    // Shared by renderDetail() and renderForm() (edit mode) for an unknown
+    // or deleted contact id. Previously each site set this banner's content
+    // and then immediately called navigate("#/") on the next line —
+    // replacing #content before the banner could ever actually be seen, a
+    // dead-code bug (the "not found" message was written and instantly
+    // discarded, unseen, every time). Fixed by not auto-navigating at all:
+    // show the banner for real, with a working back-link, and let the user
+    // act on it.
+    function renderNotFound() {
+      setTopbar({
+        left: '<button class="back-link" id="back-link">&larr; Back to contacts</button>',
+        right: "",
+      });
+      document.getElementById("back-link").addEventListener("click", () => navigate("#/"));
+      content.innerHTML = '<p class="not-found-banner">Contact not found — it may have been removed.</p>';
+    }
+
     // ---- List view ----------------------------------------------------------
     async function renderList() {
       setTopbar({
@@ -1548,9 +1565,7 @@
       try {
         contact = await getContact(id);
       } catch (err) {
-        content.innerHTML =
-          '<p class="not-found-banner">Contact not found — it may have been removed.</p>';
-        navigate("#/");
+        renderNotFound();
         return;
       }
 
@@ -1907,8 +1922,7 @@
         try {
           existing = await getContact(id);
         } catch (err) {
-          content.innerHTML = '<p class="not-found-banner">Contact not found — it may have been removed.</p>';
-          navigate("#/");
+          renderNotFound();
           return;
         }
       }
