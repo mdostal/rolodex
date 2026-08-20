@@ -608,6 +608,31 @@
       region.appendChild(el);
     }
 
+    // ---- focus-management convention -----------------------------------
+    // Stated explicitly here (ui-visual-cleanup epic) so future sections
+    // follow one rule instead of re-deriving it each time — audited every
+    // existing .focus() call site against it first; all of them already
+    // comply, no behavior changed by writing this down.
+    //
+    // Default: after an action that keeps the user on the same view (a
+    // save that doesn't open/close anything or fail validation), don't
+    // forcibly move focus — leave it wherever the user's own interaction
+    // put it. Follow-up/Appearance/Database/Secrets-backend saves all
+    // already match this by doing nothing.
+    //
+    // Three real exceptions, all already in use, all legitimate:
+    //   1. A disclosure opens or closes — focus moves into the revealed
+    //      control (Database's "Change…" panel, the log-interaction
+    //      form's first field) or back to the control that closed it
+    //      (the log-interaction toggle button).
+    //   2. Refocusing a just-selected option matters for immediate
+    //      re-selection (the verdict picker, so arrow keys keep working
+    //      right after a click).
+    //   3. Validation failure — direct the user to the field that needs
+    //      fixing (the contact form's required Name field, the Follow-up
+    //      settings form's window/grace inputs).
+    // Everything else is the default: no forced focus move.
+
     // ---- router -----------------------------------------------------------
     function parseRoute() {
       const hash = location.hash.replace(/^#/, "") || "/";
