@@ -407,8 +407,8 @@ normal filesystem permissions.
 
 Done (across `standalone-app-foundation`, `followups-view`,
 `mcp-tool-bodies`, `google-oauth-flow`, `electron-packaging`,
-`google-two-way-sync`, `settings-account-screen`, and
-`ui-feedback-states`):
+`google-two-way-sync`, `settings-account-screen`,
+`ui-feedback-states`, and `ui-visual-cleanup`):
 - [x] Desktop shell + local server, bound to loopback, real `Store` wired in.
 - [x] `Store` bodies: `list`, `upsert`, `get`, `setVerdict`, `setNextStep`,
       `logInteraction`, `listInteractions`, `search` (FTS5 + LIKE fallback),
@@ -479,6 +479,21 @@ Done (across `standalone-app-foundation`, `followups-view`,
       unified into one `.status-line` component), and a dead-code bug
       where the "contact not found" banner was set then immediately
       discarded by an unconditional `navigate()` on the very next line.
+- [x] UI styling/token cleanup (`ui-visual-cleanup` epic, paired with and
+      sequenced after `ui-feedback-states`) — `index.html` and
+      `wizard.html` (two self-contained files, no shared stylesheet)
+      now define the same named CSS custom-property superset; a
+      duplicated-in-both-files hardcoded disabled-button color and two
+      duplicated error-banner-background literals in `index.html`
+      replaced with tokens (`--disabled`, `--danger-bg`); an
+      `aria-label` audit across both files (found already-complete —
+      every icon-only control already had one); and a documented,
+      audited-compliant focus-management convention (leave focus alone
+      after a same-view action, with three named legitimate exceptions:
+      disclosure open/close, verdict-picker reselect, and
+      validation-failure refocus). Real `getComputedStyle` verification
+      against a live server confirmed every token swap renders
+      byte-identical to its prior hardcoded value.
 
 Remaining gaps:
 - [ ] Code signing / notarization — explicitly deferred as part of the
