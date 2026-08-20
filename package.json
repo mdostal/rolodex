@@ -49,7 +49,7 @@
     "dev": "cross-env NODE_OPTIONS=--experimental-sqlite tsx src/mcp/server.ts",
     "cli": "cross-env NODE_OPTIONS=--experimental-sqlite tsx src/cli/index.ts",
     "shell": "cross-env NODE_OPTIONS=--experimental-sqlite tsx src/shell/server.ts",
-    "shell:build": "tsc -p tsconfig.json && cp src/shell/index.html dist/shell/index.html && cp src/shell/wizard.html dist/shell/wizard.html && mkdir -p dist/shell/assets && cp -r src/shell/assets/. dist/shell/assets/",
+    "shell:build": "tsc -p tsconfig.json && shx cp src/shell/index.html dist/shell/index.html && shx cp src/shell/wizard.html dist/shell/wizard.html && shx mkdir -p dist/shell/assets && shx cp -r src/shell/assets/* dist/shell/assets",
     "electron": "npm run shell:build && electron .",
     "electron:package": "npm run shell:build && electron-builder --publish=never",
     "typecheck": "tsc --noEmit",
@@ -107,6 +107,7 @@
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
     "jsdom": "^28.1.0",
+    "shx": "^0.4.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^3.2.4"
