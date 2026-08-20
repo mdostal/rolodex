@@ -27,12 +27,16 @@ isn't the primary way to use rolodex.
   period).
 - A pluggable `SecretsAdapter` (`src/lib/secrets-adapter.ts`) backed by the
   macOS keychain, used by the wizard and by Google sync.
-- A one-shot Google Contacts pull (`src/lib/google-sync.ts`), connected
-  through a real OAuth 2.0 consent flow (`src/lib/google-oauth-flow.ts`) run
-  from the setup wizard or re-triggered from Settings, that seeds the
-  rolodex from the owner's Google Contacts, with local-only fields preserved
-  across the merge.
-- All 5 MCP tools (`src/mcp/server.ts`) wired to that same real `Store`/
+- Real two-way Google Contacts sync (`src/lib/google-sync.ts`) — pull and
+  push, connected through a real OAuth 2.0 consent flow
+  (`src/lib/google-oauth-flow.ts`) run from the setup wizard or
+  re-triggered from Settings. Pull seeds/refreshes the rolodex from the
+  owner's Google Contacts with local-only fields preserved across the
+  merge; push creates/updates the owner's Google Contacts from local
+  changes, with etag-based conflict detection so a contact that changed on
+  Google since the last sync is reported clearly rather than silently
+  overwritten.
+- All 6 MCP tools (`src/mcp/server.ts`) wired to that same real `Store`/
   `GoogleSync` logic.
 - A third, plain CLI surface (`src/cli/index.ts`, `rolodex <command>`) for
   non-MCP tooling/scripts — a thin argv wrapper around the exact same
@@ -168,7 +172,8 @@ injectable `{isSupported, getEnabled, setEnabled}` pair on
 unsupported outside the packaged app (a plain dev server has no OS concept
 of autostart); `main.ts` injects the real implementation via
 `app.setLoginItemSettings`/`getLoginItemSettings`. A toggle in the Settings
-popover only renders when the route reports it's supported.
+screen's Autostart section only renders when the route reports it's
+supported.
 
 **Packaging (`package.json`'s `build` key, electron-builder):** targets
 macOS dmg, Windows NSIS, Linux AppImage + deb. Icons committed under
