@@ -1539,6 +1539,11 @@
       });
       document.getElementById("back-link").addEventListener("click", () => navigate("#/"));
 
+      // Shown immediately, before the fetch — without this, a slow load
+      // just displays whatever the previous view was until getContact()
+      // resolves (flashes blank/stale, not "loading").
+      content.innerHTML = '<div class="status-line"><span class="spinner" aria-hidden="true"></span> Loading…</div>';
+
       let contact;
       try {
         contact = await getContact(id);
@@ -1894,6 +1899,11 @@
     async function renderForm(mode, id) {
       let existing = null;
       if (mode === "edit") {
+        // Shown immediately, before the fetch — same reasoning as
+        // renderDetail()'s loading state: without this, a slow load just
+        // displays whatever the previous view was until getContact()
+        // resolves.
+        content.innerHTML = '<div class="status-line"><span class="spinner" aria-hidden="true"></span> Loading…</div>';
         try {
           existing = await getContact(id);
         } catch (err) {
