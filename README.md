@@ -104,8 +104,8 @@ decision, not a gap.
   vs Portunus, when available) all live in one place, reachable any time
   from the gear icon — not just during first-run setup.
 - **Real loading/error feedback** — a shared toast for one-off events
-  (sync/push results, delete failures, save confirmations), real loading
-  states on every view, and no silently-swallowed failures.
+  (sync/push results, delete failures, save confirmations) and real
+  loading states on every view.
 
 ### Relationship model
 Each contact carries: `org`, `role`, how you `met` them, `what` they do, the
