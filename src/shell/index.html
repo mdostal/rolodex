@@ -938,6 +938,7 @@
           getContacts(),
           getNeedsFollowUp().catch((err) => {
             console.error(err);
+            showToast("Couldn't load follow-up count: " + err.message, "error");
             return null;
           }),
         ]);
@@ -1120,6 +1121,7 @@
           // registered with the OS.
           toggle.checked = !desired;
           console.error(err);
+          showToast("Couldn't save: " + err.message, "error");
         } finally {
           toggle.disabled = false;
         }
@@ -1365,6 +1367,7 @@
             current = prev;
             setPressed(current);
             console.error(err);
+            showToast("Couldn't save: " + err.message, "error");
           }
         });
       });
