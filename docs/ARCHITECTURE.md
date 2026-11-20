@@ -389,6 +389,32 @@ file at `~/.local/share/rolodex/rolodex.db` (or wherever `ROLODEX_DB`/the
 wizard resolved it to) is plain, unencrypted SQLite, protected only by
 normal filesystem permissions.
 
+### Scopes, and where service mode supersedes this (contacts-memory cm-02)
+
+Every card now belongs to exactly one **scope**, written `kind:id`
+(`src/lib/scope.ts`; kinds are `client` and `user`, an extensible enum that
+mirrors, but never imports, the Pantheon contacts contract). Every `Store`
+method takes a `ScopeSet` `{ read, write? }` and enforces it in SQL through
+one helper, `scopeClause()`: reads see only `read` (plus `write`), writes
+outside `write` throw `ScopeDenied`, interactions inherit their card's scope,
+settings (including Google sync state) are keyed per scope, and cards never
+move between scopes.
+
+The standalone app described above is unchanged in behaviour: the shell,
+MCP server, CLI and Electron all bind the Store through `localStore()`
+(`src/lib/local-scope.ts`), i.e. `{ read: [user:local], write: user:local }`,
+and opening a v0.5 database migrates every existing row into `user:local`.
+The single-user model above therefore still holds for the standalone app.
+
+**Service mode supersedes "single-user" for that mode only (C1).** When
+rolodex runs as a service behind a host (Pantheon), one database holds many
+books and the host passes a per-request `ScopeSet`; isolation between those
+books is the Store's scope enforcement, not the OS account. Authentication
+and deciding which scopes a caller may hold remain the host's job — rolodex
+still has no login of its own. Known limitation: the Google OAuth token is
+still one instance-wide `SecretsAdapter` key; only the connected account and
+sync timestamps are per scope.
+
 ## Data-integrity and security posture (non-negotiable)
 1. **You own the data** — local SQLite, exportable, no lock-in.
 2. **OAuth secrets only ever go through `SecretsAdapter`** — the OS keychain

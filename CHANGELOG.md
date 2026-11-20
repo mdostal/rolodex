@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Scoped Store (contacts-memory cm-02).** Every card belongs to one scope (`client:<id>` or `user:<id>`); every `Store` method takes a `ScopeSet` `{read, write?}` enforced in SQL, with `ScopeDenied` for writes outside the write scope. Existing databases migrate in place (idempotently) with every row in `user:local`, which is the only scope the standalone shell, MCP server, CLI and Electron app use. Settings and Google sync state are per scope. Dedupe now matches normalized email and phone digits, within the write scope only.
+
 ## [0.5.0] - 2026-08-20
 
 ### Changed
