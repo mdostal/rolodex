@@ -1,0 +1,32 @@
+name: contacts-memory
+title: "Rolodex as Pantheon's contacts memory: scoped cards, cross-scope links, the `contacts` slot"
+description: |
+  Rolodex becomes the default implementation of a new generic `contacts` slot. Cards live in
+  `client:*` or `user:*` scopes enforced in SQL; links cross scopes and are visible only when both
+  ends are. Agents reach it through core-api with their Multica task token binding them to one
+  client (gated by the cm-00 spike). The standalone desktop app keeps working unchanged.
+target_codebase: /pantheon/code/rolodex
+also_touches: [mdostal/pantheon-v2, mdostal/janus]
+methodology: tdd
+version_bump: minor
+sidecar_retention: committed
+git_flow:
+  base_branch: dev
+  branch_strategy: per-story
+planning_team:
+  matched_tags: [security, data-model, cross-repo, ui]
+  roster: [researcher, technical-writer, tpm-grill, architect]
+  confidence: medium
+  notes: "Planned orchestrator-local on Opus (fable unavailable); grill run by an independent subagent, round 1 unresolved_count 25, all answered in design-discussion revision 1."
+source: "operator, 2026-11-20: rolodex as a solid plugin, its own memory like mnemosyne, purely contacts, workspace/user scoped, with connections"
+stories:
+  - {id: cm-00-task-token-binding-spike, title: "Spike: bind agent requests to a client via the Multica task token", complexity: medium, repo: mdostal/pantheon-v2, depends_on: []}
+  - {id: cm-01-contacts-slot-contract, title: "Host: generic contacts slot + contract", complexity: medium, repo: mdostal/pantheon-v2, depends_on: []}
+  - {id: cm-02-store-scopes, title: "Rolodex Store: scopes enforced in SQL", complexity: high, repo: mdostal/rolodex, depends_on: []}
+  - {id: cm-03-store-links, title: "Rolodex Store: cross-scope links", complexity: high, repo: mdostal/rolodex, depends_on: [cm-02-store-scopes]}
+  - {id: cm-04-rolodex-serve, title: "Rolodex serve: signed HTTP implementing the contract", complexity: high, repo: mdostal/rolodex, depends_on: [cm-01-contacts-slot-contract, cm-03-store-links]}
+  - {id: cm-05-contacts-facade-and-routes, title: "Host: contacts facade + routes + MCP", complexity: high, repo: mdostal/pantheon-v2, depends_on: [cm-00-task-token-binding-spike, cm-01-contacts-slot-contract, cm-04-rolodex-serve]}
+  - {id: cm-06-compose-deploy, title: "Host: compose on a private network, slot selected", complexity: medium, repo: mdostal/pantheon-v2, depends_on: [cm-04-rolodex-serve, cm-05-contacts-facade-and-routes]}
+  - {id: cm-07-contacts-events, title: "Host: contacts:* events", complexity: low, repo: mdostal/pantheon-v2, depends_on: [cm-05-contacts-facade-and-routes]}
+  - {id: cm-08-janus-contacts-card, title: "Janus: Contacts card, focus view, needs-you", complexity: high, repo: mdostal/janus, depends_on: [cm-05-contacts-facade-and-routes, cm-07-contacts-events]}
+  - {id: cm-09-live-verify, title: "Live verification on dragon", complexity: medium, repo: mdostal/pantheon-v2, depends_on: [cm-06-compose-deploy, cm-07-contacts-events, cm-08-janus-contacts-card]}

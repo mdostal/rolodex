@@ -1,0 +1,34 @@
+id: cm-08-janus-contacts-card
+epic: contacts-memory
+title: "Janus shell: Contacts card in Business, focus view with cross-scope links, follow-ups in Needs you"
+status: pending
+complexity: high
+methodology: tdd
+repo: mdostal/janus
+depends_on: [cm-05-contacts-facade-and-routes, cm-07-contacts-events]
+description: |
+  Business-hub requirement BIZ-10 (pantheon-v2 .pHive/epics/pantheon-vision-blueprint/docs/
+  requirements/business-hub.md): one card, one focus view, one event list per tool, same needs-you
+  queue. Build it in the rebuilt Janus shell (React 19 + shadcn on Janus tokens, janus repo `shell/`)
+  from core-api's routes with the operator session. No proxied Rolodex UI.
+  - Card: contacts per verdict, follow-ups due, last sync per bound scope (POST /api/contacts/summary).
+  - Focus view: search; scope filter (client:* and user:operator chips); contact detail with
+    interactions and its links grouped by predicate, each linked card showing its scope; candidates
+    list with an operator "same person" confirm (POST /api/contacts/link same_as). Confirm is a
+    changeset row, per the shell's rule 1.
+  - Event list: contacts:* from the SSE stream; each line's text fetched via POST /api/contacts/get.
+  - Follow-ups due appear as items in the one Needs-you queue.
+  - Fixture data in previews and tests is invented; no real names (house rule).
+acceptance_criteria:
+  - "Given the slot is active, then the Business area shows the Contacts card with the three numbers."
+  - "Given a contact with a same_as link to another scope, then the focus view shows the linked card with its scope label."
+  - "Given a contacts:upserted event, then the event list shows a line within 2 s without a reload."
+  - "Given 0 axe violations and the shell's audit, then the story's preview harness passes at 1600x900 and 390x844, light and dark."
+steps:
+  - {id: research, agent: researcher, description: "Read the shell's Business area, panels and changeset patterns."}
+  - {id: ui-design, agent: ui-designer, delegates_to: design, depends_on: [research], description: "Delegate to /design for wireframes."}
+  - {id: test-spec, agent: tester, depends_on: [ui-design], description: "Failing component/e2e tests against a fake core-api."}
+  - {id: implement, agent: developer, depends_on: [test-spec], description: "Card, focus view, event list, needs-you items."}
+  - {id: review, agent: reviewer, depends_on: [implement], description: "Design review + audit."}
+  - {id: integrate, agent: developer, depends_on: [review], description: "PR to dev with preview stills."}
+metric: {applies: true, name: contacts.followups_actioned_7d, direction: up, unit: count, baseline: 0, target: 5, window: "first 14 days after deploy", source: {kind: events, ref: "contacts:interaction-logged on cards that were due"}, verify_at: "2026-12-15T00:00:00Z", owner: reviewer}

@@ -1,0 +1,48 @@
+id: cm-01-contacts-slot-contract
+epic: contacts-memory
+title: "Host: add the generic `contacts` slot and its contract (opt-in, 503 until selected)"
+status: pending
+complexity: medium
+methodology: tdd
+repo: mdostal/pantheon-v2
+depends_on: []
+description: |
+  Pantheon forbids god-specific code in the host (.pHive/CONTEXT.md hard exclusions), so Rolodex
+  enters as the default implementation of a new generic slot, the way Flayr fills
+  `content-publisher`. The HOST defines the contract first; Rolodex implements it (grill P1).
+
+  Build:
+  - contracts/l2/slots/contacts.ts: zod schemas for Scope (`{kind: "client"|"user", id}` written
+    `kind:id`), ScopeSet `{read: Scope[], write?: Scope}`, Contact, Interaction, Link
+    (predicate enum same_as|knows|introduced|works_at|reports_to|colleague; `assertedIn` scope;
+    `to` contact id or `toOrg`), and the request/response of each operation:
+    search, get, connections (depth<=2), candidates, followups, upsert, log, link, unlink, delete,
+    summary (counts per verdict, follow-ups due, last sync per bound scope).
+  - contracts/l2/slots/catalog.ts: slot `contacts`, default_implementation "rolodex", max_active 1,
+    loaded only when PANTHEON_CONTACTS=rolodex or pantheon.plugins.yaml `slots:` selects it
+    (content-publisher precedent, catalog.ts:138-148). Until then /api/contacts/* answers 503.
+  - Every place a slot name is enumerated (grill C3): the plugin manifest schema enum, manifest.py,
+    and the two pinned slot tests. Find them with `grep -rn content-publisher` and update all.
+  No routes yet (cm-05). No Rolodex-named host code.
+acceptance_criteria:
+  - "Given the catalog, when the slot list is read, then `contacts` is present with default_implementation rolodex and is not active unless selected."
+  - "Given the contract module, then every operation has a request and response schema and the tests round-trip a valid and reject an invalid example of each."
+  - "Given `npm run verify`, then it passes, including the slot-enumeration tests."
+steps:
+  - {id: research, agent: researcher, description: "Map every file that enumerates slot names (grep content-publisher)."}
+  - {id: test-spec, agent: tester, depends_on: [research], description: "Failing tests for the contract schemas and the catalog entry."}
+  - {id: implement, agent: developer, depends_on: [test-spec], description: "Contract + catalog + enumerations."}
+  - {id: review, agent: reviewer, depends_on: [implement], description: "Check no rolodex-named host code and opt-in loading."}
+  - {id: integrate, agent: developer, depends_on: [review], description: "PR to dev."}
+code_examples:
+  - title: Existing slot entry to mirror
+    file: contracts/l2/slots/catalog.ts
+    snippet: |
+      "content-publisher": {
+        name: "content-publisher",
+        contract: "contracts/l2/slots/content-publisher.ts",
+        default_implementation: "flayr",
+        max_active: 1,
+        external_implementations: [],
+      },
+metric: {applies: false, justification: "Contract and catalog plumbing with no runtime surface until cm-05 serves routes."}

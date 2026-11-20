@@ -1,0 +1,27 @@
+id: cm-07-contacts-events
+epic: contacts-memory
+title: "Host: core-api emits contacts:* bus events after its own writes (ids only)"
+status: pending
+complexity: low
+methodology: tdd
+repo: mdostal/pantheon-v2
+depends_on: [cm-05-contacts-facade-and-routes]
+description: |
+  core-api is the only writer to Rolodex, so it emits the events itself after a successful write;
+  Rolodex never calls core-api and core's webhook type list stays unchanged (grill H7).
+  - Events: contacts:upserted, contacts:interaction-logged, contacts:linked, contacts:deleted.
+  - Payload: {contact_id, kind, at} only. No scope id, name, email or note, because GET /api/events
+    is unguarded (grill H7, U3). The shell renders text by calling the guarded
+    POST /api/contacts/get with the operator session.
+  - Follow-ups due are NOT pushed (no polling in this ecosystem); they come from
+    POST /api/contacts/followups when the hub card or needs-you list is read.
+acceptance_criteria:
+  - "Given an upsert through /api/contacts/upsert, then one contacts:upserted event is on the bus and the SSE stream."
+  - "Given any contacts event, then its payload has only contact_id, kind and at."
+  - "Given a refused (403) write, then no event is emitted."
+steps:
+  - {id: test-spec, agent: tester, description: "Failing tests on emitted events and payload shape."}
+  - {id: implement, agent: developer, depends_on: [test-spec], description: "Emit after success in core/api/contacts.ts."}
+  - {id: review, agent: reviewer, depends_on: [implement], description: "No PII in payloads."}
+  - {id: integrate, agent: developer, depends_on: [review], description: "PR to dev."}
+metric: {applies: false, justification: "Event plumbing consumed by the hub card story; verified by payload tests."}

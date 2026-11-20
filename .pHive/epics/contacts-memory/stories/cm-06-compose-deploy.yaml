@@ -1,0 +1,38 @@
+id: cm-06-compose-deploy
+epic: contacts-memory
+title: "Host: run Rolodex as the contacts slot on a private network, token via Portunus, slot selected"
+status: pending
+complexity: medium
+methodology: classic
+repo: mdostal/pantheon-v2
+depends_on: [cm-04-rolodex-serve, cm-05-contacts-facade-and-routes]
+description: |
+  - docker-compose.yml: service `rolodex` built from the rolodex checkout (plugins/rolodex, pinned
+    like the other god checkouts) with its Dockerfile; volume `rolodex-data:/data`; secrets volume
+    `/pantheon-secrets/rolodex` mounted ONLY into rolodex, core-api and portunus (FCT-D1 pattern);
+    network `contacts` (internal: true) joined only by rolodex and core-api. No published port,
+    not on default or pantheon_agents (grill H4). Healthcheck on /v1/health. read_only rootfs.
+  - config/pantheon-callers.yaml: an inject-only entry for the rolodex secrets dir with the selector
+    provider=pantheon,kind=service-token,service=rolodex.
+  - plugins.manifest.yaml: kind god, slot contacts, compose_services [rolodex]. pantheon.gods.yaml
+    entry. pantheon.plugins.yaml `slots: {contacts: {active: [rolodex]}}`. NO web-plugin proxy entry
+    (grill U4: the focus view is a Janus shell view, cm-08).
+  - core-api env CONTACTS_URL=http://rolodex:4180.
+  - docs/RUNBOOK.md: vault the token (`portunus drop --tags provider=pantheon,kind=service-token,
+    service=rolodex`), build with `podman build` (no buildx on dragon), `docker compose up -d
+    --no-deps --no-build rolodex`, then recreate core-api.
+acceptance_criteria:
+  - "Given the stack is up, when another service on default or pantheon_agents tries http://rolodex:4180, then it cannot resolve or connect."
+  - "Given core-api, when it calls /v1/health, then 200."
+  - "Given npm run verify, then compose/manifest/caller tests pass."
+steps:
+  - {id: implement, agent: developer, description: "Compose, manifest, gods, plugins slots, callers inject entry, runbook."}
+  - {id: test, agent: tester, depends_on: [implement], description: "compose config validates; manifest and caller tests pass."}
+  - {id: review, agent: reviewer, depends_on: [test], description: "Network membership is exactly rolodex + core-api."}
+  - {id: integrate, agent: developer, depends_on: [review], description: "PR to dev; the operator deploys per the runbook."}
+context:
+  codebase: /pantheon/code/pantheon-v2
+  key_files:
+    - {path: docker-compose.yml, purpose: "mnemosyne service block (~1500-1590) is the closest template"}
+    - {path: plugins.manifest.yaml, purpose: "mnemosyne entry 141-156"}
+metric: {applies: false, justification: "Deployment wiring; verified live in cm-09."}

@@ -1,0 +1,41 @@
+id: cm-03-store-links
+epic: contacts-memory
+title: "Rolodex Store: links between cards, across scopes, visible only when both ends are"
+status: pending
+complexity: high
+methodology: tdd
+repo: mdostal/rolodex
+depends_on: [cm-02-store-scopes]
+description: |
+  Connections are the point: "this card in user:operator is the same person as that card in
+  client:firefly-events", "A introduced B", "A works at Org X".
+
+  - Table links(id, fromContactId, toContactId NULL, toOrg NULL, predicate, note, assertedInKind,
+    assertedInId, createdAt, createdBy). predicate in same_as|knows|introduced|works_at|reports_to|
+    colleague. toOrg is a normalized org name (lower, trimmed, collapsed whitespace).
+  - Visibility: a link is returned only if the caller can read assertedIn AND both endpoint cards'
+    scopes. Otherwise it is OMITTED: no stub, no count, no "hidden" marker.
+  - link(): needs write on assertedIn and read on both endpoints.
+  - connections(contactId, depth<=2): BFS over visible links only; never traverse through an
+    invisible card.
+  - candidates(contactId): possible same_as matches by normalized email/phone or name+org, drawn
+    only from readable scopes, excluding pairs already linked. Never creates links.
+  - Deleting a card deletes every link touching it, wherever asserted (H9).
+  - Standalone: works within user:local; the standalone UI can show links later (not this story).
+acceptance_criteria:
+  - "Given a link asserted in user:operator between a user:operator card and a client:a card, when a caller reads [client:a] only, then the link and the user:operator card are absent from get, connections and candidates."
+  - "Given depth-2 connections A->B->C where B is unreadable, then C is not returned."
+  - "Given a card is deleted, then no link references it."
+  - "Given property tests over random scopes/links, then no visible result references an unreadable card (>=200 cases)."
+steps:
+  - {id: test-spec, agent: tester, description: "Failing visibility tests, both directions and depth 2."}
+  - {id: implement, agent: developer, depends_on: [test-spec], description: "Schema, link/unlink, connections, candidates."}
+  - {id: review, agent: reviewer, depends_on: [implement], description: "Look for any existence leak (counts, errors that differ for unreadable vs missing)."}
+  - {id: integrate, agent: developer, depends_on: [review], description: "PR to dev."}
+context:
+  codebase: /pantheon/code/rolodex
+  key_files:
+    - {path: src/lib/store.ts, purpose: "add links + use scopeClause from cm-02"}
+metric: {applies: false, justification: "Store capability verified by visibility property tests; no observable product number yet."}
+risks:
+  - {severity: high, description: "Error messages differ for 'not found' vs 'not readable', leaking existence.", mitigation: "Both return the same NotFound."}
