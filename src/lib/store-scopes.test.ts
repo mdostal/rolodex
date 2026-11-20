@@ -410,5 +410,6 @@ describe("property: no method returns or mutates a row outside the ScopeSet", ()
     expect(checkedOps).toBe(CASES * 8);
     expect(denied).toBeGreaterThan(50);
     expect(denied).toBeLessThan(checkedOps);
-  });
+    // 250 cases each open a real SQLite file: ~2s locally, ~9s on CI runners.
+  }, 60_000);
 });
