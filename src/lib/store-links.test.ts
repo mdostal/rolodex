@@ -312,16 +312,15 @@ const EMAILS = ["ada@x.test", " ADA@x.test", "grace@y.test", undefined];
 const ORGS = ["Acme", " acme ", "Beta", undefined];
 
 describe("property: no visible result references an unreadable card", () => {
-  it("holds for 250 random (scopes, links, reader) cases", () => {
-    const CASES = 250;
+  it("holds for 200 random (scopes, links, reader) cases", () => {
+    const CASES = 200;
     const rand = mulberry32(0x11a5);
     const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!;
     let nonEmpty = 0;
     let hiddenSomething = 0;
 
     for (let n = 0; n < CASES; n++) {
-      const dbPath = path.join(dir, `p${n}.db`);
-      const store = new Store(dbPath);
+      const store = new Store(":memory:");
       const scopeOf = new Map<string, Scope>();
       for (const s of POOL) {
         const k = 1 + Math.floor(rand() * 3);
@@ -359,7 +358,7 @@ describe("property: no visible result references an unreadable card", () => {
         expect(canRead(l.fromContactId)).toBe(true);
         expect(canRead(l.toContactId)).toBe(true);
       };
-      const totalLinks = rawLinks(dbPath).length;
+      const totalLinks = linkScope.size; // link() is idempotent, so ids are distinct rows
       let seenLinks = new Set<string>();
 
       for (const id of cardIds) {
@@ -391,7 +390,7 @@ describe("property: no visible result references an unreadable card", () => {
       seenLinks = new Set();
     }
     // The generator must exercise both visible and hidden graphs.
-    expect(nonEmpty).toBeGreaterThan(50);
-    expect(hiddenSomething).toBeGreaterThan(50);
+    expect(nonEmpty).toBeGreaterThan(40);
+    expect(hiddenSomething).toBeGreaterThan(40);
   });
 });

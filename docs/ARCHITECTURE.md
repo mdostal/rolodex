@@ -415,6 +415,28 @@ still has no login of its own. Known limitation: the Google OAuth token is
 still one instance-wide `SecretsAdapter` key; only the connected account and
 sync timestamps are per scope.
 
+### Links between cards (contacts-memory cm-03)
+
+Cards connect through a `links` table: `{from, to | toOrg, predicate, note,
+assertedIn}`, with `predicate` one of `same_as`, `knows`, `introduced`,
+`works_at`, `reports_to`, `colleague` (`toOrg`, a normalized org name, only
+for `works_at`). A link may cross scopes; it is recorded in the scope it was
+asserted in (the caller's write scope), and asserting one needs read on both
+endpoint cards.
+
+**A link is visible only when the caller can read `assertedIn` and both
+endpoint cards' scopes.** Otherwise it is omitted — no stub, no count, no
+"hidden" marker. All link reads go through one Store helper that applies
+the three conditions in SQL (`scopeClause()` again, pointed at the link's
+`assertedInKind`/`assertedInId` columns). `connections(depth ≤ 2)` walks
+only visible links, so it can never pass through an unreadable card;
+`candidates()` suggests possible `same_as` matches (normalized email, phone,
+or name+org) from readable scopes only and never creates links. An endpoint
+that is missing and one that is unreadable fail identically (`NotFound`,
+same message). Deleting a card deletes every link touching it, wherever the
+link was asserted (H9). `toOrg` strings are unscoped by construction: an org
+name typed in one scope is the same string everywhere.
+
 ## Data-integrity and security posture (non-negotiable)
 1. **You own the data** — local SQLite, exportable, no lock-in.
 2. **OAuth secrets only ever go through `SecretsAdapter`** — the OS keychain

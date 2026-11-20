@@ -5,6 +5,7 @@
 ### Added
 
 - **Scoped Store (contacts-memory cm-02).** Every card belongs to one scope (`client:<id>` or `user:<id>`); every `Store` method takes a `ScopeSet` `{read, write?}` enforced in SQL, with `ScopeDenied` for writes outside the write scope. Existing databases migrate in place (idempotently) with every row in `user:local`, which is the only scope the standalone shell, MCP server, CLI and Electron app use. Settings and Google sync state are per scope. Dedupe now matches normalized email and phone digits, within the write scope only.
+- **Links between cards (contacts-memory cm-03).** `Store.link()/unlink()/links()/connections()/candidates()` connect cards (or a card and an org) across scopes with `same_as`, `knows`, `introduced`, `works_at`, `reports_to` or `colleague`. A link is visible only when the caller can read the scope it was asserted in and both endpoint cards; otherwise it is omitted entirely. `connections` walks visible links up to depth 2; `candidates` suggests possible `same_as` matches from readable scopes without creating links. Deleting a card deletes every link touching it. Not yet exposed in the standalone UI, MCP or CLI.
 
 ## [0.5.0] - 2026-08-20
 
