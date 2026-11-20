@@ -1,0 +1,57 @@
+id: cm-02-store-scopes
+epic: contacts-memory
+title: "Rolodex Store: every card belongs to one scope; all access takes a ScopeSet enforced in SQL"
+status: pending
+complexity: high
+methodology: tdd
+repo: mdostal/rolodex
+depends_on: []
+description: |
+  Rolodex today is single-user with no scope column (src/lib/store.ts:44-81). Add scopes so one
+  store can hold several books safely, while the standalone app behaves exactly as before.
+
+  - Scope = `kind:id`, kinds `client` and `user` (an exported enum, extensible). Use the same shape as
+    the host contract (mdostal/pantheon-v2 contracts/l2/slots/contacts.ts, cm-01) but do NOT import
+    pantheon code; duplicate the small type.
+  - Migration (idempotent, same style as the googleEtag ALTER at store.ts:62-66): add scopeKind,
+    scopeId to contacts; add scope to settings (key becomes unique per scope); backfill existing
+    rows to `user:local`.
+  - Every Store method takes a ScopeSet `{read, write?}` and applies it in SQL through ONE helper
+    (`scopeClause`). Writes outside `write` throw ScopeDenied. Interactions inherit their card's
+    scope (writing one needs write on it). FTS search joins back to contacts and uses the clause.
+  - upsert with an id: load the row first; refuse if its scope is not `write` (grill H6). Dedupe by
+    normalized email (lower/trim) and E.164-ish phone digits, WITHIN the write scope only.
+  - Google sync: sync state and the connected account live in scoped settings; pushAllToGoogle
+    pushes only the bound scope (grill H8). Standalone binds `user:local`.
+  - Delete removes the card's interactions and (after cm-03) every link touching it (H9). Cards never
+    move scopes.
+  - Standalone adapter: one module (`src/lib/local-scope.ts`) supplies `{read:[user:local],
+    write:user:local}`; shell server, MCP server, CLI and Electron all use it.
+  - Regression suite (grill H10): `src/lib/standalone-regression.test.ts` runs the pre-change behaviour
+    (list, upsert, search, follow-ups, interactions, google pull/push with fakes) through the local
+    adapter and asserts identical results to fixtures captured BEFORE the change.
+  - Property test: random cards over random scopes; for random ScopeSets, no method ever returns or
+    mutates a row outside the set.
+acceptance_criteria:
+  - "Given an existing v0.5 database, when the new Store opens it, then every row is in user:local and the standalone app shows the same contacts."
+  - "Given a ScopeSet with read [client:a], when any read method runs, then no client:b or user:* row is returned (property test, >=200 cases)."
+  - "Given upsert with the id of a card in another scope, then ScopeDenied is thrown and nothing changes."
+  - "Given the standalone regression suite, then it passes against fixtures captured before the change."
+  - "Given npm test, then the whole suite passes."
+steps:
+  - {id: research, agent: researcher, description: "List every Store call site (shell, mcp, cli, electron, google-sync)."}
+  - {id: test-spec, agent: tester, depends_on: [research], description: "Capture standalone fixtures first; write failing scope/property tests."}
+  - {id: implement, agent: developer, depends_on: [test-spec], description: "Migration, scopeClause, ScopeSet plumbing, local adapter."}
+  - {id: review, agent: reviewer, depends_on: [implement], description: "Hunt for any query not using scopeClause."}
+  - {id: integrate, agent: developer, depends_on: [review], description: "PR to dev."}
+context:
+  codebase: /pantheon/code/rolodex
+  key_files:
+    - {path: src/lib/store.ts, purpose: "schema, migrations, all SQL"}
+    - {path: src/lib/google-sync.ts, purpose: "push/pull must become scope-bound"}
+    - {path: src/shell/server.ts, purpose: "standalone HTTP call sites"}
+    - {path: src/mcp/server.ts, purpose: "MCP call sites"}
+    - {path: docs/ARCHITECTURE.md, purpose: "add 'service mode supersedes single-user for that mode only' (grill C1)"}
+metric: {applies: false, justification: "Data-model change verified by property and regression tests; there is no user-facing number until the service ships."}
+risks:
+  - {severity: high, description: "One query misses the scope clause and leaks rows.", mitigation: "Single helper + property test + reviewer grep for raw prepare() without it."}

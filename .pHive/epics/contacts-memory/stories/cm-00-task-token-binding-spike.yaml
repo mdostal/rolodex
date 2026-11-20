@@ -1,0 +1,54 @@
+id: cm-00-task-token-binding-spike
+epic: contacts-memory
+title: "Spike: bind an agent request to its client through its Multica task token"
+status: pending
+complexity: medium
+methodology: classic
+repo: mdostal/pantheon-v2
+depends_on: []
+parallel_allowed: true
+parallel_rationale: read-only
+description: |
+  GATE STORY. Nothing that grants agents contacts access may be built until this answers yes or no.
+
+  Problem (grill H1): every board agent in both runtimes shares one `runtime-agent` caller token
+  (config/pantheon-callers.yaml:74-96), and core-api's memory facade takes `client` from the request
+  body, so core-api cannot tell which client an agent is working for. Contacts are personal data, so
+  the contacts facade must derive the client server-side.
+
+  Candidate mechanism: Multica mints a per-task token (Postgres table `task_token`: token_hash,
+  task_id, agent_id, workspace_id, user_id, expires_at). If the agent process has that token and
+  core-api can verify it with Multica (some Multica endpoint that, called with the task token,
+  reveals the task -> issue -> project), then core-api maps project -> client with the tenant
+  registry (core/tenants/registry.ts, `.pantheon-tenants.yaml` multica_project_ids) and never trusts
+  the body.
+
+  Answer, with evidence (file:line in plugins/multica source, a live call against
+  http://multica-backend-1:8080 from inside core-api's network, never printing a token):
+  1. Is the task token present in the agent's environment inside pantheon-multica-runtime-1 (name
+     of the env var / file; do NOT print its value)?
+  2. Which Multica endpoint, called with that token, returns the task's issue and project? If none,
+     what is the smallest Multica change (firefly-events/multica fork, plugins/multica) that adds one?
+  3. Does the token expire when the task ends, so a finished task's token cannot be replayed?
+  4. Fallback if 1-3 fail: per-client runtime caller tokens (one runtime container per client).
+     What would it take with today's two runtimes?
+  Write the decision record. Recommend GO (task token), GO-FALLBACK, or NO-GO (agents get no contacts
+  access in this epic; operator + Hermes still ship).
+acceptance_criteria:
+  - "Given the spike is done, then .pHive/epics/contacts-memory/docs/decision-task-token-binding.md exists with answers 1-4, each citing code or a live call, and one of GO / GO-FALLBACK / NO-GO."
+  - "Given any live call was made, then no token value appears in the record, logs, or commits."
+  - "Given the verdict is GO, then the record names the exact endpoint, request shape and response fields core-api will use."
+steps:
+  - {id: research, agent: researcher, description: "Read Multica's task-token issuance and auth middleware (plugins/multica server/), the runtime entrypoint (bin/multica-runtime-entrypoint.sh), and how agent CLIs authenticate."}
+  - {id: probe, agent: developer, depends_on: [research], description: "Live, read-only probe from a container on multica_default; never print secrets."}
+  - {id: record, agent: developer, depends_on: [probe], description: "Write the decision record; open a PR with only that file."}
+context:
+  codebase: /pantheon/code/pantheon-v2 (record lives in mdostal/rolodex .pHive/epics/contacts-memory/docs/)
+  key_files:
+    - {path: config/pantheon-callers.yaml, purpose: "runtime-agent token shared by all board agents (lines 74-96)"}
+    - {path: core/tenants/client-memory.ts, purpose: "the facade that trusts body.client today"}
+    - {path: core/tenants/registry.ts, purpose: "project -> tenant mapping"}
+    - {path: plugins/multica, purpose: "Multica source: task_token issuance and auth"}
+metric: {applies: false, justification: "A spike that produces a go/no-go decision record; its outcome gates cm-05 rather than moving a product number."}
+risks:
+  - {severity: high, description: "Printing a live task token or PAT while probing.", mitigation: "Only print lengths/hashes; follow the no-secrets rule."}

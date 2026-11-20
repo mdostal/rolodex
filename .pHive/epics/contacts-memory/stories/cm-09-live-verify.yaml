@@ -1,0 +1,29 @@
+id: cm-09-live-verify
+epic: contacts-memory
+title: "Live verification on dragon: isolation, links, events and the shell, with recorded evidence"
+status: pending
+complexity: medium
+methodology: classic
+repo: mdostal/pantheon-v2
+depends_on: [cm-06-compose-deploy, cm-07-contacts-events, cm-08-janus-contacts-card]
+description: |
+  Prove it on the running stack (rootless podman on dragon; never print secrets):
+  1. Seed invented cards: two in client:firefly-events, two in client:dostal-tech, one in
+     user:operator, a same_as link user:operator <-> client:firefly-events, a knows link inside
+     client:dostal-tech.
+  2. From a real agent run on a firefly-events ticket, search: only firefly cards; the user:operator
+     card and its link absent. From a dostal-tech ticket run: only dostal-tech cards.
+  3. A forged or expired task token: 403.
+  4. Operator (Janus session): all cards; the same_as link visible with both scopes.
+  5. Upsert -> contacts:upserted on SSE within 2 s; payload has ids only.
+  6. Network: from a container on pantheon_agents, rolodex:4180 is unreachable.
+  7. Standalone: the desktop app (npm run shell) still opens a v0.5 database unchanged.
+  Record evidence (commands, outputs with secrets redacted, shell screenshots) in
+  .pHive/epics/contacts-memory/docs/live-verification.md and remove the seeded cards afterwards.
+acceptance_criteria:
+  - "Given steps 1-7, then each has recorded evidence and passes, or a filed ticket for what failed."
+  - "Given the run is over, then the seeded cards are gone."
+steps:
+  - {id: verify, agent: tester, description: "Run 1-7 and record."}
+  - {id: review, agent: reviewer, depends_on: [verify], description: "Check evidence, not claims."}
+metric: {applies: false, justification: "Verification story; its output is evidence for the epic's isolation claim, not a moving metric."}

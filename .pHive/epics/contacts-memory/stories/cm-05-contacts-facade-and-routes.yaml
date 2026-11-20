@@ -1,0 +1,51 @@
+id: cm-05-contacts-facade-and-routes
+epic: contacts-memory
+title: "Host: contacts facade (caller -> ScopeSet) and POST /api/contacts/* routes + MCP tools"
+status: pending
+complexity: high
+methodology: tdd
+repo: mdostal/pantheon-v2
+depends_on: [cm-00-task-token-binding-spike, cm-01-contacts-slot-contract, cm-04-rolodex-serve]
+description: |
+  READ FIRST: the cm-00 decision record (mdostal/rolodex .pHive/epics/contacts-memory/docs/
+  decision-task-token-binding.md). Its verdict decides the agent leg below.
+
+  - core/tenants/client-contacts.ts (mirror client-memory.ts's style, not its trust): resolve the
+    caller to a ScopeSet. Never read a client from the body.
+      operator token / Janus operator session -> read all scopes, write any.
+      board agent -> GO: verify the agent's Multica task token as the record specifies, map task ->
+        issue -> project -> client via the tenant registry -> {read:[client:X], write:client:X}.
+        GO-FALLBACK: as the record specifies. NO-GO: 403 for every agent call.
+      hermes (liaison) -> read-only on the client scopes listed in its caller entry; never user:*.
+      anything else -> 403.
+  - core/api/contacts.ts: POST /api/contacts/{search,get,connections,candidates,followups,summary,
+    upsert,log,link,unlink,delete}. All POST so the caller guard sees them (reads under /api carry no
+    caller and GET grants are refused, grill H2). `link` with predicate same_as is operator-only.
+    Calls Rolodex at CONTACTS_URL with the signed headers (cm-04's scheme), token from
+    /pantheon-secrets/rolodex. Slot not selected -> 503.
+  - config/pantheon-callers.yaml: grants for runtime-agent and hermes with the call-site citations
+    the file's rules require (grill C2). No entry for Rolodex itself (it never calls core-api).
+  - core/api/mcp-tools.ts: contacts_* tools on /mcp for operator and hermes only.
+  - A runtime helper for agents (where the memory helper lives) that attaches the task token.
+acceptance_criteria:
+  - "Given the operator token, when search runs, then results may include any scope."
+  - "Given a verified task token for a firefly-events ticket, then the ScopeSet is exactly read [client:firefly-events], write client:firefly-events, whatever the body says."
+  - "Given a forged, expired or finished-task token, then 403 and Rolodex is not called."
+  - "Given hermes, then user:* is never in its ScopeSet and writes are refused."
+  - "Given the slot is not selected, then every /api/contacts route answers 503."
+  - "Given npm run verify, then it passes including the caller-route existence test."
+steps:
+  - {id: test-spec, agent: tester, description: "Facade tests per caller kind incl. forged/expired tokens; route 403/503 tests."}
+  - {id: implement, agent: developer, depends_on: [test-spec], description: "Facade, routes, signing client, grants, MCP tools, runtime helper."}
+  - {id: review, agent: reviewer, depends_on: [implement], description: "Confirm no path reads client from the body."}
+  - {id: integrate, agent: developer, depends_on: [review], description: "PR to dev."}
+context:
+  codebase: /pantheon/code/pantheon-v2
+  key_files:
+    - {path: core/tenants/client-memory.ts, purpose: "style reference (its body-trust is what NOT to copy)"}
+    - {path: core/api/memory.ts, purpose: "POST-read route precedent"}
+    - {path: config/pantheon-callers.yaml, purpose: "grant rules at the top of the file"}
+    - {path: core/api/mcp-tools.ts, purpose: "MCP tool registration"}
+metric: {applies: false, justification: "Access-control layer verified by facade tests and cm-09's live isolation test."}
+risks:
+  - {severity: high, description: "A fallback path trusts body.client when token verification errors.", mitigation: "Fail closed: any verification error is 403."}

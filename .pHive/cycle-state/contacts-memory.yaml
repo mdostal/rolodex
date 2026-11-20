@@ -1,0 +1,11 @@
+epic: contacts-memory
+phase: planned
+planned_at: "2026-11-20T19:40:00Z"
+escalations:
+  - trigger: security:plan-audit
+    placement: pre-exec
+    severity: major
+    stories: [cm-00-task-token-binding-spike, cm-05-contacts-facade-and-routes, cm-04-rolodex-serve]
+    reason: "Contacts are PII; the agent-to-client binding has no mechanism today (grill H1). cm-00 is a go/no-go gate."
+    raised_by: grill
+    raised_at: "2026-11-20T19:30:00Z"

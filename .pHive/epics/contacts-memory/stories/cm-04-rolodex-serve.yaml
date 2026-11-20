@@ -1,0 +1,44 @@
+id: cm-04-rolodex-serve
+epic: contacts-memory
+title: "Rolodex service mode: `rolodex serve` implements the contacts slot contract over signed HTTP"
+status: pending
+complexity: high
+methodology: tdd
+repo: mdostal/rolodex
+depends_on: [cm-01-contacts-slot-contract, cm-03-store-links]
+description: |
+  A headless server for Pantheon. It implements the host's contract (mdostal/pantheon-v2
+  contracts/l2/slots/contacts.ts from cm-01); copy the shapes, do not import host code.
+
+  - `rolodex serve` (CLI subcommand) -> `/v1/*` routes, one per contract operation, plus open
+    `GET /v1/health` ({ok, version, schema}). No wizard, no static UI in this mode.
+  - Auth on every route but health: `Authorization: Bearer <service token>` AND a request signature:
+    `X-Rolodex-Scopes: <JSON ScopeSet>`, `X-Rolodex-Ts: <unix ms>`, `X-Rolodex-Sig: hex(HMAC-SHA256(
+    token, method + "\n" + path + "\n" + sha256(body) + "\n" + scopes + "\n" + ts))`. Reject missing/bad
+    signature, ts older than 60 s, or malformed scopes, with 401. Constant-time compares.
+  - The ScopeSet from the header is passed straight to the Store (cm-02/03). Rolodex does not decide
+    who may see what; core-api does. Say so in docs/ARCHITECTURE.md (grill U1).
+  - Config from env: ROLODEX_DB (default /data/rolodex.db), ROLODEX_SERVICE_TOKEN_FILE (a file, never
+    an env value), PORT (default 4180), bind 0.0.0.0 only in serve mode.
+  - Container secrets (grill H5): in serve mode the SecretsAdapter reads Google OAuth material from
+    injected files under /pantheon-secrets/rolodex, not the local `portunus` CLI or keychain.
+  - Dockerfile (node:24-slim, fts5 present; non-root; read-only rootfs friendly; /data volume).
+  - Remove nothing from standalone mode. Do NOT add a remote mode to the stdio MCP (grill U5).
+acceptance_criteria:
+  - "Given serve mode, when /v1/health is called without auth, then 200 with version."
+  - "Given a valid token but a signature over different scopes, then 401 and nothing is read."
+  - "Given a valid signed request with read [client:a], then only client:a data is returned (end-to-end test through HTTP)."
+  - "Given a request with ts 61 s old, then 401."
+  - "Given the image builds with podman (no buildx), then `rolodex serve` starts and health answers."
+  - "Given npm test, then standalone tests still pass."
+steps:
+  - {id: test-spec, agent: tester, description: "Failing HTTP tests for auth, signature, staleness, scope pass-through."}
+  - {id: implement, agent: developer, depends_on: [test-spec], description: "serve command, routes, signing, file-based secrets, Dockerfile."}
+  - {id: review, agent: reviewer, depends_on: [implement], description: "Timing-safe compares; token never logged."}
+  - {id: integrate, agent: developer, depends_on: [review], description: "PR to dev."}
+context:
+  codebase: /pantheon/code/rolodex
+  key_files:
+    - {path: src/cli/index.ts, purpose: "add serve subcommand"}
+    - {path: src/lib/secrets-adapter.ts, purpose: "add file backend for injected secrets"}
+metric: {applies: false, justification: "Service plumbing; its user-visible effect is measured in cm-09's live verification."}
