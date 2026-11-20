@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { google } from "googleapis";
 import type { Contact } from "./types.js";
+import { normalizeEmail, normalizePhone } from "./dedupe.js";
 import { createSecretsAdapter, type SecretsAdapter } from "./secrets-adapter.js";
 
 /**
@@ -428,7 +429,7 @@ export function mergeLocalOnlyFields(pulled: Contact, existing: Contact | undefi
 
 /** Finds the local contact a pulled contact would dedup against, mirroring
  * `Store.upsert()`'s own documented priority ("Dedup: googleResourceName
- * first, then email — first match wins.") without reaching into Store's
+ * first, then normalized email, then phone digits — first match wins.") without reaching into Store's
  * private matching logic — just a read over the already-implemented
  * `Store.list()`, safe at rolodex's personal-scale row counts. */
 export function findExistingMatch(pulled: Contact, existingContacts: readonly Contact[]): Contact | undefined {
@@ -436,8 +437,14 @@ export function findExistingMatch(pulled: Contact, existingContacts: readonly Co
     const byResourceName = existingContacts.find((c) => c.googleResourceName === pulled.googleResourceName);
     if (byResourceName) return byResourceName;
   }
-  if (pulled.email) {
-    return existingContacts.find((c) => c.email === pulled.email);
+  const email = normalizeEmail(pulled.email);
+  if (email) {
+    const byEmail = existingContacts.find((c) => normalizeEmail(c.email) === email);
+    if (byEmail) return byEmail;
+  }
+  const phone = normalizePhone(pulled.phone);
+  if (phone) {
+    return existingContacts.find((c) => normalizePhone(c.phone) === phone);
   }
   return undefined;
 }
@@ -449,10 +456,25 @@ export interface ApplyPullSummary {
 }
 
 /** Minimal shape this needs from Store — just `list()`/`upsert()`, so tests
- * can pass a real Store (temp-file backed) or a hand-rolled fake. */
+ * can pass a scoped Store binding (`Store.scoped()` / `localStore()`) or a
+ * hand-rolled fake.
+ *
+ * Scope binding (contacts-memory H8): a real ScopedStore also has
+ * `forSync()`, which narrows reads AND writes to the binding's write scope —
+ * the one scope the connected Google account belongs to. applyPullToStore()
+ * and pushAllToGoogle() always go through it when present, so a pull only
+ * matches cards in that scope and a push never sends another scope's cards.
+ * `updateGoogleSyncState()` records last pull/push in that scope's settings. */
 export interface UpsertableStore {
   list(): Contact[];
   upsert(c: Contact): Contact;
+  forSync?(): UpsertableStore;
+  updateGoogleSyncState?(patch: { lastPullAt?: string; lastPushAt?: string }): unknown;
+}
+
+/** The sync-bound view of `store` (see UpsertableStore). */
+function syncBound(store: UpsertableStore): UpsertableStore {
+  return store.forSync ? store.forSync() : store;
 }
 
 /**
@@ -463,7 +485,8 @@ export interface UpsertableStore {
  * `Store.upsert()` — which owns the actual dedup-and-write. Snapshots
  * `store.list()` once up front rather than re-querying per contact.
  */
-export function applyPullToStore(pulled: Contact[], store: UpsertableStore): ApplyPullSummary {
+export function applyPullToStore(pulled: Contact[], scopedStore: UpsertableStore): ApplyPullSummary {
+  const store = syncBound(scopedStore);
   const existingContacts = store.list();
   let created = 0;
   let updated = 0;
@@ -474,6 +497,7 @@ export function applyPullToStore(pulled: Contact[], store: UpsertableStore): App
     if (existing) updated++;
     else created++;
   }
+  store.updateGoogleSyncState?.({ lastPullAt: new Date().toISOString() });
   return { pulled: pulled.length, created, updated };
 }
 
@@ -544,7 +568,8 @@ export interface PushAllSummary {
 export type PushableStore = UpsertableStore;
 
 /**
- * Pushes every local contact to Google, one at a time — sequentially, not
+ * Pushes every contact in the sync-bound scope (see UpsertableStore) to
+ * Google, one at a time — sequentially, not
  * concurrently, per Google's own guidance for mutate requests against the
  * same user (see the google-two-way-sync epic's design discussion). Each
  * push()'s fresh resourceName/etag is written back onto the local row
@@ -553,7 +578,8 @@ export type PushableStore = UpsertableStore;
  * check. A single contact's failure (most commonly the etag-conflict error)
  * is collected, not thrown — the rest of the batch still runs.
  */
-export async function pushAllToGoogle(store: PushableStore, google: Pick<GoogleSync, "push">): Promise<PushAllSummary> {
+export async function pushAllToGoogle(scopedStore: PushableStore, google: Pick<GoogleSync, "push">): Promise<PushAllSummary> {
+  const store = syncBound(scopedStore);
   const contacts = store.list();
   let created = 0;
   let updated = 0;
@@ -571,5 +597,6 @@ export async function pushAllToGoogle(store: PushableStore, google: Pick<GoogleS
     }
   }
 
+  store.updateGoogleSyncState?.({ lastPushAt: new Date().toISOString() });
   return { pushed: created + updated, created, updated, errors };
 }

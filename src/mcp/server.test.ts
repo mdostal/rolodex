@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRolodexMcpServer, type RolodexMcpHandlers } from "./server.js";
+import { localStore } from "../lib/local-scope.js";
 import { Store } from "../lib/store.js";
 import { createInMemorySecretsAdapter } from "../lib/secrets-adapter.js";
 import { createGoogleSync, type PeopleApiClient } from "../lib/google-sync.js";
@@ -46,7 +47,7 @@ describe("rolodex_upsert", () => {
     expect(saved.id).toBeTruthy();
 
     // Actually landed in the store, not just echoed back.
-    expect(store.get(saved.id)).toMatchObject({ name: "Ada Lovelace", org: "Analytical Engines" });
+    expect(localStore(store).get(saved.id)).toMatchObject({ name: "Ada Lovelace", org: "Analytical Engines" });
   });
 
   it("updates an existing contact when the same id round-trips", async () => {
@@ -57,7 +58,7 @@ describe("rolodex_upsert", () => {
 
     expect(second.id).toBe(first.id);
     expect(second.name).toBe("Grace Murray Hopper");
-    expect(store.list()).toHaveLength(1);
+    expect(localStore(store).list()).toHaveLength(1);
   });
 });
 
@@ -93,7 +94,7 @@ describe("rolodex_followups", () => {
     // Backdated createdAt can't come through the MCP arg shape (upsert's
     // zod schema has no createdAt field, by design) — write it directly
     // through the same Store instance, same pattern server.test.ts uses.
-    const stale = store.upsert({
+    const stale = localStore(store).upsert({
       id: "",
       name: "Stale Contact",
       verdict: "none",
@@ -108,7 +109,7 @@ describe("rolodex_followups", () => {
   });
 
   it("excludes a contact with no nextStep", async () => {
-    store.upsert({ id: "", name: "No Next Step", verdict: "none", createdAt: iso(60 * DAY), updatedAt: iso(60 * DAY) });
+    localStore(store).upsert({ id: "", name: "No Next Step", verdict: "none", createdAt: iso(60 * DAY), updatedAt: iso(60 * DAY) });
     const result = await handlers.rolodex_followups({ withinDays: 30 });
     expect(parseResult(result)).toEqual([]);
   });
@@ -130,7 +131,7 @@ describe("rolodex_log_interaction", () => {
     expect(created.id).toBeTruthy();
     expect(created.at).toBeTruthy();
 
-    const history = store.listInteractions(contact.id);
+    const history = localStore(store).listInteractions(contact.id);
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({ id: created.id, note: "Great call about follow-up." });
   });
@@ -151,7 +152,7 @@ describe("rolodex_delete", () => {
     const result = await handlers.rolodex_delete({ contactId: contact.id });
     const payload = parseResult(result) as { deleted: boolean; id: string; name: string };
     expect(payload).toEqual({ deleted: true, id: contact.id, name: "Ada Lovelace" });
-    expect(store.get(contact.id)).toBeUndefined();
+    expect(localStore(store).get(contact.id)).toBeUndefined();
   });
 
   it("also deletes the contact's interaction history", async () => {
@@ -160,7 +161,7 @@ describe("rolodex_delete", () => {
 
     await handlers.rolodex_delete({ contactId: contact.id });
 
-    expect(store.listInteractions(contact.id)).toHaveLength(0);
+    expect(localStore(store).listInteractions(contact.id)).toHaveLength(0);
   });
 
   it("returns isError for an unknown contact id, without throwing", async () => {
@@ -184,13 +185,13 @@ describe("rolodex_delete", () => {
     // googleResourceName isn't settable via rolodex_upsert's own args (by
     // design — see its zod schema), so it's set directly on the row the
     // same way a real sync would have.
-    store.upsert({ ...store.get(contact.id)!, googleResourceName: "people/fake123" });
+    localStore(store).upsert({ ...localStore(store).get(contact.id)!, googleResourceName: "people/fake123" });
 
     const result = await handlers.rolodex_delete({ contactId: contact.id });
     const payload = parseResult(result) as { deleted: boolean; googleDeleteWarning?: string };
     expect(payload.deleted).toBe(true);
     expect(payload.googleDeleteWarning).toMatch(/isn't connected/);
-    expect(store.get(contact.id)).toBeUndefined();
+    expect(localStore(store).get(contact.id)).toBeUndefined();
   });
 });
 
@@ -206,7 +207,7 @@ describe("rolodex_sync_google", () => {
     // A manually-added contact with local-only fields set (verdict/nextStep)
     // that a Google pull must NOT clobber — mirrors google-sync.test.ts's
     // own "local fields survive sync" invariant check.
-    store.upsert({
+    localStore(store).upsert({
       id: "",
       googleResourceName: "people/c123",
       name: "Manually Typed Name",
@@ -254,7 +255,7 @@ describe("rolodex_sync_google", () => {
     const summary = parseResult(result) as { pulled: number; created: number; updated: number };
     expect(summary).toEqual({ pulled: 2, created: 1, updated: 1 });
 
-    const all = store.list();
+    const all = localStore(store).list();
     expect(all).toHaveLength(2);
     const existingRow = all.find((c) => c.googleResourceName === "people/c123");
     expect(existingRow).toMatchObject({
@@ -299,8 +300,8 @@ describe("rolodex_sync_google", () => {
     // The contact just pulled already carries the googleResourceName Google
     // gave it, so pushing it back is an update, not a create.
     expect(summary.push).toEqual({ pushed: 1, created: 0, updated: 1, errors: [] });
-    expect(store.list()).toHaveLength(1);
-    expect(store.list()[0]?.googleEtag).toBe('W/"e2"');
+    expect(localStore(store).list()).toHaveLength(1);
+    expect(localStore(store).list()[0]?.googleEtag).toBe('W/"e2"');
   });
 
   it("direction 'push' pushes every local contact to Google, reporting created/updated/errors, and never calls pull", async () => {
@@ -328,7 +329,7 @@ describe("rolodex_sync_google", () => {
     expect(summary).toEqual({ pushed: 1, created: 1, updated: 0, errors: [] });
     expect(pullCalled).toBe(false);
     expect(pushedIds).toEqual([contact.id]);
-    expect(store.get(contact.id)?.googleResourceName).toBe("people/new1");
+    expect(localStore(store).get(contact.id)?.googleResourceName).toBe("people/new1");
   });
 });
 
@@ -357,6 +358,10 @@ describe("error handling — a thrown error from the underlying Store/GoogleSync
 
   it("rolodex_upsert: a Store that throws surfaces as isError:true, not a throw", async () => {
     const throwingStore = {
+      // The server binds the Store to the local ScopeSet first.
+      scoped() {
+        return this;
+      },
       upsert() {
         throw new Error("boom: disk full");
       },

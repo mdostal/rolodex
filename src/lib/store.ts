@@ -1,6 +1,23 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import type { Contact, Interaction, SearchResult, Verdict } from "./types.js";
+import { LOCAL_SCOPE } from "./local-scope.js";
+import { normalizeEmail, normalizePhone } from "./dedupe.js";
+import {
+  ScopeDenied,
+  parseScope,
+  resolveScopeSet,
+  scopeClause,
+  type ParsedScope,
+  type ResolvedScopeSet,
+  type ScopeSet,
+} from "./scope.js";
+
+export { ScopeDenied } from "./scope.js";
+export type { Scope, ScopeSet } from "./scope.js";
+
+/** The standalone scope's kind/id, used by migrate() to backfill v0.5 rows. */
+const { kind: LOCAL_KIND, id: LOCAL_ID } = parseScope(LOCAL_SCOPE);
 
 /** Settings-table key under which the follow-up config (windowDays/graceDays)
  * is stored, JSON-encoded as a single row. */
@@ -25,11 +42,36 @@ export interface AppearanceConfig {
   iconId: number;
 }
 
+/** Settings-table key for per-scope Google sync state (connected account,
+ * last pull/push). One row per scope, so each bound scope has its own. */
+const GOOGLE_SYNC_STATE_KEY = "google.sync";
+
+/** Per-scope Google sync state, stored JSON-encoded under
+ * GOOGLE_SYNC_STATE_KEY in that scope's settings. */
+export interface GoogleSyncState {
+  /** The Google account this scope's sync is connected to, when known. */
+  account?: string;
+  lastPullAt?: string;
+  lastPushAt?: string;
+}
+
 /**
  * Owns-your-data store. SQLite with an FTS5 full-text index so search is real
  * (name/org/what/angle/tags), not a LIKE scan. The DB path defaults to a
  * user-data dir OUTSIDE the repo (never ./data/) — set ROLODEX_DB to override.
  * All access goes through this module; nothing else writes raw SQL.
+ *
+ * Scopes (contacts-memory cm-02): every card belongs to exactly one scope
+ * (`scopeKind`/`scopeId` columns) and every public method takes a ScopeSet
+ * as its first argument. Contact rows are filtered in SQL through the single
+ * `scopeClause()` helper (src/lib/scope.ts); interactions are reached only
+ * through a join to their card, so they inherit its scope. Writes outside
+ * the ScopeSet's `write` scope throw ScopeDenied. Settings are keyed per
+ * scope. Cards never move between scopes.
+ *
+ * The standalone app always passes `{read:[user:local], write:user:local}`
+ * via src/lib/local-scope.ts; `scoped()` binds a ScopeSet once and gives back
+ * the scope-free method signatures the shell/MCP/CLI were written against.
  */
 export class Store {
   private db: DatabaseSync;
@@ -39,33 +81,77 @@ export class Store {
     this.migrate();
   }
 
+  /** Binds `scope` once, returning the scope-free API (see ScopedStore). */
+  scoped(scope: ScopeSet): ScopedStore {
+    return new ScopedStore(this, scope);
+  }
+
   private migrate() {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS contacts (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, org TEXT, role TEXT, email TEXT, phone TEXT,
         met TEXT, what TEXT, angle TEXT, verdict TEXT NOT NULL DEFAULT 'none',
         nextStep TEXT, tags TEXT, googleResourceName TEXT, googleEtag TEXT,
-        createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+        createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+        scopeKind TEXT NOT NULL, scopeId TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS interactions (
         id TEXT PRIMARY KEY, contactId TEXT NOT NULL, at TEXT NOT NULL, note TEXT NOT NULL, channel TEXT,
         FOREIGN KEY(contactId) REFERENCES contacts(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY, value TEXT NOT NULL
+        scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+        PRIMARY KEY (scope, key)
       );
     `);
     // SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — a database
-    // file created before googleEtag existed needs this run once to reach
+    // file created before a column existed needs these run once to reach
     // the shape the CREATE TABLE above already gives a brand-new database.
     // Catching specifically "duplicate column" (not a broad catch-all, per
     // this file's own convention below for fts5) keeps a genuine unrelated
     // failure from being silently swallowed here.
-    try {
-      this.db.exec("ALTER TABLE contacts ADD COLUMN googleEtag TEXT");
-    } catch (err) {
-      if (!(err instanceof Error) || !err.message.includes("duplicate column")) throw err;
+    //
+    // scopeKind/scopeId (cm-02): a pre-scopes (v0.5) database's rows all
+    // belong to the standalone book, so the NOT NULL DEFAULTs backfill every
+    // existing row to `user:local` as part of the ALTER itself. New rows
+    // always get an explicit scope from upsert().
+    for (const ddl of [
+      "ALTER TABLE contacts ADD COLUMN googleEtag TEXT",
+      `ALTER TABLE contacts ADD COLUMN scopeKind TEXT NOT NULL DEFAULT '${LOCAL_KIND}'`,
+      `ALTER TABLE contacts ADD COLUMN scopeId TEXT NOT NULL DEFAULT '${LOCAL_ID}'`,
+    ]) {
+      try {
+        this.db.exec(ddl);
+      } catch (err) {
+        if (!(err instanceof Error) || !err.message.includes("duplicate column")) throw err;
+      }
     }
+    this.db.exec("CREATE INDEX IF NOT EXISTS contacts_scope ON contacts(scopeKind, scopeId)");
+
+    // settings (cm-02): v0.5 had `key TEXT PRIMARY KEY`. A key is now unique
+    // per scope, which SQLite can only express by rebuilding the table.
+    // Existing rows move to `user:local`. Idempotent: skipped once the
+    // `scope` column exists (a fresh DB gets it from the CREATE above).
+    const settingsCols = this.db.prepare("PRAGMA table_info(settings)").all() as { name: string }[];
+    if (!settingsCols.some((c) => c.name === "scope")) {
+      this.db.exec("BEGIN");
+      try {
+        this.db.exec(`
+          CREATE TABLE settings_scoped (
+            scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+            PRIMARY KEY (scope, key)
+          );
+          INSERT INTO settings_scoped (scope, key, value) SELECT '${LOCAL_SCOPE}', key, value FROM settings;
+          DROP TABLE settings;
+          ALTER TABLE settings_scoped RENAME TO settings;
+        `);
+        this.db.exec("COMMIT");
+      } catch (err) {
+        this.db.exec("ROLLBACK");
+        throw err;
+      }
+    }
+
     // FTS5 is a separate statement, in a separate try/catch, deliberately:
     // node:sqlite's bundled SQLite build on this repo's Node (22.12) has no
     // fts5 module compiled in at all ("no such module: fts5", confirmed even
@@ -87,24 +173,109 @@ export class Store {
     }
   }
 
-  /** All contacts, unfiltered. Minimal read used by the shell's list screen. */
-  list(): Contact[] {
-    const rows = this.db.prepare("SELECT * FROM contacts ORDER BY name COLLATE NOCASE").all();
+  /** The scope a card id currently lives in, across ALL scopes, or undefined
+   * if no such card exists. This is the one deliberate unscoped read: write
+   * paths must load a row before touching it so that a caller-supplied id
+   * from another scope is refused instead of updated (grill H6). It never
+   * returns row data, only the owning scope, and is private. */
+  private ownerOf(id: string): ParsedScope | undefined {
+    // scope-check: unscoped by design (see doc comment above).
+    const row = this.db.prepare("SELECT scopeKind, scopeId FROM contacts WHERE id = ?").get(id) as
+      | { scopeKind: string; scopeId: string }
+      | undefined;
+    return row ? { kind: row.scopeKind as ParsedScope["kind"], id: row.scopeId } : undefined;
+  }
+
+  /** The write scope, or ScopeDenied when the ScopeSet has none. */
+  private requireWrite(r: ResolvedScopeSet): ParsedScope {
+    if (!r.write) throw new ScopeDenied("this ScopeSet has no write scope");
+    return r.write;
+  }
+
+  /** Checks a write against an existing card: "missing" when no card has
+   * this id anywhere, "ok" when it is in the write scope, ScopeDenied
+   * otherwise (including when there is no write scope at all). */
+  private checkWritable(r: ResolvedScopeSet, id: string): "missing" | "ok" {
+    const owner = this.ownerOf(id);
+    if (!owner) return "missing";
+    const w = this.requireWrite(r);
+    if (owner.kind !== w.kind || owner.id !== w.id) throw new ScopeDenied("card is outside the write scope");
+    return "ok";
+  }
+
+  /** The scope settings are read from/written to: the write scope, or the
+   * sole readable scope of a single-scope read-only set. Undefined when the
+   * set spans several scopes with no write scope — there is no single book
+   * whose settings would apply. */
+  private settingsScope(r: ResolvedScopeSet): string | undefined {
+    const s = r.write ?? (r.readable.length === 1 ? r.readable[0] : undefined);
+    return s ? `${s.kind}:${s.id}` : undefined;
+  }
+
+  private reindex() {
+    // Best-effort FTS reindex, same try/catch posture as migrate(): fts5 may
+    // not exist on this Node build at all. A full rebuild (rather than a
+    // delete+insert of just this row) sidesteps external-content fts5's
+    // requirement that a 'delete' command supply the exact old indexed
+    // values — simplest correct option at rolodex's personal-scale row counts.
+    try {
+      this.db.exec("INSERT INTO contacts_fts(contacts_fts) VALUES('rebuild')");
+    } catch (err) {
+      console.warn("rolodex: FTS reindex skipped (fts5 unavailable)", err);
+    }
+  }
+
+  /** All contacts in the readable scopes. Minimal read used by the shell's
+   * list screen. */
+  list(scope: ScopeSet): Contact[] {
+    const r = resolveScopeSet(scope);
+    const where = scopeClause(r.readable);
+    const rows = this.db
+      .prepare(`SELECT * FROM contacts WHERE ${where.sql} ORDER BY name COLLATE NOCASE`)
+      .all(...where.params);
     return rows.map(rowToContact);
   }
 
-  upsert(c: Contact): Contact {
-    // Dedup: googleResourceName first, then email — first match wins.
+  /**
+   * Creates or updates a card in the write scope.
+   *
+   * - A supplied `id` is loaded first, across all scopes: if that card lives
+   *   in another scope, ScopeDenied is thrown and nothing changes (H6).
+   * - Dedup, WITHIN the write scope only, first match wins:
+   *   googleResourceName, then normalized email (trim + lowercase), then
+   *   phone digits (see normalizePhone).
+   * - New cards land in the write scope; existing cards never change scope
+   *   (the scope columns are not in the UPDATE list, and the conflict branch
+   *   refuses a row whose scope differs, as a second line of defence).
+   */
+  upsert(scope: ScopeSet, c: Contact): Contact {
+    const r = resolveScopeSet(scope);
+    const w = this.requireWrite(r);
+    if (c.id) this.checkWritable(r, c.id);
+
+    const own = scopeClause([w]);
     let existing: ContactRow | undefined;
     if (c.googleResourceName) {
       existing = this.db
-        .prepare("SELECT * FROM contacts WHERE googleResourceName = ?")
-        .get(c.googleResourceName) as ContactRow | undefined;
+        .prepare(`SELECT * FROM contacts WHERE googleResourceName = ? AND ${own.sql}`)
+        .get(c.googleResourceName, ...own.params) as ContactRow | undefined;
     }
-    if (!existing && c.email) {
-      existing = this.db.prepare("SELECT * FROM contacts WHERE email = ?").get(c.email) as
-        | ContactRow
-        | undefined;
+    const email = normalizeEmail(c.email);
+    if (!existing && email) {
+      existing = this.db
+        .prepare(`SELECT * FROM contacts WHERE LOWER(TRIM(email)) = ? AND ${own.sql} ORDER BY rowid LIMIT 1`)
+        .get(email, ...own.params) as ContactRow | undefined;
+    }
+    const phone = normalizePhone(c.phone);
+    if (!existing && phone) {
+      // Digit-normalization isn't expressible in portable SQLite without a
+      // user-defined function (node:sqlite's db.function() is newer than this
+      // repo's minimum Node), so candidates are narrowed in SQL to the write
+      // scope and compared here.
+      const candidates = this.db
+        .prepare(`SELECT * FROM contacts WHERE phone IS NOT NULL AND ${own.sql} ORDER BY rowid`)
+        .all(...own.params) as unknown as ContactRow[];
+      existing = candidates.find((row) => normalizePhone(row.phone) === phone);
     }
 
     // `|| ` (not `??`) on purpose: Contact's `id`/`createdAt` are typed as
@@ -118,17 +289,19 @@ export class Store {
 
     // INSERT .. ON CONFLICT(id) covers both the dedup-matched row above and a
     // direct edit (client round-trips the same id) — either way the primary
-    // key collision drives the UPDATE branch, not a duplicate row.
-    this.db
+    // key collision drives the UPDATE branch, not a duplicate row. The
+    // `WHERE` on the UPDATE branch refuses to touch a row in another scope.
+    const info = this.db
       .prepare(
-        `INSERT INTO contacts (id, name, org, role, email, phone, met, what, angle, verdict, nextStep, tags, googleResourceName, googleEtag, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO contacts (id, name, org, role, email, phone, met, what, angle, verdict, nextStep, tags, googleResourceName, googleEtag, createdAt, updatedAt, scopeKind, scopeId)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name, org = excluded.org, role = excluded.role, email = excluded.email,
            phone = excluded.phone, met = excluded.met, what = excluded.what, angle = excluded.angle,
            verdict = excluded.verdict, nextStep = excluded.nextStep, tags = excluded.tags,
            googleResourceName = excluded.googleResourceName, googleEtag = excluded.googleEtag,
-           createdAt = excluded.createdAt, updatedAt = excluded.updatedAt`,
+           createdAt = excluded.createdAt, updatedAt = excluded.updatedAt
+         WHERE contacts.scopeKind = excluded.scopeKind AND contacts.scopeId = excluded.scopeId`,
       )
       .run(
         id,
@@ -147,57 +320,52 @@ export class Store {
         c.googleEtag ?? null,
         createdAt,
         now,
+        w.kind,
+        w.id,
       );
+    if (Number(info.changes) === 0) throw new ScopeDenied("card is outside the write scope");
 
-    // Best-effort FTS reindex, same try/catch posture as migrate(): fts5 may
-    // not exist on this Node build at all. A full rebuild (rather than a
-    // delete+insert of just this row) sidesteps external-content fts5's
-    // requirement that a 'delete' command supply the exact old indexed
-    // values — simplest correct option at rolodex's personal-scale row counts.
-    try {
-      this.db.exec("INSERT INTO contacts_fts(contacts_fts) VALUES('rebuild')");
-    } catch (err) {
-      console.warn("rolodex: FTS reindex skipped (fts5 unavailable)", err);
-    }
-
-    return this.get(id)!;
+    this.reindex();
+    return this.get(scope, id)!;
   }
 
-  get(id: string): Contact | undefined {
-    const row = this.db.prepare("SELECT * FROM contacts WHERE id = ?").get(id);
+  get(scope: ScopeSet, id: string): Contact | undefined {
+    const r = resolveScopeSet(scope);
+    const where = scopeClause(r.readable);
+    const row = this.db.prepare(`SELECT * FROM contacts WHERE id = ? AND ${where.sql}`).get(id, ...where.params);
     return row ? rowToContact(row) : undefined;
   }
 
-  /** Deletes a contact and its interaction history. Explicit interactions
-   * delete rather than relying on the schema's `ON DELETE CASCADE` — that
-   * constraint is inert unless `PRAGMA foreign_keys = ON` is set, which this
-   * class deliberately doesn't do (see the constructor's PRAGMA list); doing
-   * the delete explicitly here avoids a global FK-enforcement change just for
-   * this one method. Returns whether a contact was actually found and
-   * deleted, so callers (the DELETE route) can tell a real delete apart from
-   * a no-op on an already-gone/never-existed id. */
-  delete(id: string): boolean {
-    this.db.prepare("DELETE FROM interactions WHERE contactId = ?").run(id);
-    const info = this.db.prepare("DELETE FROM contacts WHERE id = ?").run(id);
-
-    try {
-      this.db.exec("INSERT INTO contacts_fts(contacts_fts) VALUES('rebuild')");
-    } catch (err) {
-      console.warn("rolodex: FTS reindex skipped (fts5 unavailable)", err);
-    }
-
-    return info.changes > 0;
+  /** Deletes a card and its interaction history (and, once cm-03 lands,
+   * every link touching it — H9). Explicit interactions delete rather than
+   * relying on the schema's `ON DELETE CASCADE` — that constraint is inert
+   * unless `PRAGMA foreign_keys = ON` is set, which this class deliberately
+   * doesn't do (see the constructor's PRAGMA list). Returns false when no
+   * card with this id exists; throws ScopeDenied when it exists outside the
+   * write scope. */
+  delete(scope: ScopeSet, id: string): boolean {
+    const r = resolveScopeSet(scope);
+    if (this.checkWritable(r, id) === "missing") return false;
+    const own = scopeClause([this.requireWrite(r)]);
+    this.db
+      .prepare(`DELETE FROM interactions WHERE contactId IN (SELECT id FROM contacts WHERE id = ? AND ${own.sql})`)
+      .run(id, ...own.params);
+    const info = this.db.prepare(`DELETE FROM contacts WHERE id = ? AND ${own.sql}`).run(id, ...own.params);
+    this.reindex();
+    return Number(info.changes) > 0;
   }
 
   /**
-   * Full-text across name/org/what/angle/tags. Tries FTS5 MATCH against
-   * `contacts_fts` first (ranked via bm25); if that throws — fts5 unavailable
-   * on this Node build, or the virtual table was never created (see migrate())
-   * — falls back to a manual LIKE scan across the same documented fields so
-   * search still works, just without ranking. Empty/whitespace-only queries
-   * short-circuit to [] without touching the database.
+   * Full-text across name/org/what/angle/tags, limited to readable scopes.
+   * Tries FTS5 MATCH against `contacts_fts` first (ranked via bm25) joined
+   * back to `contacts` so the scope clause applies; if that throws — fts5
+   * unavailable on this Node build, or the virtual table was never created
+   * (see migrate()) — falls back to a manual LIKE scan across the same
+   * documented fields, with the same scope clause. Empty/whitespace-only
+   * queries short-circuit to [] without touching the database.
    */
-  search(query: string, opts?: { verdict?: Verdict; limit?: number }): SearchResult[] {
+  search(scope: ScopeSet, query: string, opts?: { verdict?: Verdict; limit?: number }): SearchResult[] {
+    const r = resolveScopeSet(scope);
     const trimmed = query.trim();
     if (!trimmed) return [];
     const limit = opts?.limit ?? 50;
@@ -214,18 +382,19 @@ export class Store {
         .split(/\s+/)
         .map((tok) => `"${tok.replace(/"/g, '""')}"*`)
         .join(" ");
+      const where = scopeClause(r.readable, "c");
       const verdictClause = verdict ? "AND c.verdict = ?" : "";
       const sql = `
         SELECT c.*, bm25(contacts_fts) AS rank
         FROM contacts_fts
         JOIN contacts c ON c.rowid = contacts_fts.rowid
-        WHERE contacts_fts MATCH ? ${verdictClause}
+        WHERE contacts_fts MATCH ? AND ${where.sql} ${verdictClause}
         ORDER BY rank
         LIMIT ?
       `;
-      const params: (string | number)[] = verdict ? [matchQuery, verdict, limit] : [matchQuery, limit];
+      const params: (string | number)[] = [matchQuery, ...where.params, ...(verdict ? [verdict] : []), limit];
       const rows = this.db.prepare(sql).all(...params);
-      return rows.map((r) => ({ contact: rowToContact(r), score: Number((r as { rank: unknown }).rank) }));
+      return rows.map((row) => ({ contact: rowToContact(row), score: Number((row as { rank: unknown }).rank) }));
     } catch (err) {
       // fts5 unavailable (CREATE VIRTUAL TABLE never ran in migrate(), so
       // contacts_fts doesn't exist — "no such table: contacts_fts" — or, on a
@@ -234,59 +403,64 @@ export class Store {
       // crash. No ranking; matches ordered by name.
       const escaped = trimmed.replace(/[%_\\]/g, (m) => `\\${m}`);
       const like = `%${escaped}%`;
+      const where = scopeClause(r.readable);
       const verdictClause = verdict ? "AND verdict = ?" : "";
       const sql = `
         SELECT * FROM contacts
         WHERE (name LIKE ? ESCAPE '\\' OR org LIKE ? ESCAPE '\\' OR what LIKE ? ESCAPE '\\' OR angle LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')
+        AND ${where.sql}
         ${verdictClause}
         ORDER BY name COLLATE NOCASE
         LIMIT ?
       `;
-      const params: (string | number)[] = verdict
-        ? [like, like, like, like, like, verdict, limit]
-        : [like, like, like, like, like, limit];
+      const params: (string | number)[] = [like, like, like, like, like, ...where.params, ...(verdict ? [verdict] : []), limit];
       const rows = this.db.prepare(sql).all(...params);
-      return rows.map((r) => ({ contact: rowToContact(r) }));
+      return rows.map((row) => ({ contact: rowToContact(row) }));
     }
   }
 
-  /** Generic settings read: returns the persisted value for `key`, or
-   * `fallback` if no row exists yet. Never writes — callers that want
-   * lazy-seed-on-first-read behavior (e.g. getFollowUpConfig()) do that
-   * themselves on top of this. */
-  getSetting(key: string, fallback: string): string {
-    const row = this.db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
+  /** Generic settings read for the ScopeSet's settings scope (its write
+   * scope, or its only readable scope): returns the persisted value for
+   * `key`, or `fallback` if no row exists yet or the set has no single
+   * settings scope. Never writes — callers that want lazy-seed-on-first-read
+   * behavior (e.g. getFollowUpConfig()) do that themselves on top of this. */
+  getSetting(scope: ScopeSet, key: string, fallback: string): string {
+    const s = this.settingsScope(resolveScopeSet(scope));
+    if (!s) return fallback;
+    const row = this.db.prepare("SELECT value FROM settings WHERE scope = ? AND key = ?").get(s, key) as
       | { value: string }
       | undefined;
     return row ? row.value : fallback;
   }
 
-  /** Generic settings write: upserts `key` -> `value`. */
-  setSetting(key: string, value: string): void {
+  /** Generic settings write: upserts `key` -> `value` in the write scope's
+   * settings. ScopeDenied without a write scope. */
+  setSetting(scope: ScopeSet, key: string, value: string): void {
+    const w = this.requireWrite(resolveScopeSet(scope));
     this.db
       .prepare(
-        `INSERT INTO settings (key, value) VALUES (?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        `INSERT INTO settings (scope, key, value) VALUES (?, ?, ?)
+         ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
       )
-      .run(key, value);
+      .run(`${w.kind}:${w.id}`, key, value);
   }
 
   /** Follow-up config, stored as one JSON-encoded settings row under
-   * FOLLOW_UP_CONFIG_KEY. If no row exists yet (fresh DB, or a settings
-   * table that's never had this key written), this lazily seeds the row
-   * with the defaults (windowDays=30, graceDays=14) — NOT done eagerly in
-   * migrate(), only on first read — and returns those same defaults. */
-  getFollowUpConfig(): { windowDays: number; graceDays: number } {
-    const raw = this.getSetting(FOLLOW_UP_CONFIG_KEY, "");
+   * FOLLOW_UP_CONFIG_KEY in the settings scope. If no row exists yet, this
+   * lazily seeds the row with the defaults (windowDays=30, graceDays=14) —
+   * NOT done eagerly in migrate(), only on first read, and only when the
+   * set can write — and returns those same defaults. */
+  getFollowUpConfig(scope: ScopeSet): { windowDays: number; graceDays: number } {
+    const raw = this.getSetting(scope, FOLLOW_UP_CONFIG_KEY, "");
     if (!raw) {
-      this.setFollowUpConfig(FOLLOW_UP_DEFAULTS);
+      if (scope.write !== undefined) this.setFollowUpConfig(scope, FOLLOW_UP_DEFAULTS);
       return { ...FOLLOW_UP_DEFAULTS };
     }
     return JSON.parse(raw) as { windowDays: number; graceDays: number };
   }
 
-  setFollowUpConfig(cfg: { windowDays: number; graceDays: number }): void {
-    this.setSetting(FOLLOW_UP_CONFIG_KEY, JSON.stringify(cfg));
+  setFollowUpConfig(scope: ScopeSet, cfg: { windowDays: number; graceDays: number }): void {
+    this.setSetting(scope, FOLLOW_UP_CONFIG_KEY, JSON.stringify(cfg));
   }
 
   /** Appearance config (theme/iconId), stored as one JSON-encoded settings
@@ -294,23 +468,38 @@ export class Store {
    * first read, same as getFollowUpConfig(). Validation of theme/iconId
    * values is the caller's responsibility (server.ts's route), matching how
    * setFollowUpConfig() also persists whatever it's given unchecked. */
-  getAppearance(): AppearanceConfig {
-    const raw = this.getSetting(APPEARANCE_CONFIG_KEY, "");
+  getAppearance(scope: ScopeSet): AppearanceConfig {
+    const raw = this.getSetting(scope, APPEARANCE_CONFIG_KEY, "");
     if (!raw) {
-      this.setAppearance(APPEARANCE_DEFAULTS);
+      if (scope.write !== undefined) this.setAppearance(scope, APPEARANCE_DEFAULTS);
       return { ...APPEARANCE_DEFAULTS };
     }
     return JSON.parse(raw) as AppearanceConfig;
   }
 
-  setAppearance(cfg: AppearanceConfig): void {
-    this.setSetting(APPEARANCE_CONFIG_KEY, JSON.stringify(cfg));
+  setAppearance(scope: ScopeSet, cfg: AppearanceConfig): void {
+    this.setSetting(scope, APPEARANCE_CONFIG_KEY, JSON.stringify(cfg));
+  }
+
+  /** Google sync state of the settings scope (H8): which account it is
+   * connected to and when it last pulled/pushed. Empty object if never
+   * synced. */
+  getGoogleSyncState(scope: ScopeSet): GoogleSyncState {
+    const raw = this.getSetting(scope, GOOGLE_SYNC_STATE_KEY, "");
+    return raw ? (JSON.parse(raw) as GoogleSyncState) : {};
+  }
+
+  /** Merges `patch` into the write scope's Google sync state. */
+  updateGoogleSyncState(scope: ScopeSet, patch: GoogleSyncState): GoogleSyncState {
+    const next = { ...this.getGoogleSyncState({ read: [], write: scope.write }), ...patch };
+    this.setSetting(scope, GOOGLE_SYNC_STATE_KEY, JSON.stringify(next));
+    return next;
   }
 
   /**
-   * Contacts with a nextStep set and no recent interaction — "don't let them
-   * go cold". `withinDays`/`graceDays` default to the persisted
-   * getFollowUpConfig() values when omitted.
+   * Contacts in the readable scopes with a nextStep set and no recent
+   * interaction — "don't let them go cold". `withinDays`/`graceDays`
+   * default to the persisted getFollowUpConfig() values when omitted.
    *
    * A contact qualifies when: nextStep is non-null/non-empty AND createdAt
    * is older than `graceDays` ago (so a contact just added today isn't
@@ -320,11 +509,8 @@ export class Store {
    *
    * Implemented as a single query: a LEFT JOIN against a per-contact
    * MAX(at) subquery (grouped once, not one query per contact) rather than
-   * a correlated subquery run per row — node:sqlite (SQLite proper) supports
-   * both equally well, but the grouped-subquery join reads more directly as
-   * "each contact's most recent interaction" and keeps the WHERE/ORDER BY
-   * clauses simple boolean/string comparisons against a single `lastAt`
-   * column instead of repeating the subquery in multiple places.
+   * a correlated subquery run per row. The scope clause applies to the
+   * outer contacts row; interactions are only reached through it.
    *
    * ISO-8601 timestamps sort correctly as plain strings, so cutoffs are
    * computed in JS and compared with <=/>= rather than reaching for
@@ -336,8 +522,9 @@ export class Store {
    * last-interaction first. `(li.lastAt IS NULL)` evaluates to 1/0 in
    * SQLite, so ordering it DESC puts the "never touched" rows first.
    */
-  needsFollowUp(withinDays?: number, graceDays?: number): Contact[] {
-    const cfg = this.getFollowUpConfig();
+  needsFollowUp(scope: ScopeSet, withinDays?: number, graceDays?: number): Contact[] {
+    const r = resolveScopeSet(scope);
+    const cfg = this.getFollowUpConfig(scope);
     const effectiveWithinDays = withinDays ?? cfg.windowDays;
     const effectiveGraceDays = graceDays ?? cfg.graceDays;
 
@@ -345,40 +532,56 @@ export class Store {
     const graceCutoff = new Date(now - effectiveGraceDays * 86_400_000).toISOString();
     const withinCutoff = new Date(now - effectiveWithinDays * 86_400_000).toISOString();
 
+    const where = scopeClause(r.readable, "c");
     const rows = this.db
       .prepare(
         `SELECT c.* FROM contacts c
          LEFT JOIN (
            SELECT contactId, MAX(at) AS lastAt FROM interactions GROUP BY contactId
          ) li ON li.contactId = c.id
-         WHERE c.nextStep IS NOT NULL AND TRIM(c.nextStep) <> ''
+         WHERE ${where.sql}
+           AND c.nextStep IS NOT NULL AND TRIM(c.nextStep) <> ''
            AND c.createdAt <= ?
            AND (li.lastAt IS NULL OR li.lastAt <= ?)
          ORDER BY (li.lastAt IS NULL) DESC, li.lastAt ASC`,
       )
-      .all(graceCutoff, withinCutoff);
+      .all(...where.params, graceCutoff, withinCutoff);
     return rows.map(rowToContact);
   }
 
-  setVerdict(id: string, v: Verdict): void {
-    this.db
-      .prepare("UPDATE contacts SET verdict = ?, updatedAt = ? WHERE id = ?")
-      .run(v, new Date().toISOString(), id);
+  /** No-op for an unknown id (as before scopes); ScopeDenied for a card
+   * outside the write scope. */
+  setVerdict(scope: ScopeSet, id: string, v: Verdict): void {
+    this.updateField(scope, id, "verdict", v);
   }
 
-  setNextStep(id: string, next: string): void {
-    this.db
-      .prepare("UPDATE contacts SET nextStep = ?, updatedAt = ? WHERE id = ?")
-      .run(next, new Date().toISOString(), id);
+  setNextStep(scope: ScopeSet, id: string, next: string): void {
+    this.updateField(scope, id, "nextStep", next);
   }
-  /** Persists a logged touchpoint against a contact. `note` is required
-   * (defensive re-check here even though callers — e.g. the shell's
-   * log-interaction form — should already validate non-empty before this is
-   * reached) and is trimmed before storage. */
-  logInteraction(i: Interaction): void {
+
+  private updateField(scope: ScopeSet, id: string, column: "verdict" | "nextStep", value: string): void {
+    const r = resolveScopeSet(scope);
+    if (this.checkWritable(r, id) === "missing") return;
+    const own = scopeClause([this.requireWrite(r)]);
+    this.db
+      .prepare(`UPDATE contacts SET ${column} = ?, updatedAt = ? WHERE id = ? AND ${own.sql}`)
+      .run(value, new Date().toISOString(), id, ...own.params);
+  }
+
+  /** Persists a logged touchpoint against a card. Interactions belong to
+   * their card's scope, so the card must exist in the write scope
+   * (ScopeDenied otherwise). `note` is required (defensive re-check here
+   * even though callers — e.g. the shell's log-interaction form — should
+   * already validate non-empty before this is reached) and is trimmed
+   * before storage. */
+  logInteraction(scope: ScopeSet, i: Interaction): void {
     const note = i.note?.trim();
     if (!note) {
       throw new Error("note is required");
+    }
+    const r = resolveScopeSet(scope);
+    if (this.checkWritable(r, i.contactId) === "missing") {
+      throw new ScopeDenied("interaction's card is not in the write scope");
     }
     const id = i.id || randomUUID();
     const at = i.at || new Date().toISOString();
@@ -387,19 +590,96 @@ export class Store {
       .run(id, i.contactId, at, note, i.channel ?? null);
   }
 
-  /** Interaction history for one contact, most recent first. Not part of the
-   * two methods this task's scope names explicitly (search/logInteraction),
-   * but added because the paired server route (GET .../interactions) and the
-   * "a subsequent query/list call returns it" test have no other way to read
-   * back what logInteraction() persists without either reaching into Store's
-   * private db from outside (which the module's own header comment rules
-   * out: "nothing else writes raw SQL") or expanding logInteraction's return
-   * type. Worth a second look if that tradeoff should go a different way. */
-  listInteractions(contactId: string): Interaction[] {
+  /** Interaction history for one card in the readable scopes, most recent
+   * first. Empty when the card is not readable. */
+  listInteractions(scope: ScopeSet, contactId: string): Interaction[] {
+    const r = resolveScopeSet(scope);
+    const where = scopeClause(r.readable, "c");
     const rows = this.db
-      .prepare("SELECT * FROM interactions WHERE contactId = ? ORDER BY at DESC, rowid DESC")
-      .all(contactId);
+      .prepare(
+        `SELECT i.* FROM interactions i JOIN contacts c ON c.id = i.contactId
+         WHERE i.contactId = ? AND ${where.sql}
+         ORDER BY i.at DESC, i.rowid DESC`,
+      )
+      .all(contactId, ...where.params);
     return rows.map(rowToInteraction);
+  }
+}
+
+/**
+ * A Store with one ScopeSet bound: the scope-free method signatures the
+ * standalone shell, MCP server, CLI and Google sync helpers call. Every
+ * method forwards to the Store method of the same name with the bound
+ * ScopeSet, so enforcement still happens in Store's SQL.
+ */
+export class ScopedStore {
+  constructor(
+    private readonly store: Store,
+    readonly scope: ScopeSet,
+  ) {}
+
+  /** The binding Google sync must use (H8): read and write limited to this
+   * binding's write scope, so a pull matches and a push sends only the
+   * scope the Google account is bound to. ScopeDenied without a write
+   * scope. */
+  forSync(): ScopedStore {
+    if (this.scope.write === undefined) throw new ScopeDenied("Google sync needs a write scope");
+    return new ScopedStore(this.store, { read: [this.scope.write], write: this.scope.write });
+  }
+
+  list(): Contact[] {
+    return this.store.list(this.scope);
+  }
+  upsert(c: Contact): Contact {
+    return this.store.upsert(this.scope, c);
+  }
+  get(id: string): Contact | undefined {
+    return this.store.get(this.scope, id);
+  }
+  delete(id: string): boolean {
+    return this.store.delete(this.scope, id);
+  }
+  search(query: string, opts?: { verdict?: Verdict; limit?: number }): SearchResult[] {
+    return this.store.search(this.scope, query, opts);
+  }
+  getSetting(key: string, fallback: string): string {
+    return this.store.getSetting(this.scope, key, fallback);
+  }
+  setSetting(key: string, value: string): void {
+    this.store.setSetting(this.scope, key, value);
+  }
+  getFollowUpConfig(): { windowDays: number; graceDays: number } {
+    return this.store.getFollowUpConfig(this.scope);
+  }
+  setFollowUpConfig(cfg: { windowDays: number; graceDays: number }): void {
+    this.store.setFollowUpConfig(this.scope, cfg);
+  }
+  getAppearance(): AppearanceConfig {
+    return this.store.getAppearance(this.scope);
+  }
+  setAppearance(cfg: AppearanceConfig): void {
+    this.store.setAppearance(this.scope, cfg);
+  }
+  getGoogleSyncState(): GoogleSyncState {
+    return this.store.getGoogleSyncState(this.scope);
+  }
+  updateGoogleSyncState(patch: GoogleSyncState): GoogleSyncState {
+    return this.store.updateGoogleSyncState(this.scope, patch);
+  }
+  needsFollowUp(withinDays?: number, graceDays?: number): Contact[] {
+    return this.store.needsFollowUp(this.scope, withinDays, graceDays);
+  }
+  setVerdict(id: string, v: Verdict): void {
+    this.store.setVerdict(this.scope, id, v);
+  }
+  setNextStep(id: string, next: string): void {
+    this.store.setNextStep(this.scope, id, next);
+  }
+  logInteraction(i: Interaction): void {
+    this.store.logInteraction(this.scope, i);
+  }
+  listInteractions(contactId: string): Interaction[] {
+    return this.store.listInteractions(this.scope, contactId);
   }
 }
 
@@ -433,6 +713,8 @@ interface ContactRow {
   googleEtag: string | null;
   createdAt: string;
   updatedAt: string;
+  scopeKind: string;
+  scopeId: string;
 }
 
 /** Row shape as returned by node:sqlite for the `interactions` table. */

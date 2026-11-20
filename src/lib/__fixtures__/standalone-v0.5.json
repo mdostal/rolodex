@@ -1,0 +1,527 @@
+{
+  "emptyList": [],
+  "created": [
+    {
+      "id": "<id#1>",
+      "name": "Ada Lovelace",
+      "org": "Analytical Engines",
+      "role": "Mathematician",
+      "email": "ada@example.com",
+      "what": "computing pioneer",
+      "angle": "engine programming",
+      "verdict": "none",
+      "nextStep": "send notes",
+      "tags": [
+        "math",
+        "history"
+      ],
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#2>",
+      "name": "Grace Hopper",
+      "org": "Navy",
+      "phone": "+1 (555) 010-2000",
+      "what": "compilers",
+      "verdict": "strong",
+      "nextStep": "invite to talk",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#3>",
+      "name": "linus",
+      "email": "linus@example.com",
+      "verdict": "watch",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#4>",
+      "name": "Barbara Liskov",
+      "email": "barbara@example.com",
+      "verdict": "none",
+      "nextStep": "follow up",
+      "createdAt": "<now>",
+      "updatedAt": "<now>"
+    }
+  ],
+  "dedupByEmail": {
+    "id": "<id#1>",
+    "name": "Ada King",
+    "email": "ada@example.com",
+    "verdict": "none",
+    "createdAt": "2020-01-01T00:00:00.000Z",
+    "updatedAt": "<now>"
+  },
+  "editById": {
+    "id": "<id#2>",
+    "name": "Grace Hopper",
+    "org": "Navy",
+    "role": "Rear Admiral",
+    "phone": "+1 (555) 010-2000",
+    "what": "compilers",
+    "verdict": "strong",
+    "nextStep": "invite to talk",
+    "tags": [
+      "navy"
+    ],
+    "createdAt": "2020-01-01T00:00:00.000Z",
+    "updatedAt": "<now>"
+  },
+  "listAfterUpserts": [
+    {
+      "id": "<id#1>",
+      "name": "Ada King",
+      "email": "ada@example.com",
+      "verdict": "none",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#4>",
+      "name": "Barbara Liskov",
+      "email": "barbara@example.com",
+      "verdict": "none",
+      "nextStep": "follow up",
+      "createdAt": "<now>",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#2>",
+      "name": "Grace Hopper",
+      "org": "Navy",
+      "role": "Rear Admiral",
+      "phone": "+1 (555) 010-2000",
+      "what": "compilers",
+      "verdict": "strong",
+      "nextStep": "invite to talk",
+      "tags": [
+        "navy"
+      ],
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#3>",
+      "name": "linus",
+      "email": "linus@example.com",
+      "verdict": "watch",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    }
+  ],
+  "getMissing": null,
+  "searchAda": [
+    {
+      "contact": {
+        "id": "<id#1>",
+        "name": "Ada King",
+        "email": "ada@example.com",
+        "verdict": "none",
+        "createdAt": "2020-01-01T00:00:00.000Z",
+        "updatedAt": "<now>"
+      },
+      "score": -0.981082
+    }
+  ],
+  "searchPrefix": [
+    {
+      "contact": {
+        "id": "<id#2>",
+        "name": "Grace Hopper",
+        "org": "Navy",
+        "role": "Rear Admiral",
+        "phone": "+1 (555) 010-2000",
+        "what": "compilers",
+        "verdict": "strong",
+        "nextStep": "invite to talk",
+        "tags": [
+          "navy"
+        ],
+        "createdAt": "2020-01-01T00:00:00.000Z",
+        "updatedAt": "<now>"
+      },
+      "score": -0.548252
+    }
+  ],
+  "searchVerdict": [
+    {
+      "contact": {
+        "id": "<id#2>",
+        "name": "Grace Hopper",
+        "org": "Navy",
+        "role": "Rear Admiral",
+        "phone": "+1 (555) 010-2000",
+        "what": "compilers",
+        "verdict": "strong",
+        "nextStep": "invite to talk",
+        "tags": [
+          "navy"
+        ],
+        "createdAt": "2020-01-01T00:00:00.000Z",
+        "updatedAt": "<now>"
+      },
+      "score": -0.847298
+    }
+  ],
+  "searchVerdictMiss": [],
+  "searchLimit": [],
+  "searchEmpty": [],
+  "searchPunct": [],
+  "emptyNoteError": "note is required",
+  "interactionsGrace": [
+    {
+      "id": "int-fixed",
+      "contactId": "<id#2>",
+      "at": "2020-03-01T00:00:00.000Z",
+      "note": "email",
+      "channel": "email"
+    },
+    {
+      "id": "<id#5>",
+      "contactId": "<id#2>",
+      "at": "2020-02-01T00:00:00.000Z",
+      "note": "first call",
+      "channel": "call"
+    }
+  ],
+  "interactionsLinus": [
+    {
+      "id": "<id#6>",
+      "contactId": "<id#3>",
+      "at": "<now>",
+      "note": "recent dm"
+    }
+  ],
+  "interactionsNone": [],
+  "followUpConfigDefault": {
+    "windowDays": 30,
+    "graceDays": 14
+  },
+  "followUpsDefault": [
+    {
+      "id": "<id#2>",
+      "name": "Grace Hopper",
+      "org": "Navy",
+      "role": "Rear Admiral",
+      "phone": "+1 (555) 010-2000",
+      "what": "compilers",
+      "verdict": "strong",
+      "nextStep": "invite to talk",
+      "tags": [
+        "navy"
+      ],
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    }
+  ],
+  "followUpsExplicit": [
+    {
+      "id": "<id#4>",
+      "name": "Barbara Liskov",
+      "email": "barbara@example.com",
+      "verdict": "none",
+      "nextStep": "follow up",
+      "createdAt": "<now>",
+      "updatedAt": "<now>"
+    }
+  ],
+  "followUpConfigSet": {
+    "windowDays": 7,
+    "graceDays": 0
+  },
+  "followUpsAfterConfig": [
+    {
+      "id": "<id#4>",
+      "name": "Barbara Liskov",
+      "email": "barbara@example.com",
+      "verdict": "none",
+      "nextStep": "follow up",
+      "createdAt": "<now>",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#2>",
+      "name": "Grace Hopper",
+      "org": "Navy",
+      "role": "Rear Admiral",
+      "phone": "+1 (555) 010-2000",
+      "what": "compilers",
+      "verdict": "strong",
+      "nextStep": "invite to talk",
+      "tags": [
+        "navy"
+      ],
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    }
+  ],
+  "appearanceDefault": {
+    "theme": "default",
+    "iconId": 6
+  },
+  "appearanceSet": {
+    "theme": "brass",
+    "iconId": 3
+  },
+  "settingFallback": "fallback",
+  "settingSet": "v2",
+  "afterVerdictAndNext": {
+    "id": "<id#3>",
+    "name": "linus",
+    "email": "linus@example.com",
+    "verdict": "pass",
+    "nextStep": "ping in spring",
+    "createdAt": "2020-01-01T00:00:00.000Z",
+    "updatedAt": "<now>"
+  },
+  "pullSummary": {
+    "pulled": 2,
+    "created": 1,
+    "updated": 1
+  },
+  "listAfterPull": [
+    {
+      "id": "<id#1>",
+      "name": "Ada Lovelace (Google)",
+      "email": "ada@example.com",
+      "phone": "555-1111",
+      "verdict": "none",
+      "googleResourceName": "people/c1",
+      "googleEtag": "etag-c1",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#4>",
+      "name": "Barbara Liskov",
+      "email": "barbara@example.com",
+      "verdict": "none",
+      "nextStep": "follow up",
+      "createdAt": "<now>",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "people/c2",
+      "name": "Edsger Dijkstra",
+      "email": "edsger@example.com",
+      "verdict": "none",
+      "googleResourceName": "people/c2",
+      "googleEtag": "etag-c2",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#2>",
+      "name": "Grace Hopper",
+      "org": "Navy",
+      "role": "Rear Admiral",
+      "phone": "+1 (555) 010-2000",
+      "what": "compilers",
+      "verdict": "strong",
+      "nextStep": "invite to talk",
+      "tags": [
+        "navy"
+      ],
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#3>",
+      "name": "linus",
+      "email": "linus@example.com",
+      "verdict": "pass",
+      "nextStep": "ping in spring",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    }
+  ],
+  "pullSummaryAgain": {
+    "pulled": 2,
+    "created": 0,
+    "updated": 2
+  },
+  "listAfterSecondPull": [
+    {
+      "id": "<id#1>",
+      "name": "Ada Lovelace (Google)",
+      "email": "ada@example.com",
+      "phone": "555-1111",
+      "verdict": "none",
+      "googleResourceName": "people/c1",
+      "googleEtag": "etag-c1",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#4>",
+      "name": "Barbara Liskov",
+      "email": "barbara@example.com",
+      "verdict": "none",
+      "nextStep": "follow up",
+      "createdAt": "<now>",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "people/c2",
+      "name": "Edsger Dijkstra",
+      "email": "edsger@example.com",
+      "verdict": "none",
+      "googleResourceName": "people/c2",
+      "googleEtag": "etag-c2",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#2>",
+      "name": "Grace Hopper",
+      "org": "Navy",
+      "role": "Rear Admiral",
+      "phone": "+1 (555) 010-2000",
+      "what": "compilers",
+      "verdict": "strong",
+      "nextStep": "invite to talk",
+      "tags": [
+        "navy"
+      ],
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#3>",
+      "name": "linus",
+      "email": "linus@example.com",
+      "verdict": "pass",
+      "nextStep": "ping in spring",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    }
+  ],
+  "pushSummary": {
+    "pushed": 4,
+    "created": 2,
+    "updated": 2,
+    "errors": [
+      {
+        "contactId": "<id#3>",
+        "name": "linus",
+        "error": "etag conflict for linus"
+      }
+    ]
+  },
+  "pushedOrder": [
+    "Ada Lovelace (Google)",
+    "Barbara Liskov",
+    "Edsger Dijkstra",
+    "Grace Hopper",
+    "linus"
+  ],
+  "listAfterPush": [
+    {
+      "id": "<id#1>",
+      "name": "Ada Lovelace (Google)",
+      "email": "ada@example.com",
+      "phone": "555-1111",
+      "verdict": "none",
+      "googleResourceName": "people/c1",
+      "googleEtag": "etag-pushed-21",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#4>",
+      "name": "Barbara Liskov",
+      "email": "barbara@example.com",
+      "verdict": "none",
+      "nextStep": "follow up",
+      "googleResourceName": "people/new-Barbara-Liskov",
+      "googleEtag": "etag-pushed-14",
+      "createdAt": "<now>",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "people/c2",
+      "name": "Edsger Dijkstra",
+      "email": "edsger@example.com",
+      "verdict": "none",
+      "googleResourceName": "people/c2",
+      "googleEtag": "etag-pushed-15",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#2>",
+      "name": "Grace Hopper",
+      "org": "Navy",
+      "role": "Rear Admiral",
+      "phone": "+1 (555) 010-2000",
+      "what": "compilers",
+      "verdict": "strong",
+      "nextStep": "invite to talk",
+      "tags": [
+        "navy"
+      ],
+      "googleResourceName": "people/new-Grace-Hopper",
+      "googleEtag": "etag-pushed-12",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#3>",
+      "name": "linus",
+      "email": "linus@example.com",
+      "verdict": "pass",
+      "nextStep": "ping in spring",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    }
+  ],
+  "deleteGraceEverywhere": {
+    "deleted": true
+  },
+  "deleteMissingEverywhere": {
+    "deleted": false
+  },
+  "googleDeletes": [
+    "people/new-Grace-Hopper"
+  ],
+  "interactionsAfterDelete": [],
+  "deleteAgain": false,
+  "deleteBarbara": true,
+  "finalList": [
+    {
+      "id": "<id#1>",
+      "name": "Ada Lovelace (Google)",
+      "email": "ada@example.com",
+      "phone": "555-1111",
+      "verdict": "none",
+      "googleResourceName": "people/c1",
+      "googleEtag": "etag-pushed-21",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "people/c2",
+      "name": "Edsger Dijkstra",
+      "email": "edsger@example.com",
+      "verdict": "none",
+      "googleResourceName": "people/c2",
+      "googleEtag": "etag-pushed-15",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    },
+    {
+      "id": "<id#3>",
+      "name": "linus",
+      "email": "linus@example.com",
+      "verdict": "pass",
+      "nextStep": "ping in spring",
+      "createdAt": "2020-01-01T00:00:00.000Z",
+      "updatedAt": "<now>"
+    }
+  ],
+  "finalSearch": [],
+  "finalFollowUps": []
+}

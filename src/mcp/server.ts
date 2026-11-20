@@ -7,6 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { Store } from "../lib/store.js";
+import { localStore } from "../lib/local-scope.js";
 import {
   applyPullToStore,
   createGoogleSync,
@@ -138,7 +139,9 @@ function withErrorHandling<Args>(
 export function createRolodexMcpServer(
   opts: RolodexMcpServerOptions = {},
 ): { server: McpServer; handlers: RolodexMcpHandlers } {
-  const store = opts.store ?? new Store();
+  // The MCP server (and the CLI, which reuses these handlers) is the
+  // standalone app: bound to `user:local` via the one local adapter.
+  const store = localStore(opts.store ?? new Store());
   const google = opts.google ?? createGoogleSync();
 
   const server = new McpServer({ name: "rolodex", version: "0.1.0" });

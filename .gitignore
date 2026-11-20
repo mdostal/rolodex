@@ -21,3 +21,6 @@ token.json
 
 # Playwright MCP debug artifacts (page snapshots, console logs)
 .playwright-mcp/
+
+# Regression fixture: a database captured from v0.5 (see src/lib/standalone-regression.test.ts)
+!src/lib/__fixtures__/*.db

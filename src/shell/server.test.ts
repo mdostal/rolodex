@@ -7,6 +7,7 @@ import { createRolodexServer, type RolodexServerOptions } from "./server.js";
 import { createInMemorySecretsAdapter } from "../lib/secrets-adapter.js";
 import type { CreateSecretsAdapterOptions, SecretsAdapter } from "../lib/secrets-adapter.js";
 import { getSecretsBackendChoiceSync, setSecretsBackendChoice } from "./secrets-backend-config.js";
+import { localStore } from "../lib/local-scope.js";
 import { Store } from "../lib/store.js";
 import { GOOGLE_OAUTH_TOKEN_KEY } from "../lib/google-sync.js";
 
@@ -1347,7 +1348,7 @@ describe("GET /api/contacts/needs-follow-up", () => {
     await postJson(baseUrl + "/api/wizard/complete");
     await putJson(baseUrl + "/api/settings/follow-up", { windowDays: 30, graceDays: 14 });
 
-    dbStore.upsert({
+    localStore(dbStore).upsert({
       id: "",
       name: "Stale Contact",
       verdict: "none",
@@ -1368,7 +1369,7 @@ describe("GET /api/contacts/needs-follow-up", () => {
     // Persisted config is wide enough that nothing qualifies by default.
     await putJson(baseUrl + "/api/settings/follow-up", { windowDays: 365, graceDays: 365 });
 
-    const created = dbStore.upsert({
+    const created = localStore(dbStore).upsert({
       id: "",
       name: "Moderately Stale",
       verdict: "none",
