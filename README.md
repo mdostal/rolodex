@@ -167,6 +167,35 @@ rolodex delete <contactId>
 rolodex --help
 ```
 
+## Service mode (`rolodex serve`, for a host such as Pantheon)
+
+`rolodex serve` runs rolodex headless, as a backend that speaks the host's
+contacts contract over signed HTTP:
+
+- `POST /v1/<operation>` for each contract operation.
+- An open `GET /v1/health`.
+- No UI and no MCP.
+
+Every call is authenticated with a bearer service token plus an HMAC
+signature over the method, path, body, scopes and timestamp. The scopes a
+call may read are signed by the host. Rolodex enforces them; it does not
+decide them.
+
+Configuration is env only: `ROLODEX_DB`, `ROLODEX_SERVICE_TOKEN_FILE` (the
+token is only ever read from a file), `ROLODEX_SECRETS_DIR` and `PORT`
+(default 4180).
+
+```sh
+podman build -t rolodex .
+podman run --rm -p 4180:4180 --read-only --tmpfs /tmp \
+  -v rolodex-data:/data -v ./secrets:/pantheon-secrets/rolodex:ro rolodex
+curl localhost:4180/v1/health
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ("Service mode") for the
+signature scheme, status codes and field mapping. The standalone app, MCP
+server and CLI are unchanged.
+
 ## Development
 ```sh
 npm run typecheck   # tsc --noEmit

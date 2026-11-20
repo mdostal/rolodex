@@ -437,6 +437,112 @@ same message). Deleting a card deletes every link touching it, wherever the
 link was asserted (H9). `toOrg` strings are unscoped by construction: an org
 name typed in one scope is the same string everywhere.
 
+### Service mode: `rolodex serve` (contacts-memory cm-04)
+
+`rolodex serve` (`src/serve/`) runs rolodex as a backend for a host
+(Pantheon core-api): the host's L2 contacts-slot contract over HTTP. The
+contract's schemas are copied, never imported, into
+`src/serve/contract.ts` (source commit noted in the file). There is one
+`POST /v1/<operation>` route per contract operation (`search`, `get`,
+`connections`, `candidates`, `followups`, `summary`, `upsert`, `log`,
+`link`, `unlink`, `delete`) and an open `GET /v1/health` that answers
+`{ok, version, schema}`. Serve mode has no wizard, no static UI and no MCP.
+The stdio MCP server is local-only and gets no remote mode (grill U5).
+Standalone mode is unchanged.
+
+**Rolodex does not decide who may see what; core-api does (grill U1).** The
+ScopeSet travels in the signed `X-Rolodex-Scopes` header and goes to the
+Store unchanged; the only conversion is from `{kind,id}` objects to
+`kind:id` strings. Rolodex enforces whatever set it receives and never
+widens, narrows or infers one. Which scopes a caller may hold is entirely
+core-api's decision, signed with the shared service token. A body may
+repeat the set as `scopes` (the contract's request shape), but it must
+match the header or the call gets a 400. The unsigned body can never change
+what is read.
+
+**Request authentication** (`src/serve/auth.ts`). Every route except health
+needs these headers:
+
+```
+Authorization:    Bearer <service token>
+X-Rolodex-Scopes: <JSON ScopeSet, contract shape: {"read":[{"kind":"client","id":"a"}],"write":{...}}>
+X-Rolodex-Ts:     <unix ms>
+X-Rolodex-Sig:    hex(HMAC-SHA256(token, METHOD + "\n" + path + "\n" + sha256hex(body) + "\n" + scopes + "\n" + ts))
+```
+
+- `path` is the URL pathname, and `scopes` and `ts` are the raw header
+  strings, so no JSON canonicalization is needed.
+- A wrong or missing token, a missing header, a bad signature, a `ts` more
+  than 60 s from the server clock in either direction, or a malformed
+  ScopeSet all get **401** `{"error":"unauthorized"}`. Nothing is read
+  before the request passes.
+- The token and signature compares are constant-time (`timingSafeEqual`
+  over SHA-256 digests, so length leaks nothing either).
+- The token is held in memory only. It is never logged, never echoed, and
+  never put in an error message. The log records method, path, status and
+  a reason, but no headers or bodies.
+
+Other answers:
+
+| Status | When |
+|---|---|
+| 400 | Invalid request |
+| 403 | No write scope, or a card or link outside the write scope |
+| 404 | Unknown route, or an unreadable card |
+| 405 | Wrong method |
+| 413 | Body over 1 MB |
+| 500 | Anything else, with no detail |
+
+**Contract ↔ card mapping** (`src/serve/adapter.ts`):
+
+- Field pairs are `title ↔ role`, `notes ↔ what` and `emails[0]/phones[0] ↔
+  email/phone`. A card holds one email and one phone, so an upsert with
+  more than one gets a 400 rather than losing data.
+- An upsert only changes the fields it sends. Rolodex-only fields (`met`,
+  `angle`, `verdict`, `nextStep`, Google ids) are never touched.
+- `candidates`:
+  - Computed from readable cards with the same rules as
+    `Store.candidates()`.
+  - Score is `1 − Π(1 − w)`, with weights email 0.9, phone 0.8,
+    name+org 0.6.
+  - A pair joined by a visible `same_as` link is `confirmed`; every other
+    pair is `pending`.
+  - `rejected` is never produced, because rolodex has nowhere to store a
+    rejection yet.
+- `followups` lists interactions whose `followUpAt` is due. A later
+  interaction on the same card closes one.
+- `summary.lastSync` is the later of a scope's Google `lastPullAt` and
+  `lastPushAt`.
+
+**Configuration** (`src/serve/config.ts`) comes from the environment only:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ROLODEX_DB` | `/data/rolodex.db` | |
+| `ROLODEX_SERVICE_TOKEN_FILE` | `/pantheon-secrets/rolodex/service-token` | The token is always read from a file; a set `ROLODEX_SERVICE_TOKEN` env var is refused. Minimum 16 characters. |
+| `ROLODEX_SECRETS_DIR` | `/pantheon-secrets/rolodex` | |
+| `PORT` | `4180` | |
+
+Serve mode binds `0.0.0.0`; the standalone shell still binds loopback.
+
+**Secrets in serve mode (grill H5).** Google OAuth material comes from
+files the platform injects under `ROLODEX_SECRETS_DIR`, one file per
+`SecretsAdapter` key, via `createFileSecretsAdapter()`. It never comes from
+the keychain or the portunus CLI. That adapter is read-only (`set` and
+`delete` throw) and refuses keys that could leave the directory. Serve mode
+does not expose Google sync yet. Wiring sync in later must handle the
+read-only adapter: `google-sync.ts` persists refreshed tokens with
+`secrets.set`.
+
+**Container** (`Dockerfile`):
+
+- `node:24-slim`, whose bundled SQLite has FTS5; the build fails if it
+  doesn't.
+- Runs as the non-root `node` user.
+- The only writable path is the `/data` volume, so the image works with
+  `--read-only`. Give SQLite a tmpfs `/tmp`.
+- A plain Dockerfile, so `podman build` works without buildx.
+
 ## Data-integrity and security posture (non-negotiable)
 1. **You own the data** — local SQLite, exportable, no lock-in.
 2. **OAuth secrets only ever go through `SecretsAdapter`** — the OS keychain
