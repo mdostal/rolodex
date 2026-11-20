@@ -36,6 +36,17 @@ export class ScopeDenied extends Error {
   }
 }
 
+/** Thrown when a referenced card or link is not visible to the caller. It is
+ * deliberately the same error, with the same message, whether the thing is
+ * missing or merely unreadable, so a caller cannot probe for existence
+ * (contacts-memory cm-03). */
+export class NotFound extends Error {
+  constructor(message = "not found") {
+    super(message);
+    this.name = "NotFound";
+  }
+}
+
 const KINDS: ReadonlySet<string> = new Set(Object.values(ScopeKind));
 
 export interface ParsedScope {
@@ -101,12 +112,18 @@ export function resolveScopeSet(set: ScopeSet): ResolvedScopeSet {
  * is exactly one place where "which rows may this caller see/touch" is
  * turned into SQL. An empty scope list yields a clause that matches nothing.
  *
- * `alias` is the contacts table alias in the surrounding query ("" for none).
+ * `alias` is the table alias in the surrounding query ("" for none).
+ * `columns` names the scope columns: contacts' `scopeKind`/`scopeId` by
+ * default, or e.g. links' `assertedInKind`/`assertedInId` (cm-03).
  */
-export function scopeClause(scopes: readonly ParsedScope[], alias = ""): { sql: string; params: string[] } {
+export function scopeClause(
+  scopes: readonly ParsedScope[],
+  alias = "",
+  columns: { kind: string; id: string } = { kind: "scopeKind", id: "scopeId" },
+): { sql: string; params: string[] } {
   if (scopes.length === 0) return { sql: "(0)", params: [] };
   const col = alias ? `${alias}.` : "";
-  const sql = scopes.map(() => `(${col}scopeKind = ? AND ${col}scopeId = ?)`).join(" OR ");
+  const sql = scopes.map(() => `(${col}${columns.kind} = ? AND ${col}${columns.id} = ?)`).join(" OR ");
   const params = scopes.flatMap((s) => [s.kind, s.id]);
   return { sql: `(${sql})`, params };
 }

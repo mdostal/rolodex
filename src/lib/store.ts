@@ -1,19 +1,30 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { Contact, Interaction, SearchResult, Verdict } from "./types.js";
+import type {
+  ConnectionHit,
+  Contact,
+  Interaction,
+  Link,
+  LinkCandidate,
+  LinkPredicate,
+  SearchResult,
+  Verdict,
+} from "./types.js";
 import { LOCAL_SCOPE } from "./local-scope.js";
-import { normalizeEmail, normalizePhone } from "./dedupe.js";
+import { normalizeEmail, normalizeName, normalizeOrg, normalizePhone } from "./dedupe.js";
 import {
+  NotFound,
   ScopeDenied,
   parseScope,
   resolveScopeSet,
   scopeClause,
   type ParsedScope,
   type ResolvedScopeSet,
+  type Scope,
   type ScopeSet,
 } from "./scope.js";
 
-export { ScopeDenied } from "./scope.js";
+export { NotFound, ScopeDenied } from "./scope.js";
 export type { Scope, ScopeSet } from "./scope.js";
 
 /** The standalone scope's kind/id, used by migrate() to backfill v0.5 rows. */
@@ -45,6 +56,34 @@ export interface AppearanceConfig {
 /** Settings-table key for per-scope Google sync state (connected account,
  * last pull/push). One row per scope, so each bound scope has its own. */
 const GOOGLE_SYNC_STATE_KEY = "google.sync";
+
+/** Every link predicate (cm-03). */
+const LINK_PREDICATES: ReadonlySet<string> = new Set<LinkPredicate>([
+  "same_as",
+  "knows",
+  "introduced",
+  "works_at",
+  "reports_to",
+  "colleague",
+]);
+
+/** Predicates where "A p B" means the same as "B p A"; link() treats either
+ * orientation as the same assertion. */
+const SYMMETRIC_PREDICATES: ReadonlySet<string> = new Set<LinkPredicate>(["same_as", "knows", "colleague"]);
+
+/** The single NotFound message link() uses for an endpoint card, whether it
+ * is missing or unreadable — identical on purpose (no existence leak). */
+const CONTACT_NOT_FOUND = "contact not found";
+
+/** What link() takes: exactly one of toContactId / toOrg. */
+export interface LinkInput {
+  fromContactId: string;
+  toContactId?: string;
+  toOrg?: string;
+  predicate: LinkPredicate;
+  note?: string;
+  createdBy?: string;
+}
 
 /** Per-scope Google sync state, stored JSON-encoded under
  * GOOGLE_SYNC_STATE_KEY in that scope's settings. */
@@ -103,6 +142,15 @@ export class Store {
         scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
         PRIMARY KEY (scope, key)
       );
+      CREATE TABLE IF NOT EXISTS links (
+        id TEXT PRIMARY KEY, fromContactId TEXT NOT NULL, toContactId TEXT, toOrg TEXT,
+        predicate TEXT NOT NULL, note TEXT,
+        assertedInKind TEXT NOT NULL, assertedInId TEXT NOT NULL,
+        createdAt TEXT NOT NULL, createdBy TEXT,
+        CHECK ((toContactId IS NULL) <> (toOrg IS NULL))
+      );
+      CREATE INDEX IF NOT EXISTS links_from ON links(fromContactId);
+      CREATE INDEX IF NOT EXISTS links_to ON links(toContactId);
     `);
     // SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — a database
     // file created before a column existed needs these run once to reach
@@ -336,8 +384,9 @@ export class Store {
     return row ? rowToContact(row) : undefined;
   }
 
-  /** Deletes a card and its interaction history (and, once cm-03 lands,
-   * every link touching it — H9). Explicit interactions delete rather than
+  /** Deletes a card, its interaction history and every link touching it,
+   * in either direction and wherever the link was asserted (H9) — including
+   * links asserted in scopes this caller cannot read. Explicit interactions delete rather than
    * relying on the schema's `ON DELETE CASCADE` — that constraint is inert
    * unless `PRAGMA foreign_keys = ON` is set, which this class deliberately
    * doesn't do (see the constructor's PRAGMA list). Returns false when no
@@ -347,6 +396,9 @@ export class Store {
     const r = resolveScopeSet(scope);
     if (this.checkWritable(r, id) === "missing") return false;
     const own = scopeClause([this.requireWrite(r)]);
+    // scope-check: unscoped by design (H9). checkWritable() above proved the
+    // card is in the write scope; its links go wherever they were asserted.
+    this.db.prepare("DELETE FROM links WHERE fromContactId = ? OR toContactId = ?").run(id, id);
     this.db
       .prepare(`DELETE FROM interactions WHERE contactId IN (SELECT id FROM contacts WHERE id = ? AND ${own.sql})`)
       .run(id, ...own.params);
@@ -604,6 +656,198 @@ export class Store {
       .all(contactId, ...where.params);
     return rows.map(rowToInteraction);
   }
+
+  // -------------------------------------------------------------------------
+  // Links (contacts-memory cm-03)
+  //
+  // A link is visible only when the caller can read the scope it was
+  // asserted in AND both endpoint cards' scopes (a `toOrg` link has one
+  // card endpoint). Every link read goes through visibleLinks(), which
+  // applies all three conditions in SQL; anything else is omitted — no
+  // stub, no count, no "hidden" marker. A referenced card that is missing
+  // and one that is unreadable produce the same result (NotFound / empty).
+  // -------------------------------------------------------------------------
+
+  /** Visible links matching `extra` (a SQL condition over alias `l`). */
+  private visibleLinks(r: ResolvedScopeSet, extra: string, extraParams: string[]): Link[] {
+    const asserted = scopeClause(r.readable, "l", { kind: "assertedInKind", id: "assertedInId" });
+    const from = scopeClause(r.readable, "f");
+    const to = scopeClause(r.readable, "t");
+    const rows = this.db
+      .prepare(
+        `SELECT l.* FROM links l
+         JOIN contacts f ON f.id = l.fromContactId
+         LEFT JOIN contacts t ON t.id = l.toContactId
+         WHERE ${asserted.sql} AND ${from.sql}
+           AND (l.toContactId IS NULL OR (t.id IS NOT NULL AND ${to.sql}))
+           AND (${extra})
+         ORDER BY l.createdAt, l.rowid`,
+      )
+      .all(...asserted.params, ...from.params, ...to.params, ...extraParams);
+    return rows.map(rowToLink);
+  }
+
+  /**
+   * Asserts a link in the write scope. Needs write on the asserting scope
+   * (ScopeDenied otherwise, checked before any endpoint is looked up) and
+   * read on both endpoint cards: an endpoint that is missing or unreadable
+   * throws the same NotFound. `toOrg` is only valid for `works_at` and is
+   * stored normalized (normalizeOrg). Re-asserting an existing link in the
+   * same scope returns it unchanged (either orientation for symmetric
+   * predicates).
+   */
+  link(scope: ScopeSet, input: LinkInput): Link {
+    if (!LINK_PREDICATES.has(input.predicate)) throw new Error(`invalid predicate ${JSON.stringify(input.predicate)}`);
+    const hasTo = !!input.toContactId;
+    const hasOrg = input.toOrg !== undefined && input.toOrg !== null;
+    if (hasTo === hasOrg) throw new Error("a link needs exactly one of toContactId or toOrg");
+    let toOrg: string | undefined;
+    if (hasOrg) {
+      if (input.predicate !== "works_at") throw new Error("toOrg is only valid for works_at");
+      toOrg = normalizeOrg(input.toOrg);
+      if (!toOrg) throw new Error("toOrg must not be blank");
+    }
+    if (hasTo && input.toContactId === input.fromContactId) throw new Error("a card cannot link to itself");
+
+    const r = resolveScopeSet(scope);
+    const w = this.requireWrite(r);
+    if (!this.get(scope, input.fromContactId)) throw new NotFound(CONTACT_NOT_FOUND);
+    if (hasTo && !this.get(scope, input.toContactId!)) throw new NotFound(CONTACT_NOT_FOUND);
+
+    // Same assertion in the same scope already? Both endpoints and the
+    // asserting scope are readable here, so this lookup reveals nothing.
+    const mine = "l.assertedInKind = ? AND l.assertedInId = ? AND l.predicate = ?";
+    const mineParams = [w.kind, w.id, input.predicate];
+    let existing: Link | undefined;
+    if (toOrg) {
+      existing = this.visibleLinks(r, `${mine} AND l.fromContactId = ? AND l.toOrg = ?`, [
+        ...mineParams,
+        input.fromContactId,
+        toOrg,
+      ])[0];
+    } else {
+      const either = SYMMETRIC_PREDICATES.has(input.predicate)
+        ? " OR (l.fromContactId = ? AND l.toContactId = ?)"
+        : "";
+      const params = [...mineParams, input.fromContactId, input.toContactId!];
+      if (either) params.push(input.toContactId!, input.fromContactId);
+      existing = this.visibleLinks(r, `${mine} AND ((l.fromContactId = ? AND l.toContactId = ?)${either})`, params)[0];
+    }
+    if (existing) return existing;
+
+    const id = randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO links (id, fromContactId, toContactId, toOrg, predicate, note, assertedInKind, assertedInId, createdAt, createdBy)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.fromContactId,
+        input.toContactId ?? null,
+        toOrg ?? null,
+        input.predicate,
+        input.note?.trim() || null,
+        w.kind,
+        w.id,
+        new Date().toISOString(),
+        input.createdBy ?? null,
+      );
+    return this.visibleLinks(r, "l.id = ?", [id])[0]!;
+  }
+
+  /** Removes a link. False when the link is missing or not visible (the
+   * same answer either way); ScopeDenied when it is visible but was
+   * asserted outside the write scope. */
+  unlink(scope: ScopeSet, linkId: string): boolean {
+    const r = resolveScopeSet(scope);
+    const l = this.visibleLinks(r, "l.id = ?", [linkId])[0];
+    if (!l) return false;
+    const w = this.requireWrite(r);
+    if (l.assertedIn !== `${w.kind}:${w.id}`) throw new ScopeDenied("link is outside the write scope");
+    const info = this.db
+      .prepare("DELETE FROM links WHERE id = ? AND assertedInKind = ? AND assertedInId = ?")
+      .run(linkId, w.kind, w.id);
+    return Number(info.changes) > 0;
+  }
+
+  /** Visible links touching a card, in either direction. Empty when the
+   * card is missing or unreadable. */
+  links(scope: ScopeSet, contactId: string): Link[] {
+    return this.visibleLinks(resolveScopeSet(scope), "l.fromContactId = ? OR l.toContactId = ?", [
+      contactId,
+      contactId,
+    ]);
+  }
+
+  /**
+   * Cards connected to `contactId` within `depth` hops (1 or 2), walking
+   * visible card-to-card links only, in either direction. Because a link
+   * is only visible when both its endpoints are readable, the walk can
+   * never pass through an unreadable card. Org (`toOrg`) links are not
+   * traversed — orgs are not cards. Each card is reported once, at its
+   * shortest depth, with the links walked to reach it. Empty when the
+   * start card is missing or unreadable.
+   */
+  connections(scope: ScopeSet, contactId: string, depth = 1): ConnectionHit[] {
+    if (depth !== 1 && depth !== 2) throw new RangeError("depth must be 1 or 2");
+    const r = resolveScopeSet(scope);
+    if (!this.get(scope, contactId)) return [];
+    const seen = new Set<string>([contactId]);
+    const hits: ConnectionHit[] = [];
+    let frontier: Array<{ id: string; path: Link[] }> = [{ id: contactId, path: [] }];
+    for (let d = 1; d <= depth; d++) {
+      const next: typeof frontier = [];
+      for (const node of frontier) {
+        const ls = this.visibleLinks(r, "l.toContactId IS NOT NULL AND (l.fromContactId = ? OR l.toContactId = ?)", [
+          node.id,
+          node.id,
+        ]);
+        for (const l of ls) {
+          const other = l.fromContactId === node.id ? l.toContactId! : l.fromContactId;
+          if (seen.has(other)) continue;
+          const contact = this.get(scope, other);
+          if (!contact) continue; // unreachable: visibleLinks() proved it readable
+          seen.add(other);
+          const path = [...node.path, l];
+          hits.push({ contact, depth: d, path });
+          next.push({ id: other, path });
+        }
+      }
+      frontier = next;
+    }
+    return hits;
+  }
+
+  /**
+   * Possible `same_as` matches for a card, drawn only from readable scopes:
+   * same normalized email, same normalized phone, or same normalized name
+   * AND org. Cards already linked to it by a visible link (any predicate)
+   * are excluded. Never creates links. Empty when the card is missing or
+   * unreadable.
+   */
+  candidates(scope: ScopeSet, contactId: string): LinkCandidate[] {
+    const me = this.get(scope, contactId);
+    if (!me) return [];
+    const linked = new Set<string>();
+    for (const l of this.links(scope, contactId)) {
+      if (l.toContactId) linked.add(l.fromContactId === contactId ? l.toContactId : l.fromContactId);
+    }
+    const email = normalizeEmail(me.email);
+    const phone = normalizePhone(me.phone);
+    const name = normalizeName(me.name);
+    const org = normalizeOrg(me.org);
+    const out: LinkCandidate[] = [];
+    for (const c of this.list(scope)) {
+      if (c.id === contactId || linked.has(c.id)) continue;
+      const reasons: LinkCandidate["reasons"] = [];
+      if (email && normalizeEmail(c.email) === email) reasons.push("email");
+      if (phone && normalizePhone(c.phone) === phone) reasons.push("phone");
+      if (name && org && normalizeName(c.name) === name && normalizeOrg(c.org) === org) reasons.push("name+org");
+      if (reasons.length) out.push({ contact: c, reasons });
+    }
+    return out;
+  }
 }
 
 /**
@@ -681,6 +925,21 @@ export class ScopedStore {
   listInteractions(contactId: string): Interaction[] {
     return this.store.listInteractions(this.scope, contactId);
   }
+  link(input: LinkInput): Link {
+    return this.store.link(this.scope, input);
+  }
+  unlink(linkId: string): boolean {
+    return this.store.unlink(this.scope, linkId);
+  }
+  links(contactId: string): Link[] {
+    return this.store.links(this.scope, contactId);
+  }
+  connections(contactId: string, depth?: number): ConnectionHit[] {
+    return this.store.connections(this.scope, contactId, depth);
+  }
+  candidates(contactId: string): LinkCandidate[] {
+    return this.store.candidates(this.scope, contactId);
+  }
 }
 
 /** Exported so the shell (src/shell/db-location.ts) can resolve/display this
@@ -756,5 +1015,34 @@ function rowToContact(row: unknown): Contact {
     googleEtag: r.googleEtag ?? undefined,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
+  };
+}
+
+/** Row shape as returned by node:sqlite for the `links` table. */
+interface LinkRow {
+  id: string;
+  fromContactId: string;
+  toContactId: string | null;
+  toOrg: string | null;
+  predicate: LinkPredicate;
+  note: string | null;
+  assertedInKind: string;
+  assertedInId: string;
+  createdAt: string;
+  createdBy: string | null;
+}
+
+function rowToLink(row: unknown): Link {
+  const r = row as LinkRow;
+  return {
+    id: r.id,
+    fromContactId: r.fromContactId,
+    toContactId: r.toContactId ?? undefined,
+    toOrg: r.toOrg ?? undefined,
+    predicate: r.predicate,
+    note: r.note ?? undefined,
+    assertedIn: `${r.assertedInKind}:${r.assertedInId}` as Scope,
+    createdAt: r.createdAt,
+    createdBy: r.createdBy ?? undefined,
   };
 }
