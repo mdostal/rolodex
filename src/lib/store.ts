@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import type {
+  CandidatePair,
   ConnectionHit,
   Contact,
   Interaction,
@@ -136,6 +137,7 @@ export class Store {
       );
       CREATE TABLE IF NOT EXISTS interactions (
         id TEXT PRIMARY KEY, contactId TEXT NOT NULL, at TEXT NOT NULL, note TEXT NOT NULL, channel TEXT,
+        followUpAt TEXT,
         FOREIGN KEY(contactId) REFERENCES contacts(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS settings (
@@ -165,6 +167,9 @@ export class Store {
     // always get an explicit scope from upsert().
     for (const ddl of [
       "ALTER TABLE contacts ADD COLUMN googleEtag TEXT",
+      // followUpAt (cm-04): when set, the interaction shows in the service
+      // mode's followups until a later interaction on the same card.
+      "ALTER TABLE interactions ADD COLUMN followUpAt TEXT",
       `ALTER TABLE contacts ADD COLUMN scopeKind TEXT NOT NULL DEFAULT '${LOCAL_KIND}'`,
       `ALTER TABLE contacts ADD COLUMN scopeId TEXT NOT NULL DEFAULT '${LOCAL_ID}'`,
     ]) {
@@ -297,9 +302,21 @@ export class Store {
    *   refuses a row whose scope differs, as a second line of defence).
    */
   upsert(scope: ScopeSet, c: Contact): Contact {
+    return this.upsertDetailed(scope, c).contact;
+  }
+
+  /**
+   * upsert() plus whether a new card was created (false when an existing
+   * card was updated, by id or by a dedup match). With `preserveUnset`,
+   * every field `c` leaves undefined keeps the existing card's value instead
+   * of being cleared — the service mode (cm-04) uses this so a contract
+   * upsert, which carries no verdict/met/angle/nextStep/Google ids, never
+   * wipes them. The standalone surfaces keep upsert()'s replace semantics.
+   */
+  upsertDetailed(scope: ScopeSet, c: Contact, opts?: { preserveUnset?: boolean }): { contact: Contact; created: boolean } {
     const r = resolveScopeSet(scope);
     const w = this.requireWrite(r);
-    if (c.id) this.checkWritable(r, c.id);
+    const byId = c.id ? this.checkWritable(r, c.id) === "ok" : false;
 
     const own = scopeClause([w]);
     let existing: ContactRow | undefined;
@@ -324,6 +341,23 @@ export class Store {
         .prepare(`SELECT * FROM contacts WHERE phone IS NOT NULL AND ${own.sql} ORDER BY rowid`)
         .all(...own.params) as unknown as ContactRow[];
       existing = candidates.find((row) => normalizePhone(row.phone) === phone);
+    }
+    // A caller-supplied id that already exists (in the write scope —
+    // checkWritable() above refused any other) is the card being updated
+    // when no dedup key matched first. Kept apart from `existing` so the
+    // standalone write path below behaves exactly as before.
+    const target =
+      existing ??
+      (byId
+        ? (this.db.prepare(`SELECT * FROM contacts WHERE id = ? AND ${own.sql}`).get(c.id, ...own.params) as
+            | ContactRow
+            | undefined)
+        : undefined);
+    if (target && opts?.preserveUnset) {
+      const prev = rowToContact(target);
+      const merged: Contact = { ...prev };
+      for (const [k, v] of Object.entries(c)) if (v !== undefined && v !== "") (merged as unknown as Record<string, unknown>)[k] = v;
+      c = merged;
     }
 
     // `|| ` (not `??`) on purpose: Contact's `id`/`createdAt` are typed as
@@ -374,7 +408,30 @@ export class Store {
     if (Number(info.changes) === 0) throw new ScopeDenied("card is outside the write scope");
 
     this.reindex();
-    return this.get(scope, id)!;
+    return { contact: this.get(scope, id)!, created: !target };
+  }
+
+  /**
+   * The owning scope of each of `ids` that the caller can read; unreadable
+   * and missing ids are simply absent from the map. Lets the service mode
+   * report a card's scope without widening the Contact type the standalone
+   * surfaces (and their regression fixture) rely on.
+   */
+  scopesOf(scope: ScopeSet, ids: readonly string[]): Map<string, Scope> {
+    const out = new Map<string, Scope>();
+    if (ids.length === 0) return out;
+    const r = resolveScopeSet(scope);
+    const where = scopeClause(r.readable);
+    const unique = [...new Set(ids)];
+    // Chunked to stay well under SQLite's bound-parameter limit.
+    for (let i = 0; i < unique.length; i += 400) {
+      const chunk = unique.slice(i, i + 400);
+      const rows = this.db
+        .prepare(`SELECT id, scopeKind, scopeId FROM contacts WHERE id IN (${chunk.map(() => "?").join(",")}) AND ${where.sql}`)
+        .all(...chunk, ...where.params) as Array<{ id: string; scopeKind: string; scopeId: string }>;
+      for (const row of rows) out.set(row.id, `${row.scopeKind}:${row.scopeId}` as Scope);
+    }
+    return out;
   }
 
   get(scope: ScopeSet, id: string): Contact | undefined {
@@ -626,7 +683,7 @@ export class Store {
    * even though callers — e.g. the shell's log-interaction form — should
    * already validate non-empty before this is reached) and is trimmed
    * before storage. */
-  logInteraction(scope: ScopeSet, i: Interaction): void {
+  logInteraction(scope: ScopeSet, i: Interaction): Interaction {
     const note = i.note?.trim();
     if (!note) {
       throw new Error("note is required");
@@ -638,8 +695,30 @@ export class Store {
     const id = i.id || randomUUID();
     const at = i.at || new Date().toISOString();
     this.db
-      .prepare(`INSERT INTO interactions (id, contactId, at, note, channel) VALUES (?, ?, ?, ?, ?)`)
-      .run(id, i.contactId, at, note, i.channel ?? null);
+      .prepare(`INSERT INTO interactions (id, contactId, at, note, channel, followUpAt) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(id, i.contactId, at, note, i.channel ?? null, i.followUpAt ?? null);
+    return { id, contactId: i.contactId, at, note, channel: i.channel, followUpAt: i.followUpAt };
+  }
+
+  /**
+   * Interactions in the readable scopes whose `followUpAt` is at or before
+   * `dueBefore` (ISO) and that no later interaction on the same card has
+   * superseded — a later touch is the follow-up happening. Oldest due
+   * first. Reached through the card join, so scope applies as everywhere.
+   */
+  followupsDue(scope: ScopeSet, dueBefore: string): Interaction[] {
+    const r = resolveScopeSet(scope);
+    const where = scopeClause(r.readable, "c");
+    const rows = this.db
+      .prepare(
+        `SELECT i.* FROM interactions i JOIN contacts c ON c.id = i.contactId
+         WHERE ${where.sql}
+           AND i.followUpAt IS NOT NULL AND i.followUpAt <= ?
+           AND NOT EXISTS (SELECT 1 FROM interactions later WHERE later.contactId = i.contactId AND later.at > i.at)
+         ORDER BY i.followUpAt ASC, i.rowid ASC`,
+      )
+      .all(...where.params, dueBefore);
+    return rows.map(rowToInteraction);
   }
 
   /** Interaction history for one card in the readable scopes, most recent
@@ -848,6 +927,69 @@ export class Store {
     }
     return out;
   }
+
+  /**
+   * Every possible `same_as` pair among the readable cards, by the same
+   * rules as candidates() (normalized email, phone, or name+org), each pair
+   * once with `a < b`. Pairs already joined by a visible `same_as` link are
+   * returned with `linked: true` (a confirmed match); pairs joined by any
+   * other visible link are left out, as in candidates(). Bucketed by key,
+   * so it is not one candidates() call per card.
+   */
+  allCandidates(scope: ScopeSet): CandidatePair[] {
+    const r = resolveScopeSet(scope);
+    const cards = this.list(scope);
+    const byId = new Map(cards.map((c) => [c.id, c]));
+    const pairKey = (x: string, y: string) => (x < y ? `${x}\u0000${y}` : `${y}\u0000${x}`);
+    const sameAs = new Set<string>();
+    const otherLink = new Set<string>();
+    for (const l of this.visibleLinks(r, "l.toContactId IS NOT NULL", [])) {
+      (l.predicate === "same_as" ? sameAs : otherLink).add(pairKey(l.fromContactId, l.toContactId!));
+    }
+    const reasonsByPair = new Map<string, Set<LinkCandidate["reasons"][number]>>();
+    const bucket = (reason: LinkCandidate["reasons"][number], key: (c: Contact) => string | undefined) => {
+      const groups = new Map<string, string[]>();
+      for (const c of cards) {
+        const k = key(c);
+        if (!k) continue;
+        const g = groups.get(k);
+        if (g) g.push(c.id);
+        else groups.set(k, [c.id]);
+      }
+      for (const ids of groups.values()) {
+        for (let i = 0; i < ids.length; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            const pk = pairKey(ids[i]!, ids[j]!);
+            let set = reasonsByPair.get(pk);
+            if (!set) reasonsByPair.set(pk, (set = new Set()));
+            set.add(reason);
+          }
+        }
+      }
+    };
+    bucket("email", (c) => normalizeEmail(c.email) || undefined);
+    bucket("phone", (c) => normalizePhone(c.phone) || undefined);
+    bucket("name+org", (c) => {
+      const name = normalizeName(c.name);
+      const org = normalizeOrg(c.org);
+      return name && org ? `${name}\u0000${org}` : undefined;
+    });
+    const out: CandidatePair[] = [];
+    const order: LinkCandidate["reasons"] = ["email", "phone", "name+org"];
+    for (const [pk, reasons] of reasonsByPair) {
+      if (otherLink.has(pk) && !sameAs.has(pk)) continue;
+      const [a, b] = pk.split("\u0000") as [string, string];
+      out.push({ a: byId.get(a)!, b: byId.get(b)!, reasons: order.filter((x) => reasons.has(x)), linked: sameAs.has(pk) });
+    }
+    // Confirmed pairs whose keys no longer match are still confirmed.
+    for (const pk of sameAs) {
+      if (reasonsByPair.has(pk)) continue;
+      const [a, b] = pk.split("\u0000") as [string, string];
+      out.push({ a: byId.get(a)!, b: byId.get(b)!, reasons: [], linked: true });
+    }
+    out.sort((x, y) => (x.a.id + x.b.id < y.a.id + y.b.id ? -1 : 1));
+    return out;
+  }
 }
 
 /**
@@ -919,8 +1061,8 @@ export class ScopedStore {
   setNextStep(id: string, next: string): void {
     this.store.setNextStep(this.scope, id, next);
   }
-  logInteraction(i: Interaction): void {
-    this.store.logInteraction(this.scope, i);
+  logInteraction(i: Interaction): Interaction {
+    return this.store.logInteraction(this.scope, i);
   }
   listInteractions(contactId: string): Interaction[] {
     return this.store.listInteractions(this.scope, contactId);
@@ -983,6 +1125,7 @@ interface InteractionRow {
   at: string;
   note: string;
   channel: string | null;
+  followUpAt?: string | null;
 }
 
 function rowToInteraction(row: unknown): Interaction {
@@ -993,6 +1136,7 @@ function rowToInteraction(row: unknown): Interaction {
     at: r.at,
     note: r.note,
     channel: (r.channel ?? undefined) as Interaction["channel"],
+    followUpAt: r.followUpAt ?? undefined,
   };
 }
 

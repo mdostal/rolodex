@@ -42,7 +42,10 @@ export interface Interaction {
   contactId: string;
   at: string;                 // ISO date of the interaction
   note: string;
-  channel?: "call" | "email" | "dm" | "meeting" | "other";
+  // The standalone surfaces use the five named channels; the service mode
+  // (cm-04) stores the contacts contract's free-form channel string as-is.
+  channel?: "call" | "email" | "dm" | "meeting" | "other" | (string & {});
+  followUpAt?: string;        // ISO; open follow-up until a later interaction (cm-04)
 }
 
 /** What the MCP layer returns for a search hit. */
@@ -86,4 +89,13 @@ export interface ConnectionHit {
 export interface LinkCandidate {
   contact: Contact;
   reasons: Array<"email" | "phone" | "name+org">;
+}
+
+/** A possible same_as pair among the readable cards (Store.allCandidates).
+ * `a.id < b.id`; `linked` when a visible same_as link already joins them. */
+export interface CandidatePair {
+  a: Contact;
+  b: Contact;
+  reasons: LinkCandidate["reasons"];
+  linked: boolean;
 }
