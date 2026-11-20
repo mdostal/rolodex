@@ -701,3 +701,43 @@ export function createSecretsAdapter(opts?: CreateSecretsAdapterOptions): Secret
   }
   return withInMemoryFallback(createKeychainSecretsAdapter(), "keychain", classifyKeychainError, opts?.onFallback);
 }
+
+/**
+ * Read-only adapter over injected secret files — the service mode's
+ * (`rolodex serve`, cm-04) backend. In a container the Google OAuth
+ * material is mounted by the platform under a directory (default
+ * `/pantheon-secrets/rolodex`, one file per key); there is no keychain and
+ * no portunus CLI there (grill H5). `get(key)` reads `<dir>/<key>` with one
+ * trailing newline trimmed; a missing file is `undefined`. Keys are plain
+ * file names — anything that could leave the directory is refused. Writes
+ * are refused too: injected secrets are owned by the platform, and the
+ * container's root filesystem may be read-only. Errors never carry the
+ * value, only the key.
+ */
+export function createFileSecretsAdapter(opts: { dir: string }): SecretsAdapter {
+  const dir = path.resolve(opts.dir);
+  const fileFor = (key: string): string => {
+    if (!key || key === "." || key === ".." || /[\/\\\0]/.test(key)) throw new Error("invalid secret key");
+    return path.join(dir, key);
+  };
+  return {
+    async get(key) {
+      const file = fileFor(key);
+      try {
+        const raw = await fs.readFile(file, "utf8");
+        return raw.replace(/\r?\n$/, "");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw new Error(`could not read injected secret "${key}": ${(err as NodeJS.ErrnoException).code ?? "error"}`);
+      }
+    },
+    async set(key) {
+      fileFor(key);
+      throw new Error("injected secrets are read-only");
+    },
+    async delete(key) {
+      fileFor(key);
+      throw new Error("injected secrets are read-only");
+    },
+  };
+}

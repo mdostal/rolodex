@@ -55,6 +55,13 @@ Commands:
              Permanently delete a contact and its interaction history.
              There is no undo. Errors if the contact doesn't exist.
 
+  serve      Service mode: the host's contacts contract over signed HTTP
+             (POST /v1/<operation>, open GET /v1/health). No UI, no MCP.
+             Configured by env only: ROLODEX_DB (default /data/rolodex.db),
+             ROLODEX_SERVICE_TOKEN_FILE (the token is only ever read from
+             a file), ROLODEX_SECRETS_DIR, PORT (default 4180). Binds
+             0.0.0.0. See docs/ARCHITECTURE.md "Service mode".
+
 Every command prints its JSON result to stdout on success, or a JSON
 {"error": "..."} to stderr with a non-zero exit code on failure. Uses the
 same ROLODEX_DB env var as the standalone app and the MCP server — unset,
@@ -233,7 +240,15 @@ export async function run(
 const isMainModule =
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
 
-if (isMainModule) {
+if (isMainModule && process.argv[2] === "serve") {
+  // Service mode never builds the MCP server or opens the standalone DB;
+  // it has its own config (env) and its own listener.
+  const { runServe } = await import("../serve/index.js");
+  await runServe().catch((err: unknown) => {
+    process.stderr.write(`rolodex serve: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  });
+} else if (isMainModule) {
   const { handlers } = createRolodexMcpServer();
   const code = await run(
     process.argv.slice(2),
