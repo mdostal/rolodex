@@ -16,3 +16,13 @@ export function normalizePhone(phone: string | null | undefined): string | undef
   if (!phone.trim().startsWith("+") && digits.startsWith("00")) digits = digits.slice(2);
   return digits.length >= 7 ? digits : undefined;
 }
+
+/** Org key for link targets and name+org candidate matching: trimmed,
+ * lowercased, internal whitespace collapsed; undefined when blank. */
+export function normalizeOrg(org: string | null | undefined): string | undefined {
+  const o = org?.trim().toLowerCase().replace(/\s+/g, " ");
+  return o ? o : undefined;
+}
+
+/** Name key for name+org candidate matching, same normalization as orgs. */
+export const normalizeName = normalizeOrg;
