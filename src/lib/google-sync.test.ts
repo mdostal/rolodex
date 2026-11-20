@@ -18,7 +18,8 @@ import {
   type PushableStore,
 } from "./google-sync.js";
 import { createInMemorySecretsAdapter } from "./secrets-adapter.js";
-import { Store } from "./store.js";
+import { localStore } from "./local-scope.js";
+import { type ScopedStore, Store } from "./store.js";
 import type { Contact } from "./types.js";
 
 // Mirrors src/shell/server.ts's GOOGLE_OAUTH_CLIENT_KEY constant — duplicated
@@ -680,11 +681,11 @@ describe("mergeLocalOnlyFields", () => {
 // ---------------------------------------------------------------------------
 describe("applyPullToStore (integration with a real Store)", () => {
   let dir: string;
-  let store: Store;
+  let store: ScopedStore;
 
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), "rolodex-google-sync-test-"));
-    store = new Store(path.join(dir, "rolodex.db"));
+    store = localStore(new Store(path.join(dir, "rolodex.db")));
   });
 
   afterEach(() => {

@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyPullToStore, deleteContactEverywhere, pushAllToGoogle } from "./google-sync.js";
+import { localStore } from "./local-scope.js";
 import { Store } from "./store.js";
 import type { Contact } from "./types.js";
 
@@ -29,29 +30,11 @@ const DB_FIXTURE = path.join(FIXTURE_DIR, "standalone-v0.5.db");
 const CAPTURE = process.env.ROLODEX_CAPTURE_FIXTURES === "1";
 
 /** The standalone surface: the Store API exactly as the shell, MCP server
- * and CLI call it, with no scope argument in sight. */
-type StandaloneStore = Pick<
-  Store,
-  | "list"
-  | "upsert"
-  | "get"
-  | "delete"
-  | "search"
-  | "getSetting"
-  | "setSetting"
-  | "getFollowUpConfig"
-  | "setFollowUpConfig"
-  | "getAppearance"
-  | "setAppearance"
-  | "needsFollowUp"
-  | "setVerdict"
-  | "setNextStep"
-  | "logInteraction"
-  | "listInteractions"
->;
+ * and CLI call it: bound to the local ScopeSet, no scope argument in sight. */
+type StandaloneStore = ReturnType<typeof localStore>;
 
 function openStandalone(dbPath: string): StandaloneStore {
-  return new Store(dbPath);
+  return localStore(new Store(dbPath));
 }
 
 const OLD = "2020-01-01T00:00:00.000Z";

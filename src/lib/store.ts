@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import type { Contact, Interaction, SearchResult, Verdict } from "./types.js";
 import { LOCAL_SCOPE } from "./local-scope.js";
+import { normalizeEmail, normalizePhone } from "./dedupe.js";
 import {
   ScopeDenied,
   parseScope,
@@ -680,22 +681,6 @@ export class ScopedStore {
   listInteractions(contactId: string): Interaction[] {
     return this.store.listInteractions(this.scope, contactId);
   }
-}
-
-/** Email dedup key: trimmed, lowercased; undefined when blank. */
-export function normalizeEmail(email: string | null | undefined): string | undefined {
-  const e = email?.trim().toLowerCase();
-  return e ? e : undefined;
-}
-
-/** Phone dedup key, "E.164-ish": digits only, with an international `00`
- * prefix treated like `+`. Fewer than 7 digits is too short to be a
- * meaningful match key, so it yields undefined (no phone dedup). */
-export function normalizePhone(phone: string | null | undefined): string | undefined {
-  if (!phone) return undefined;
-  let digits = phone.replace(/\D/g, "");
-  if (!phone.trim().startsWith("+") && digits.startsWith("00")) digits = digits.slice(2);
-  return digits.length >= 7 ? digits : undefined;
 }
 
 /** Exported so the shell (src/shell/db-location.ts) can resolve/display this

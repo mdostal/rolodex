@@ -6,7 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { Store } from "../lib/store.js";
+import { Store, type ScopedStore } from "../lib/store.js";
+import { localStore } from "../lib/local-scope.js";
 import type { Contact, Interaction } from "../lib/types.js";
 import { createSecretsAdapter, isPortunusAvailable as defaultIsPortunusAvailable, type CreateSecretsAdapterOptions, type SecretsAdapter } from "../lib/secrets-adapter.js";
 import { checkSecretsCapability } from "../lib/secrets-check.js";
@@ -221,13 +222,18 @@ export function createRolodexServer(opts: RolodexServerOptions = {}): Server {
    * what checkDbPathWritable() already does for the Database screen's
    * check, but needed here too since a caller can reach wizard-complete
    * (or, for an already-configured install, any /api/contacts route)
-   * without ever having hit that screen's check in this process. */
-  async function getStore(): Promise<Store> {
-    if (store) return store;
-    const dbPath = await resolveDbPath(homeDir);
-    await mkdir(path.dirname(dbPath), { recursive: true });
-    store = new Store(dbPath);
-    return store;
+   * without ever having hit that screen's check in this process.
+   *
+   * Returns the Store bound to the standalone ScopeSet (`user:local`, see
+   * src/lib/local-scope.ts): this server is the standalone app, so every
+   * route reads and writes only that scope. */
+  async function getStore(): Promise<ScopedStore> {
+    if (!store) {
+      const dbPath = await resolveDbPath(homeDir);
+      await mkdir(path.dirname(dbPath), { recursive: true });
+      store = new Store(dbPath);
+    }
+    return localStore(store);
   }
 
   async function handleWizardRoute(
